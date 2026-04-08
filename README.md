@@ -6,9 +6,7 @@
 
 ![CARL Phase Transition](assets/carl-paradigm.gif)
 
-## What is CARL?
-
-CARL adds information-theoretic reward signals to RL training that measure *how* a model generates, not just *what* it generates. Three components -- multiscale coherence, cloud quality, and discontinuity targeting -- are derived from a single conservation law: `T* = kappa * d` where `kappa = 64/3` and the semantic quantum `sigma = 3/16`.
+CARL adds information-theoretic reward signals to RL training that measure *how* a model generates, not just *what* it generates. One conservation law. Three reward components. Model-agnostic.
 
 ## Install
 
@@ -30,73 +28,49 @@ trainer = CARLTrainer(TrainingConfig(
 run = await trainer.train()
 ```
 
-## CLI
+Or from the CLI:
 
 ```bash
 carl train --model Qwen/Qwen3.5-9B --method grpo --compute l4x1
-carl train --config carl.yaml
-carl bundle --config carl.yaml --output train.py
-carl mcp --transport stdio
+carl train --send-it                  # full pipeline: SFT -> gate -> GRPO -> eval -> push
 ```
-
-## The Conservation Law
-
-| Constant | Value | Meaning |
-|----------|-------|---------|
-| kappa | 64/3 = 21.333 | Conservation constant |
-| sigma | 3/16 = 0.1875 | Semantic quantum (noise floor) |
-| kappa * sigma | **4** | Bits per embedding dimension |
-| T* | kappa * d | Decompression boundary |
-
-For triadic dimensions `d = 3 * 2^k`:
-
-| d | T* | Notes |
-|---|----|-------|
-| 768 | 16,384 | GPT-2 class |
-| 3,072 | 65,536 | Llama class |
-| 12,288 | 262,144 | Frontier class |
-
-Non-triadic dimensions incur a ~33% context tax.
-
-## Key Finding: Phase Transitions
-
-During VLM SFT (OmniCoder-9B + vision encoder), the model exhibits a first-order phase transition:
-
-| Steps | Phase | Loss | Accuracy | Entropy | What happens |
-|-------|-------|------|----------|---------|--------------|
-| 0-10 | Baseline | 22.8 | 3% | 1.0 | Pre-training distribution intact |
-| 10-20 | Melting | 15.2 -> 8.4 | 3% -> 8% | 1.0 -> **9.3** | Distribution completely destabilizes |
-| 20-25 | **Transition** | 8.4 -> 3.7 | 8% -> **65%** | 9.3 -> 4.1 | Accuracy jumps 57 points in 5 steps |
-| 25-35 | Crystallization | 3.7 -> 0.13 | 65% -> 99% | 4.1 -> 0.4 | Rapid convergence |
-| 35-46 | Converged | 0.06 | **99.3%** | 0.12 | Fully crystallized |
-
-Entropy spikes to near-maximum (9.3), then accuracy discontinuously jumps once the system passes the critical coupling threshold. This is consistent with Kuramoto synchronization in coupled oscillator systems.
-
-Text-only SFT shows a milder transition (entropy ~1.1). The magnitude scales with the distance between target and pre-training distributions.
 
 ## Architecture
 
 ```
-Layer 3  MCP Server     9 tools for AI agent consumption
-         ─────────────────────────────────────────────
-Layer 2  CLI            carl train | observe | bundle | mcp
-         ─────────────────────────────────────────────
-Layer 1  SDK            CARLTrainer, TrainingConfig, rewards, cascade
-         ─────────────────────────────────────────────
-Layer 0  Primitives     CoherenceProbe, compute_phi, kappa, sigma
+Layer 4  MCP Server       9 tools for AI agent consumption
+         ──────────────────────────────────────────────────
+Layer 3  CLI              carl train | eval | observe | align | learn | bench | mcp
+         ──────────────────────────────────────────────────
+Layer 2  Training         CARLTrainer, CascadeRewardManager, environments
+         ──────────────────────────────────────────────────
+Layer 1  SDK              ModelSpec, TrainSpec, VRAMBudget, CoherenceProbe
+         ──────────────────────────────────────────────────
+Layer 0  Primitives       compute_phi, kappa, sigma, PhaseTransitionGate
 ```
 
-### Reward Components
+### The Reward
 
 ```
-R_CARL = 0.50 * R_multiscale + 0.30 * R_cloud + 0.20 * R_discontinuity
+R_CARL = 0.50 * R_coherence + 0.30 * R_cloud + 0.20 * R_discontinuity
 ```
 
-| Component | What it measures |
-|-----------|-----------------|
-| Multiscale coherence | Phi consistency across dyadic block scales 2^j |
+| Component | Measures |
+|-----------|----------|
+| Multiscale coherence | Phi consistency across dyadic block scales |
 | Cloud quality | P(selected) * Phi -- confident AND correct |
-| Discontinuity targeting | Context-dependent scoring of sharp Phi transitions |
+| Discontinuity targeting | Sharp Phi transitions at structurally appropriate locations |
+
+### Cascade Gating
+
+CARL is length-biased -- a verbose, confident model scores high. Without gating, it dominates sparse task signal and causes mode collapse. The cascade solves this:
+
+```
+Stage A (early):   task rewards only         -- "learn to use tools"
+Stage B (gated):   task + CARL rewards       -- "now do it coherently"
+```
+
+The gate self-calibrates from the task metric's running distribution. No hardcoded threshold.
 
 ### Order Parameter
 
@@ -106,45 +80,109 @@ Phi = 1 - H(P) / log|V|
 
 0 = uniform (maximum uncertainty). 1 = delta (complete certainty).
 
+## The Conservation Law
+
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| kappa | 64/3 | Conservation constant |
+| sigma | 3/16 | Semantic quantum |
+| kappa * sigma | **4** | Bits per embedding dimension |
+| T* | kappa * d | Decompression boundary |
+
+Derived in [Bounded Informational Time Crystals](https://doi.org/10.5281/zenodo.18906944). Validated across 6,244 trials in [Material Reality](https://doi.org/10.5281/zenodo.18992029). Formally proved in [Semantic Realizability](https://doi.org/10.5281/zenodo.18992031).
+
+## Key Finding: Phase Transitions
+
+During VLM SFT, the model exhibits a first-order phase transition:
+
+| Steps | Phase | Accuracy | Entropy | What happens |
+|-------|-------|----------|---------|--------------|
+| 0-10 | Baseline | 3% | 1.0 | Pre-training distribution intact |
+| 10-20 | Melting | 8% | **9.3** | Distribution destabilizes completely |
+| 20-25 | **Transition** | **65%** | 4.1 | Accuracy jumps 57 points in 5 steps |
+| 25-35 | Crystallization | 99% | 0.4 | Rapid convergence |
+| 35-46 | Converged | **99.3%** | 0.12 | Fully crystallized |
+
+Entropy spikes to near-maximum, then accuracy discontinuously jumps once the system passes the critical coupling threshold. Consistent with Kuramoto synchronization in coupled oscillator systems.
+
+## CLI
+
+```
+carl train         Train with CARL rewards (SFT, GRPO, DPO, KTO, ORPO)
+carl train --send-it   Full autonomous pipeline
+carl eval          Run eval gates
+carl observe       Live coherence monitoring (TUI)
+carl align         Realign a drifted model
+carl learn         Ingest knowledge, generate data, train
+carl bench         Coherence meta-benchmarks
+carl dev           Development mode
+carl chat          Interactive model chat
+carl status <id>   Job status
+carl logs <id>     Job logs
+carl stop <id>     Cancel a job
+carl push          Push checkpoint to Hub
+carl bundle        Generate self-contained training script
+carl mcp           Start MCP server
+carl compute       List GPU flavors and pricing
+carl setup         First-time setup
+```
+
+## Model-Agnostic
+
+`ModelSpec.from_pretrained()` auto-detects architecture, modality, thinking mode, quantization constraints, and LoRA targets from any HuggingFace config.json. No per-model branches.
+
+| Model | Status |
+|-------|--------|
+| Qwen 3.5 9B VLM | Primary -- 94.6% click accuracy |
+| Gemma 4 E4B | Planned |
+| Gemma 4 31B | Planned (multi-GPU) |
+
 ## Compute Backends
 
-| Backend | Type | Flag |
-|---------|------|------|
-| HuggingFace Jobs | Managed UV scripts | `--compute l4x1` |
-| RunPod | GPU pods | `--compute runpod` |
-| Tinker | Managed API | `--compute tinker` |
-| Prime Intellect | GPU marketplace | `--compute prime` |
-| SSH | Remote execution | `--compute ssh` |
-| Local | Direct GPU | `--compute local` |
+| Backend | Flag |
+|---------|------|
+| HuggingFace Jobs | `--compute l4x1` / `a100-large` / `h200` |
+| RunPod | `--compute runpod` |
+| Tinker | `--compute tinker` |
+| Prime Intellect | `--compute prime` |
+| SSH | `--compute ssh` |
+| Local | `--compute local` |
 
-## Known Limitation: The Coherence Trap
+## Test-Time Training
 
-CARL's reward landscape has a degenerate optimum at mode collapse. A model outputting identical tokens with 99.98% confidence scores high on all three components because maximum coherence IS a delta function. Population-level diversity term planned for v2. See [the paper](paper/carl-paper.md), Section 5.2.3.
+CARL includes TTT mechanisms for post-deployment adaptation:
+
+- **SLOT** -- hidden delta injection (8 Adam steps, architecture-agnostic)
+- **LoRA micro-update** -- rank-1 online adaptation
+
+## IP Boundaries
+
+CARL Studio is MIT-licensed. The mathematics -- conservation law, order parameter, reward components -- are independently derivable from the three published papers (CC-BY-4.0).
+
+This package is the *open training framework*. It does **not** include the runtime substrate:
+
+| What | Where | License |
+|------|-------|---------|
+| Conservation law, Phi, rewards | **CARL Studio** (this repo) | MIT |
+| Kuramoto oscillator dynamics | Terminals Platform | BUSL-1.1 |
+| Audio coherence (CHORD) | Terminals Platform | BUSL-1.1 |
+| Cross-substrate isomorphisms | Terminals Platform | BUSL-1.1 |
+| Interactive Research Environment | Terminals Platform | BUSL-1.1 |
+| Material Reality datasets | Zenodo | CC-BY-4.0 |
+
+The bifurcation is deliberate: CARL trains models using published mathematics. The Terminals Platform *deploys* them with proprietary runtime dynamics. Same conservation law, different sides of the boundary.
 
 ## Citation
 
 ```bibtex
 @article{desai2026carl,
   title   = {Coherence-Aware Reinforcement Learning},
-  author  = {Desai, Tej and {Claude Opus 4.6}},
+  author  = {Desai, Tej},
   year    = {2026},
-  url     = {https://github.com/terminals-tech/carl-studio},
+  url     = {https://github.com/wheattoast11/carl},
   note    = {Intuition Labs LLC}
 }
 ```
-
-## IP Boundaries
-
-CARL Studio implements Coherence-Aware RL using MIT-licensed mathematics derived from the [CC-BY-4.0 CARL paper](paper/carl-paper.md). The conservation law, order parameter, and reward components are independently derivable from published equations.
-
-This package does **not** include:
-- Kuramoto oscillator dynamics (proprietary Terminals Platform, BUSL-1.1)
-- Audio coherence / FFT-to-phase mapping (proprietary CHORD module)
-- Cross-substrate isomorphisms (Sematon, GateSequencer)
-- Material Reality empirical datasets (6,244 trials)
-- Interactive Research Environment (IRE) runtime
-
-These remain in the [Terminals Platform](https://terminals.tech) under BUSL-1.1.
 
 ## License
 
