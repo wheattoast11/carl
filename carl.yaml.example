@@ -1,0 +1,33 @@
+# carl.yaml — CARL Studio training configuration
+run_name: my-first-carl-run
+base_model: Qwen/Qwen3-8B
+output_repo: username/my-model-carl
+method: sft
+compute_target: l4x1
+
+dataset_repo: trl-lib/Capybara
+dataset_split: train
+
+num_train_epochs: 3
+max_steps: -1
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 2e-5
+max_length: 512
+bf16: true
+
+lora:
+  r: 64
+  alpha: 128
+  dropout: 0.0
+
+quantization:
+  load_in_8bit: true
+
+observation:
+  enabled: true
+  observe_every: 50
+
+push_to_hub: true
+hub_strategy: every_save
+timeout: "3h"

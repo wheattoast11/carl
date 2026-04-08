@@ -1,0 +1,31 @@
+# CARL Studio
+
+> Coherence-Aware Reinforcement Learning SDK. Train, observe, and serve LLMs
+> with information-theoretic reward signals derived from the conservation law
+> T* = κ·d where κ = 64/3 and σ = 3/16.
+
+## API
+- [TrainingConfig](src/carl_studio/types/config.py): Pydantic config — model, method, compute, rewards, cascade
+- [CoherenceProbe](src/carl_studio/primitives/coherence_probe.py): Measure order parameter Φ, discontinuities, cloud quality from logits
+- [CARLReward](src/carl_studio/training/rewards/composite.py): Composite reward — 50% multiscale + 30% cloud + 20% discontinuity
+- [CascadeManager](src/carl_studio/training/cascade.py): Nemotron Cascade 2 stage gating with warmup
+- [ComputeBackend](src/carl_studio/compute/protocol.py): Protocol for HF Jobs, RunPod, Tinker, local
+
+## CLI
+- `carl train --config carl.yaml`: Start training
+- `carl status RUN_ID`: Check coherence health
+- `carl observe RUN_ID`: Force CoherenceObserver assessment
+- `carl bundle --config carl.yaml`: Generate self-contained HF Jobs script
+
+## Constants (never configurable)
+- KAPPA = 64/3 ≈ 21.33 (conservation constant)
+- SIGMA = 3/16 = 0.1875 (semantic quantum)
+- DEFECT_THRESHOLD = 0.03 (minimum |ΔΦ|)
+- KAPPA × SIGMA = 4 (bits per dimension)
+
+## Config Schema
+- [TrainingConfig JSON Schema](src/carl_studio/types/config.py): Use `TrainingConfig.model_json_schema()`
+
+## Optional
+- [Rewards](src/carl_studio/training/rewards/): discontinuity, cloud, multiscale, task, VLM
+- [Backends](src/carl_studio/compute/): HF Jobs, RunPod, Tinker, Prime, SSH, local
