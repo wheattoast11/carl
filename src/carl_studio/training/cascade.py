@@ -137,6 +137,13 @@ class CascadeRewardManager:
             return [r * weight for r in raw]
 
         wrapped.__name__ = getattr(reward_fn, "__name__", "wrapped_reward")
+
+        # Propagate CARL metadata through the cascade wrapper so callbacks
+        # can find _last_traces, _last_metrics, etc. on the outermost function.
+        for attr in ("_last_metrics", "_last_traces", "_last_components", "_metrics_lock", "_step"):
+            if hasattr(reward_fn, attr):
+                setattr(wrapped, attr, getattr(reward_fn, attr))
+
         return wrapped
 
 
