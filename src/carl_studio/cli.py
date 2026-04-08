@@ -299,13 +299,14 @@ def bundle(
 @app.command(name="compute")
 def compute_cmd() -> None:
     """List available compute backends."""
-    from carl_studio.types.config import ComputeTarget
+    from carl_studio.compute import _BYOK_BACKENDS
 
     c = get_console()
     c.blank()
-    table = c.make_table("Backend", title="Compute Backends")
-    for target in ComputeTarget:
-        table.add_row(target.value)
+    table = c.make_table("Backend", "Type", "Credentials", title="Compute Backends")
+    for name in _BYOK_BACKENDS:
+        table.add_row(name, "BYOK", "Your API key")
+    table.add_row("camp", "Managed", "carl.camp account")
     c.print(table)
     c.blank()
 
