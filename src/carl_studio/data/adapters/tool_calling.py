@@ -28,7 +28,7 @@ class ToolCallingAdapter(DataAdapter):
             ]
 
             yield UnifiedSample(
-                id=f"tool_calling_{i}",
+                id=f"{self.source.name}_{i}",
                 prompt=prompt,
                 problem_statement=user_msg,
                 domain=Domain.TOOL_CALLING,

@@ -50,7 +50,7 @@ class NemotronAdapter(DataAdapter):
                     {"role": "system", "content": "You are a software engineer. Fix the bug described in the issue."},
                     {"role": "user", "content": prompt_text},
                 ],
-                problem_statement=prompt_text[:2000],
+                problem_statement=prompt_text,
                 domain=Domain.SWE,
                 modality=Modality.CODE,
                 golden_solution=golden_patch,

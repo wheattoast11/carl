@@ -43,11 +43,13 @@ class CurriculumSampler:
         self._pass_rates: dict[str, float] = {}
         self._target = target_pass_rate
         self._tolerance = tolerance
-        self._by_tier: dict[DifficultyTier, list[str]] = defaultdict(list)
+        self._by_tier: dict[DifficultyTier, set[str]] = defaultdict(set)
+        self._sample_tier: dict[str, DifficultyTier] = {}  # Reverse index for O(1) removal
 
         for s in samples:
             tier = s.difficulty_tier or DifficultyTier.MEDIUM
-            self._by_tier[tier].append(s.id)
+            self._by_tier[tier].add(s.id)
+            self._sample_tier[s.id] = tier
             if s.difficulty_score is not None:
                 self._pass_rates[s.id] = s.difficulty_score
 
@@ -110,22 +112,24 @@ class CurriculumSampler:
                      pass_rate = fraction of generations that succeeded.
         """
         for sid, rate in results.items():
-            if sid in self._samples:
-                # Exponential moving average (α=0.3) to smooth noise
-                old = self._pass_rates.get(sid, rate)
-                self._pass_rates[sid] = 0.3 * rate + 0.7 * old
+            if sid not in self._samples:
+                continue
+            # Clamp rate to [0, 1] to preserve Pydantic constraint
+            rate = max(0.0, min(1.0, rate))
+            old = self._pass_rates.get(sid, rate)
+            self._pass_rates[sid] = max(0.0, min(1.0, 0.3 * rate + 0.7 * old))
 
-                # Reclassify tier
-                new_tier = DifficultyTier.from_pass_rate(self._pass_rates[sid])
-                sample = self._samples[sid]
-                sample.difficulty_tier = new_tier
-                sample.difficulty_score = self._pass_rates[sid]
+            # Reclassify tier (O(1) via reverse index)
+            new_tier = DifficultyTier.from_pass_rate(self._pass_rates[sid])
+            old_tier = self._sample_tier.get(sid)
+            if old_tier and old_tier != new_tier:
+                self._by_tier[old_tier].discard(sid)
+            self._by_tier[new_tier].add(sid)
+            self._sample_tier[sid] = new_tier
 
-                # Update tier index
-                for tier_list in self._by_tier.values():
-                    if sid in tier_list:
-                        tier_list.remove(sid)
-                self._by_tier[new_tier].append(sid)
+            sample = self._samples[sid]
+            sample.difficulty_tier = new_tier
+            sample.difficulty_score = self._pass_rates[sid]
 
     def advance(self, shift: float = 0.05) -> None:
         """Shift target pass rate down (toward harder problems).

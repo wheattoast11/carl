@@ -10,13 +10,15 @@ Usage:
 from __future__ import annotations
 
 import importlib
+import logging
+import warnings
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from carl_studio.data.adapters.base import DataAdapter
 from carl_studio.data.types import DataSource, Domain, Modality
+
+logger = logging.getLogger(__name__)
 
 
 _SOURCES_YAML = Path(__file__).parent / "sources.yaml"
@@ -31,25 +33,30 @@ class DataRegistry:
     @classmethod
     def load(cls, path: Path | None = None) -> DataRegistry:
         """Load registry from YAML file."""
+        import yaml
+
         path = path or _SOURCES_YAML
         with open(path) as f:
-            data = yaml.safe_load(f)
+            data = yaml.safe_load(f) or {}
 
         sources = []
         for entry in data.get("sources", []):
-            sources.append(DataSource(
-                name=entry["name"],
-                repo_id=entry["repo_id"],
-                adapter=entry["adapter"],
-                domain=Domain(entry["domain"]),
-                modality=Modality(entry["modality"]),
-                description=entry.get("description", ""),
-                license=entry.get("license", "unknown"),
-                size=entry.get("size"),
-                difficulty_range=tuple(entry["difficulty_range"]) if entry.get("difficulty_range") else None,
-                default_split=entry.get("default_split", "train"),
-                tags=entry.get("tags", []),
-            ))
+            try:
+                sources.append(DataSource(
+                    name=entry["name"],
+                    repo_id=entry["repo_id"],
+                    adapter=entry["adapter"],
+                    domain=Domain(entry["domain"]),
+                    modality=Modality(entry["modality"]),
+                    description=entry.get("description", ""),
+                    license=entry.get("license", "unknown"),
+                    size=entry.get("size"),
+                    difficulty_range=tuple(entry["difficulty_range"]) if entry.get("difficulty_range") else None,
+                    default_split=entry.get("default_split", "train"),
+                    tags=entry.get("tags", []),
+                ))
+            except (KeyError, ValueError, TypeError) as e:
+                warnings.warn(f"Skipping malformed source '{entry.get('name', '?')}': {e}")
 
         return cls(sources)
 
