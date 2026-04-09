@@ -10,6 +10,8 @@ Public API::
         get_environment,
         list_environments,
         validate_environment,
+        CodingSandboxEnv,
+        SQLSandboxEnv,
     )
 """
 
@@ -26,6 +28,10 @@ from carl_studio.environments.registry import (
 )
 from carl_studio.environments.validation import validate_environment
 
+# Import builtins to trigger @register_environment decorators.
+# This must come AFTER registry imports to avoid circular imports.
+from carl_studio.environments.builtins import CodingSandboxEnv, SQLSandboxEnv  # noqa: F401
+
 __all__ = [
     "BaseEnvironment",
     "EnvironmentLane",
@@ -35,4 +41,6 @@ __all__ = [
     "list_environments",
     "clear_registry",
     "validate_environment",
+    "CodingSandboxEnv",
+    "SQLSandboxEnv",
 ]

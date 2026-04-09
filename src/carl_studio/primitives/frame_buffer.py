@@ -117,28 +117,28 @@ class FrameBuffer:
             "phi_std": phi_std,
             "phi_trend": trend,
             "n_frames": len(self._records),
-            "kuramoto_R": self.kuramoto_R(),
+            "synchronization": self._synchronization_index(),
             "reward_sum": float(sum(self.rewards)),
             "state_changes": sum(1 for r in self._records if r.state_changed),
         }
 
-    def kuramoto_R(self) -> float:
-        """Compute Kuramoto order parameter from Phi trajectory.
+    def _synchronization_index(self) -> float:
+        """Phi trajectory consistency index. Range [0, 1].
 
-        Treats each step's Phi as a phase oscillator.  R measures collective
-        synchronization: R=1 means all phases aligned (coherent behaviour),
-        R~0 means desynchronised (erratic behaviour).
-
-        Half-circle mapping (``* pi``) preserves the linear ordering of Phi —
-        disorder (0) and order (1) are maximally separated at opposite poles
-        (0 and pi).  Full-circle mapping (``* 2*pi``) incorrectly treats them
-        as adjacent because 0 and 2*pi are the same angle.
+        Higher values indicate more consistent phi across the buffer window.
+        Implementation details in terminals-runtime.
         """
         if len(self._records) < 2:
             return 0.0
-        phases = np.array(self.phi_values) * np.pi  # map [0,1] to [0, pi]
-        R = float(abs(np.mean(np.exp(1j * phases))))
-        return R
+        try:
+            from terminals_runtime.primitives import kuramoto_R
+            return kuramoto_R(self.phi_values)
+        except ImportError:
+            # Fallback: simple coefficient of variation inverse
+            phi_arr = np.array(self.phi_values)
+            if phi_arr.std() < 1e-8:
+                return 1.0
+            return float(max(0.0, 1.0 - phi_arr.std() / max(phi_arr.mean(), 1e-8)))
 
     def detect_phase_transition(
         self, window: int = 5, threshold: float = 0.15

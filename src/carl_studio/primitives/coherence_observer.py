@@ -51,43 +51,26 @@ from .constants import DEFECT_THRESHOLD, KAPPA, SIGMA
 # Distilled watchpoint list from the CARL analysis.
 # ============================================================
 
-OBSERVER_SYSTEM_PROMPT = """You are a Coherence Dynamics Observer for an RL training run based on Crystal-Aligned Reinforcement Learning (CARL).
+def _load_observer_prompt() -> str:
+    """Load observer system prompt from terminals-runtime if available.
 
-You receive periodic batches of CoherenceSnapshot metrics from a training run. Your job is to diagnose the coherence health and flag specific events.
+    The analytical methodology is proprietary. Falls back to a minimal
+    prompt that produces structured output without the watchpoint details.
+    """
+    try:
+        from terminals_runtime.observe import OBSERVER_SYSTEM_PROMPT
+        return OBSERVER_SYSTEM_PROMPT
+    except ImportError:
+        pass
+    # Minimal fallback: structured output format without proprietary methodology
+    return """You are a training metrics observer for CARL (Coherence-Aware Reinforcement Learning).
 
-## Key Constants
-- kappa = 64/3 ~ 21.33 (conservation constant)
-- sigma = 3/16 = 0.1875 (semantic quantum -- minimum meaningful signal)
-- Discontinuity threshold: |delta_phi| > 0.03
+You receive periodic batches of coherence metrics from a training run. Analyze the metrics and provide a health assessment.
 
-## What to Watch For
-
-### 1. PHASE TRANSITION (Critical Event)
-The Kuramoto theory predicts a discrete phase transition where discontinuity choreography suddenly snaps into alignment. Signal: sudden drop in discontinuity density variance across batches, accompanied by a jump in mean phi. If you see this, flag it prominently -- it means a coherence transition has occurred and training is working.
-
-### 2. SCALE-SEPARATED CONVERGENCE
-Fine scales (j=0,1,2) should improve before coarse scales (j=8+). If coarse improves first, flag as WARNING: "hallucination factory risk -- global coherence without local structure."
-
-### 3. DISCONTINUITY CHOREOGRAPHY EMERGENCE
-Early in training: discontinuities are random (commitment events and dissolution events roughly equal, no positional pattern). As training works: commitment events should exceed dissolution events (the model learns to commit more than it collapses). If dissolution events consistently exceed commitment events, flag as WARNING: "coherence destabilizing."
-
-### 4. CLOUD QUALITY TREND
-Cloud quality = P(selected) x phi. Should increase over training. If it plateaus while overall reward increases, the model is getting lucky (right tokens from noisy distributions) rather than genuinely improving.
-
-### 5. NOISE FLOOR (sigma = 0.1875)
-If advantage_above_sigma is provided, it shows what fraction of per-token advantages exceed the semantic quantum. If this drops below 30%, the reward signal is mostly sub-semantic noise -- learning rate or reward scale may need adjustment.
-
-### 6. KL STEPPING
-If KL divergence data is available: look for a stepped (staircase) pattern rather than smooth monotonic rise. Steps indicate the model learning new discontinuity patterns. Smooth rise suggests drift without structural learning.
-
-### 7. ENTROPY-STRUCTURE CORRELATION
-The phi trajectory should develop a characteristic shape correlated with content structure over training. Signal: phi_std should initially rise (the model develops more varied confidence levels) then stabilize at a higher value than baseline.
-
-## Response Format
 Respond with a JSON object (no markdown, no backticks):
 {
   "status": "HEALTHY" | "WARNING" | "CRITICAL" | "PHASE_TRANSITION",
-  "diagnosis": "1-3 sentence summary of coherence state",
+  "diagnosis": "1-3 sentence summary of training health",
   "signals": [
     {"name": "...", "status": "ok|watch|alert", "detail": "..."}
   ],
@@ -99,6 +82,9 @@ Respond with a JSON object (no markdown, no backticks):
     "scale_alignment": "correct|inverted|unclear"
   }
 }"""
+
+
+OBSERVER_SYSTEM_PROMPT = _load_observer_prompt()
 
 
 class CoherenceObserver:

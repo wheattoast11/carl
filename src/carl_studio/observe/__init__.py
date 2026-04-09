@@ -7,6 +7,6 @@ Two modes:
 The TUI requires ``carl-studio[tui]`` (textual + textual-plotext).
 """
 
-from carl_studio.observe.data_source import FileSource, TrackioSource
+from carl_studio.observe.data_source import FileSource, ObserveFrame, TraceFileSource, TrackioSource
 
-__all__ = ["FileSource", "TrackioSource"]
+__all__ = ["FileSource", "ObserveFrame", "TraceFileSource", "TrackioSource"]

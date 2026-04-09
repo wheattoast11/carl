@@ -288,7 +288,8 @@ class SendItPipeline:
     def _check_gate(self, run: TrainingRun) -> bool:
         """Check if a training run passes the eval gate.
 
-        Runs EvalRunner against the checkpoint with the configured threshold.
+        For GRPO runs, uses Phase 2' eval (multi-turn sandbox, threshold 0.30).
+        For SFT runs, uses Phase 1 eval (tool-call format, threshold 0.50).
         Falls back to completion-check if eval deps aren't available.
         """
         if run.phase == RunPhase.FAILED:
@@ -296,30 +297,41 @@ class SendItPipeline:
 
         output_repo = self.config.output_repo
         if not output_repo:
-            logger.warning("No output_repo — gate defaults to completion check")
+            logger.warning("No output_repo -- gate defaults to completion check")
             return run.phase == RunPhase.COMPLETE
 
-        # Try real eval gate
+        # Determine phase and threshold based on training method
+        is_grpo = self.config.method == TrainingMethod.GRPO
+        eval_phase = "2prime" if is_grpo else "auto"
+        default_threshold = 0.30 if is_grpo else 0.50
+
         try:
-            from carl_studio.eval.runner import EvalConfig, EvalRunner
+            from carl_studio.eval.runner import EvalConfig, EvalRunner, EvalGate
 
             eval_config = EvalConfig(
                 checkpoint=output_repo,
-                dataset=self.config.dataset_repo,
-                phase="auto",
-                threshold=getattr(self.config, "eval_threshold", 0.5),
+                dataset=self.config.dataset_repo or "wheattoast11/zero-rl-tool-calling-data",
+                data_files="eval.jsonl" if is_grpo else None,
+                phase=eval_phase,
+                threshold=getattr(self.config, "eval_threshold", default_threshold),
+                base_model=self.config.base_model if is_grpo else None,
+                sft_adapter=getattr(self.config, "sft_adapter", None) if is_grpo else None,
+                max_samples=getattr(self.config, "eval_samples", 100),
             )
             report = EvalRunner(eval_config).run()
+            gate = EvalGate(threshold=eval_config.threshold, phase=eval_phase)
+
             logger.info(
-                f"Eval gate: {report.primary_metric}={report.primary_value:.3f} "
-                f"(threshold={report.threshold:.2f}) → {'PASS' if report.passed else 'FAIL'}"
+                "Eval gate: %s=%.3f (threshold=%.2f) -> %s",
+                report.primary_metric, report.primary_value,
+                report.threshold, "PASS" if report.passed else "FAIL",
             )
-            return report.passed
+            return gate.check(report)
         except ImportError:
             logger.warning("EvalRunner not available (install carl-studio[training]). Falling back to completion check.")
             return run.phase == RunPhase.COMPLETE
         except Exception as e:
-            logger.warning(f"Eval gate failed: {e}. Falling back to completion check.")
+            logger.warning("Eval gate failed: %s. Falling back to completion check.", e)
             return run.phase == RunPhase.COMPLETE
 
     async def _push_model(self, run: TrainingRun) -> None:

@@ -179,18 +179,22 @@ CARL includes TTT mechanisms for post-deployment adaptation:
 
 CARL Studio is MIT-licensed. The mathematics -- conservation law, order parameter, reward components -- are independently derivable from the three published papers (CC-BY-4.0).
 
-This package is the *open training framework*. It does **not** include the runtime substrate:
+This package is the *open training framework*. It does **not** include the runtime dynamics or autonomous orchestration:
 
 | What | Where | License |
 |------|-------|---------|
 | Conservation law, Phi, rewards | **CARL Studio** (this repo) | MIT |
-| Kuramoto oscillator dynamics | Terminals Platform | BUSL-1.1 |
+| Observe, eval, train CLI | **CARL Studio** (this repo) | MIT |
+| Resonance LR modulation | **terminals-runtime** | BUSL-1.1 |
+| SLOT / LoRA micro-update (TTT) | **terminals-runtime** | BUSL-1.1 |
+| Kuramoto oscillator dynamics | **terminals-runtime** | BUSL-1.1 |
+| Coherence diagnosis methodology | **terminals-runtime** | BUSL-1.1 |
 | Audio coherence (CHORD) | Terminals Platform | BUSL-1.1 |
 | Cross-substrate isomorphisms | Terminals Platform | BUSL-1.1 |
 | Interactive Research Environment | Terminals Platform | BUSL-1.1 |
 | Material Reality datasets | Zenodo | CC-BY-4.0 |
 
-The bifurcation is deliberate: CARL trains models using published mathematics. The Terminals Platform *deploys* them with proprietary runtime dynamics. Same conservation law, different sides of the boundary.
+The bifurcation is deliberate: CARL Studio provides the full training loop (observe, eval, train) using published mathematics. The `terminals-runtime` package adds autonomous features (resonance-aware LR, test-time training, Claude-powered diagnosis) behind BUSL-1.1. Same conservation law, different sides of the boundary.
 
 ## Citation
 

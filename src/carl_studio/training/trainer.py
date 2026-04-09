@@ -119,16 +119,18 @@ class CARLTrainer:
                 await asyncio.sleep(poll_interval)
                 continue
 
-            if status == "COMPLETED":
+            # Normalize to lowercase for comparison (protocol returns lowercase)
+            status_lower = status.lower()
+            if status_lower == "completed":
                 self.run.phase = RunPhase.COMPLETE
                 logger.info("Job completed: %s", self.run.hub_job_id)
                 return self.run
-            elif status in ("ERROR", "FAILED"):
+            elif status_lower in ("error", "failed"):
                 self.run.phase = RunPhase.FAILED
                 self.run.error_message = f"Remote job failed: {status}"
                 logger.error("Job failed: %s", self.run.hub_job_id)
                 return self.run
-            elif status == "CANCELED":
+            elif status_lower == "canceled":
                 self.run.phase = RunPhase.FAILED
                 self.run.error_message = "Job canceled"
                 return self.run

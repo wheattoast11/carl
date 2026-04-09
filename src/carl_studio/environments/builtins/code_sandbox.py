@@ -1,7 +1,10 @@
-"""Coding sandbox environment — real subprocess execution, file I/O, binary reward.
+"""Coding sandbox environment -- real subprocess execution, file I/O, binary reward.
 
 This is the reference CARL environment. TRL creates one instance per generation,
 auto-discovers public methods as tools, handles the multi-turn loop.
+
+Mirrors the standalone CodingSandboxEnv in zero-rl-pipeline/phase2/coding_sandbox_env.py
+but inherits from carl_studio's BaseEnvironment for turn history and CARL analysis.
 """
 
 from __future__ import annotations
@@ -15,10 +18,23 @@ from typing import Any
 from carl_studio.environments.protocol import BaseEnvironment, EnvironmentLane, EnvironmentSpec
 from carl_studio.environments.registry import register_environment
 
+_EXEC_TIMEOUT = 10  # seconds
+
 
 @register_environment
 class CodingSandboxEnv(BaseEnvironment):
-    """Real coding sandbox — subprocess execution, tempdir isolation, binary reward."""
+    """Real coding sandbox -- subprocess execution, tempdir isolation, binary reward.
+
+    Each instance gets an isolated temp directory. The model reads files,
+    writes code, and executes it. The reward is whether the code runs
+    without error.
+
+    Instrumentation attributes (read by reward functions and callbacks):
+        _tool_call_count: Total tool invocations this episode.
+        _tool_failure_count: Tool calls that returned errors.
+        _execution_attempted: Whether execute_code or run_shell was called.
+        _execution_succeeded: Whether the last execution had exit code 0.
+    """
 
     spec = EnvironmentSpec(
         lane=EnvironmentLane.CODE,
@@ -42,6 +58,8 @@ class CodingSandboxEnv(BaseEnvironment):
         self.workdir: str | None = None
         self._execution_attempted: bool = False
         self._execution_succeeded: bool = False
+        self._tool_call_count: int = 0
+        self._tool_failure_count: int = 0
 
     def reset(self, **kwargs: Any) -> str | None:
         """Create fresh sandbox for a new coding task.
@@ -57,6 +75,8 @@ class CodingSandboxEnv(BaseEnvironment):
         self.workdir = tempfile.mkdtemp(prefix="carl_sandbox_")
         self._execution_attempted = False
         self._execution_succeeded = False
+        self._tool_call_count = 0
+        self._tool_failure_count = 0
 
         initial_files = kwargs.get("initial_files", {})
         if isinstance(initial_files, dict):
@@ -70,12 +90,13 @@ class CodingSandboxEnv(BaseEnvironment):
         return task if task else None
 
     def _safe_path(self, path: str) -> str:
+        """Resolve path within sandbox. Prevents directory traversal."""
         if self.workdir is None:
-            raise RuntimeError("Sandbox not initialized — call reset() first")
+            raise RuntimeError("Sandbox not initialized -- call reset() first")
         if os.path.isabs(path):
             path = path.lstrip("/")
         resolved = os.path.normpath(os.path.join(self.workdir, path))
-        if not resolved.startswith(self.workdir):
+        if not (resolved == self.workdir or resolved.startswith(self.workdir + os.sep)):
             raise ValueError(f"Path escapes sandbox: {path}")
         return resolved
 
@@ -86,13 +107,18 @@ class CodingSandboxEnv(BaseEnvironment):
             path: File path relative to sandbox root.
 
         Returns:
-            The file contents.
+            The file contents, or an error message if the file does not exist.
         """
+        self._tool_call_count += 1
         try:
-            result = open(self._safe_path(path)).read()
+            fpath = self._safe_path(path)
+            with open(fpath) as f:
+                result = f.read()
         except FileNotFoundError:
+            self._tool_failure_count += 1
             result = f"Error: File not found: {path}"
         except ValueError as e:
+            self._tool_failure_count += 1
             result = f"Error: {e}"
         self._record_turn("read_file", {"path": path}, result)
         return result
@@ -105,8 +131,9 @@ class CodingSandboxEnv(BaseEnvironment):
             content: The content to write.
 
         Returns:
-            Confirmation message.
+            Confirmation message with bytes written.
         """
+        self._tool_call_count += 1
         try:
             fpath = self._safe_path(path)
             os.makedirs(os.path.dirname(fpath), exist_ok=True)
@@ -114,6 +141,7 @@ class CodingSandboxEnv(BaseEnvironment):
                 f.write(content)
             result = f"Written {len(content)} bytes to {path}"
         except ValueError as e:
+            self._tool_failure_count += 1
             result = f"Error: {e}"
         self._record_turn("write_file", {"path": path}, result)
         return result
@@ -125,18 +153,19 @@ class CodingSandboxEnv(BaseEnvironment):
             code: Python source code to execute.
 
         Returns:
-            Execution output (stdout and stderr).
+            The stdout/stderr output from execution.
         """
+        self._tool_call_count += 1
         self._execution_attempted = True
         if self.workdir is None:
-            raise RuntimeError("Sandbox not initialized — call reset() first")
+            raise RuntimeError("Sandbox not initialized -- call reset() first")
         fpath = os.path.join(self.workdir, "_exec.py")
         with open(fpath, "w") as f:
             f.write(code)
         try:
             proc = subprocess.run(
                 ["python", fpath],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=_EXEC_TIMEOUT,
                 cwd=self.workdir,
                 env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
             )
@@ -146,14 +175,17 @@ class CodingSandboxEnv(BaseEnvironment):
                 result = proc.stdout if proc.stdout.strip() else "(executed successfully, no output)"
             else:
                 self._execution_succeeded = False
+                self._tool_failure_count += 1
                 self.reward = 0.0
                 result = f"{proc.stdout}\nError (exit {proc.returncode}):\n{proc.stderr}"
         except subprocess.TimeoutExpired:
             self._execution_succeeded = False
+            self._tool_failure_count += 1
             self.reward = 0.0
-            result = "Error: Execution timed out (10s limit)"
+            result = f"Error: Execution timed out ({_EXEC_TIMEOUT}s limit)"
         except Exception as e:
             self._execution_succeeded = False
+            self._tool_failure_count += 1
             self.reward = 0.0
             result = f"Error: {e}"
         self._record_turn("execute_code", {"code_length": len(code)}, result)
@@ -166,15 +198,16 @@ class CodingSandboxEnv(BaseEnvironment):
             command: Shell command to execute.
 
         Returns:
-            Command output.
+            The command output (stdout + stderr).
         """
+        self._tool_call_count += 1
         self._execution_attempted = True
         if self.workdir is None:
-            raise RuntimeError("Sandbox not initialized — call reset() first")
+            raise RuntimeError("Sandbox not initialized -- call reset() first")
         try:
             proc = subprocess.run(
                 command, shell=True,
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, timeout=_EXEC_TIMEOUT,
                 cwd=self.workdir,
                 env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
             )
@@ -184,14 +217,17 @@ class CodingSandboxEnv(BaseEnvironment):
                 result = proc.stdout if proc.stdout.strip() else "(completed, no output)"
             else:
                 self._execution_succeeded = False
+                self._tool_failure_count += 1
                 self.reward = 0.0
                 result = f"{proc.stdout}\n(exit {proc.returncode})\n{proc.stderr}"
         except subprocess.TimeoutExpired:
             self._execution_succeeded = False
+            self._tool_failure_count += 1
             self.reward = 0.0
-            result = "Error: Command timed out (10s limit)"
+            result = f"Error: Command timed out ({_EXEC_TIMEOUT}s limit)"
         except Exception as e:
             self._execution_succeeded = False
+            self._tool_failure_count += 1
             self.reward = 0.0
             result = f"Error: {e}"
         self._record_turn("run_shell", {"command": command}, result)

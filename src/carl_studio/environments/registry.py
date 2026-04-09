@@ -1,4 +1,4 @@
-"""Environment registry — discover and look up CARL environments by name or lane."""
+"""Environment registry -- discover and look up CARL environments by name or lane."""
 
 from __future__ import annotations
 
@@ -27,11 +27,22 @@ def register_environment(cls: Type[BaseEnvironment]) -> Type[BaseEnvironment]:
 
 
 def get_environment(name: str) -> Type[BaseEnvironment]:
-    """Look up environment class by name."""
+    """Look up environment class by name.
+
+    Raises KeyError if name is not registered.
+    """
     if name not in _REGISTRY:
         available = ", ".join(sorted(_REGISTRY.keys())) or "(none)"
         raise KeyError(f"Unknown environment: '{name}'. Available: {available}")
     return _REGISTRY[name]
+
+
+def get_environment_factory(name: str) -> Type[BaseEnvironment]:
+    """Return an environment class suitable for TRL's environment_factory.
+
+    Identical to get_environment but named for clarity when passing to GRPOTrainer.
+    """
+    return get_environment(name)
 
 
 def list_environments(lane: EnvironmentLane | None = None) -> list[EnvironmentSpec]:
@@ -40,6 +51,11 @@ def list_environments(lane: EnvironmentLane | None = None) -> list[EnvironmentSp
     if lane is not None:
         specs = [s for s in specs if s.lane == lane]
     return sorted(specs, key=lambda s: s.name)
+
+
+def is_registered(name: str) -> bool:
+    """Check if an environment name is registered."""
+    return name in _REGISTRY
 
 
 def clear_registry() -> None:
