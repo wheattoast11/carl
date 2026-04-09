@@ -1,5 +1,5 @@
 """
-coherence_probe.py -- Observability probe for crystal-aligned training.
+coherence_probe.py -- Observability probe for coherence-aware training.
 
 Ported from zero-rl-pipeline/phase1/crystal_observer.py (CrystalProbe).
 
