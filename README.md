@@ -16,11 +16,23 @@ pip install carl-studio
 
 ## Quick Start
 
+### Observe (zero friction -- point at any existing run)
+
+```bash
+carl observe --trackio https://your-space.hf.space
+```
+
+No training, no config, no GPU. See your model's learning geometry instantly.
+
+### Train
+
 ```python
 from carl_studio import CARLTrainer, TrainingConfig
 
 trainer = CARLTrainer(TrainingConfig(
+    run_name="my-first-carl",
     base_model="Qwen/Qwen3.5-9B",
+    output_repo="your-username/my-model",
     method="grpo",
     dataset_repo="trl-lib/Capybara",
     compute_target="l4x1",
@@ -107,24 +119,32 @@ Entropy spikes to near-maximum, then accuracy discontinuously jumps once the sys
 
 ## CLI
 
+**Core triad:**
 ```
+carl observe       See learning geometry on any run (no GPU required)
+carl eval          Pass/fail gate on a checkpoint
 carl train         Train with CARL rewards (SFT, GRPO, DPO, KTO, ORPO)
-carl train --send-it   Full autonomous pipeline
-carl eval          Run eval gates
-carl observe       Live coherence monitoring (TUI)
-carl align         Realign a drifted model
-carl learn         Ingest knowledge, generate data, train
-carl bench         Coherence meta-benchmarks
-carl dev           Development mode
-carl chat          Interactive model chat
+carl train --send-it   Full autonomous pipeline: SFT -> gate -> GRPO -> eval -> push
+```
+
+**Operations:**
+```
 carl status <id>   Job status
 carl logs <id>     Job logs
 carl stop <id>     Cancel a job
 carl push          Push checkpoint to Hub
 carl bundle        Generate self-contained training script
-carl mcp           Start MCP server
 carl compute       List GPU flavors and pricing
 carl setup         First-time setup
+```
+
+**Advanced** (experimental):
+```
+carl align         Realign a drifted model
+carl learn         Ingest knowledge, generate data, train
+carl bench         Coherence meta-benchmarks
+carl mcp           Start MCP server (9 tools for AI agents)
+carl dev           Development utilities
 ```
 
 ## Model-Agnostic

@@ -429,7 +429,7 @@ def mcp_serve(
     transport: str = typer.Option("stdio", "--transport", "-t", help="Transport: stdio or http"),
     port: int = typer.Option(8100, "--port", "-p", help="HTTP port (if transport=http)"),
 ) -> None:
-    """Start the CARL Studio MCP server."""
+    """[experimental] Start the CARL Studio MCP server (9 tools for AI agents)."""
     c = get_console()
     try:
         from carl_studio.mcp import mcp as mcp_server
@@ -447,13 +447,25 @@ def mcp_serve(
 
 
 # ---------------------------------------------------------------------------
-# carl golf
+# carl golf [experimental — requires zero-rl-pipeline as sibling]
 # ---------------------------------------------------------------------------
-golf_app = typer.Typer(name="golf", help="Parameter Golf submission tools", no_args_is_help=True)
+golf_app = typer.Typer(name="golf", help="[experimental] Parameter Golf tools (requires zero-rl-pipeline repo)", no_args_is_help=True)
 app.add_typer(golf_app)
 
-GOLF_SCRIPT = Path(__file__).resolve().parent.parent.parent.parent / "zero-rl-pipeline" / "parameter-golf" / "train_gpt.py"
-GOLF_CONFIGS_DIR = GOLF_SCRIPT.parent / "configs"
+_GOLF_BASE = Path(__file__).resolve().parent.parent.parent.parent / "zero-rl-pipeline" / "parameter-golf"
+
+
+def _golf_check() -> Path:
+    """Verify golf dependencies exist. Fail gracefully for PyPI users."""
+    script = _GOLF_BASE / "train_gpt.py"
+    if not script.exists():
+        get_console().error(
+            f"Parameter Golf requires the zero-rl-pipeline repo as a sibling directory.\n"
+            f"Expected: {script}\n"
+            f"This command is for internal development only."
+        )
+        raise typer.Exit(1)
+    return script
 
 
 @golf_app.command(name="generate")
@@ -461,27 +473,26 @@ def golf_generate(
     output: str = typer.Option("-", "--output", "-o", help="Output file (- for stdout)"),
 ) -> None:
     """Print or write the Parameter Golf train_gpt.py submission."""
-    c = get_console()
-    if not GOLF_SCRIPT.exists():
-        c.error(f"train_gpt.py not found at {GOLF_SCRIPT}")
-        raise typer.Exit(1)
-    text = GOLF_SCRIPT.read_text()
+    script = _golf_check()
+    text = script.read_text()
     if output == "-":
         sys.stdout.write(text)
     else:
         Path(output).write_text(text)
-        c.ok(f"Written to {output} ({len(text)} bytes)")
+        get_console().ok(f"Written to {output} ({len(text)} bytes)")
 
 
 @golf_app.command(name="configs")
 def golf_configs() -> None:
     """List available Parameter Golf variant configs."""
-    c = get_console()
-    if not GOLF_CONFIGS_DIR.exists():
-        c.error(f"Configs dir not found at {GOLF_CONFIGS_DIR}")
+    script = _golf_check()
+    configs_dir = script.parent / "configs"
+    if not configs_dir.exists():
+        get_console().error(f"Configs dir not found at {configs_dir}")
         raise typer.Exit(1)
+    c = get_console()
     table = c.make_table("Variant", "Path", title="Parameter Golf Variants")
-    for cfg in sorted(GOLF_CONFIGS_DIR.glob("*.sh")):
+    for cfg in sorted(configs_dir.glob("*.sh")):
         table.add_row(cfg.stem, str(cfg))
     c.blank()
     c.print(table)
@@ -1013,7 +1024,7 @@ def data_stats(
 def dev(
     phase: str = typer.Option("all", "--phase", "-p", help="Phase: ground, test, data, scripts, validate, update, all"),
 ) -> None:
-    """Interactive development workflow (gated process).
+    """[experimental] Interactive development workflow (gated process).
 
     Runs the CARL development SOP: ground → test → data → scripts → validate → update.
     Each phase gate-checks before proceeding to the next.

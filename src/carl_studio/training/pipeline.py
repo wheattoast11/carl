@@ -288,22 +288,39 @@ class SendItPipeline:
     def _check_gate(self, run: TrainingRun) -> bool:
         """Check if a training run passes the eval gate.
 
-        Simple heuristic: if the run completed without error, it passes.
-        For real deployments, this should call the EvalRunner.
+        Runs EvalRunner against the checkpoint with the configured threshold.
+        Falls back to completion-check if eval deps aren't available.
         """
-        if run.phase == RunPhase.COMPLETE:
-            return True
         if run.phase == RunPhase.FAILED:
             return False
 
-        # Check if checkpoint exists on Hub
-        if run.hub_job_id:
-            output_repo = self.config.output_repo
-            if output_repo:
-                from carl_studio.training.trainer import CARLTrainer
-                return CARLTrainer.check_checkpoint(output_repo)
+        output_repo = self.config.output_repo
+        if not output_repo:
+            logger.warning("No output_repo — gate defaults to completion check")
+            return run.phase == RunPhase.COMPLETE
 
-        return True  # Assume pass if we can't determine
+        # Try real eval gate
+        try:
+            from carl_studio.eval.runner import EvalConfig, EvalRunner
+
+            eval_config = EvalConfig(
+                checkpoint=output_repo,
+                dataset=self.config.dataset_repo,
+                phase="auto",
+                threshold=getattr(self.config, "eval_threshold", 0.5),
+            )
+            report = EvalRunner(eval_config).run()
+            logger.info(
+                f"Eval gate: {report.primary_metric}={report.primary_value:.3f} "
+                f"(threshold={report.threshold:.2f}) → {'PASS' if report.passed else 'FAIL'}"
+            )
+            return report.passed
+        except ImportError:
+            logger.warning("EvalRunner not available (install carl-studio[training]). Falling back to completion check.")
+            return run.phase == RunPhase.COMPLETE
+        except Exception as e:
+            logger.warning(f"Eval gate failed: {e}. Falling back to completion check.")
+            return run.phase == RunPhase.COMPLETE
 
     async def _push_model(self, run: TrainingRun) -> None:
         """Push model to Hub if output_repo is configured."""
