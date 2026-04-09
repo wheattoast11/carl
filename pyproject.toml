@@ -38,12 +38,6 @@ classifiers = [
     "Environment :: GPU :: NVIDIA CUDA",
 ]
 
-[project.urls]
-Homepage = "https://github.com/wheattoast11/carl"
-Documentation = "https://github.com/wheattoast11/carl#readme"
-Repository = "https://github.com/wheattoast11/carl"
-Issues = "https://github.com/wheattoast11/carl/issues"
-
 dependencies = [
     "pydantic>=2.9",
     "pydantic-settings>=2.0",
@@ -53,6 +47,12 @@ dependencies = [
     "anyio>=4.0",
     "pyyaml>=6.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/wheattoast11/carl"
+Documentation = "https://github.com/wheattoast11/carl#readme"
+Repository = "https://github.com/wheattoast11/carl"
+Issues = "https://github.com/wheattoast11/carl/issues"
 
 [project.optional-dependencies]
 training = [
