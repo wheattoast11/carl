@@ -1,0 +1,76 @@
+# CARL Data Source Registry
+# New sources: add an entry here + write an adapter class.
+# The pipeline discovers and loads sources from this file.
+
+sources:
+  - name: carl-tool-calling
+    repo_id: wheattoast11/zero-rl-tool-calling-data
+    adapter: carl_studio.data.adapters.tool_calling.ToolCallingAdapter
+    domain: tool_calling
+    modality: code
+    description: "1,900 tool-calling samples for sandbox GRPO (Phase 2')"
+    license: apache-2.0
+    size: 1900
+    difficulty_range: [0.3, 0.9]
+    default_split: train
+    tags: [carl, tool-calling, sandbox]
+
+  - name: nemotron-cascade-swe
+    repo_id: nvidia/Nemotron-Cascade-RL-SWE
+    adapter: carl_studio.data.adapters.nemotron.NemotronAdapter
+    domain: swe
+    modality: code
+    description: "NVIDIA cascade RL superset — SWE-Bench + R2E-Gym + SWE-Smith + SWE-Fixer"
+    license: apache-2.0
+    size: 50000
+    difficulty_range: [0.05, 0.7]
+    default_split: train
+    tags: [nvidia, swe, cascade-rl]
+
+  - name: r2e-gym
+    repo_id: R2E-Gym/R2E-Gym-V1
+    adapter: carl_studio.data.adapters.r2e_gym.R2EGymAdapter
+    domain: swe
+    modality: code
+    description: "8,100 real GitHub issues across 13 Python repos with unit test verification"
+    license: apache-2.0
+    size: 8100
+    difficulty_range: [0.1, 0.6]
+    default_split: train
+    tags: [r2e-gym, swe, github-issues]
+
+  - name: swe-smith
+    repo_id: SWE-bench/SWE-smith
+    adapter: carl_studio.data.adapters.swe_smith.SWESmithAdapter
+    domain: swe
+    modality: code
+    description: "50K procedurally generated from 128 repos — unlimited curriculum depth"
+    license: mit
+    size: 50137
+    difficulty_range: [0.1, 0.8]
+    default_split: train
+    tags: [swe-bench, procedural, unlimited]
+
+  - name: bigcodebench-hard
+    repo_id: bigcode/bigcodebench
+    adapter: carl_studio.data.adapters.bigcodebench.BigCodeBenchAdapter
+    domain: competitive
+    modality: code
+    description: "148 multi-library composition tasks (pandas + sklearn + matplotlib)"
+    license: apache-2.0
+    size: 148
+    difficulty_range: [0.2, 0.5]
+    default_split: hard
+    tags: [bigcode, multi-library, composition]
+
+  - name: livecodebench
+    repo_id: livecodebench/code_generation_lite
+    adapter: carl_studio.data.adapters.livecodebench.LiveCodeBenchAdapter
+    domain: competitive
+    modality: code
+    description: "Continuously updated competitive programming — zero contamination"
+    license: mit
+    size: 880
+    difficulty_range: [0.1, 0.4]
+    default_split: test
+    tags: [livecodebench, competitive, zero-contamination]
