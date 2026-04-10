@@ -2277,6 +2277,8 @@ def learn_cmd(
     quality_threshold: float = typer.Option(0.9, "--gate", "-g", help="Quality gate threshold"),
     output: str = typer.Option("", "--output", "-o", help="Save generated pairs to JSONL"),
     config: str = typer.Option("carl.yaml", "--config", "-c", help="Project config"),
+    synthesize: bool = typer.Option(False, "--synthesize", "-s", help="Synthesize graded RL training samples from codebase"),
+    count: int = typer.Option(10, "--count", help="Target number of valid samples (synthesize mode)"),
 ) -> None:
     """Ingest new knowledge from source material into a model."""
     c = get_console()
@@ -2285,6 +2287,13 @@ def learn_cmd(
     except ImportError:
         c.error("carl_studio.learn module not available")
         raise typer.Exit(1)
+
+    if synthesize:
+        from carl_studio.learn.synthesize import SynthesizeConfig, SynthesizePipeline
+        synth_config = SynthesizeConfig(source=source, count=count, output=output)
+        SynthesizePipeline(synth_config, c).run()
+        c.blank()
+        raise typer.Exit(0)
 
     # Resolve model from project if not specified
     if not model_id:
