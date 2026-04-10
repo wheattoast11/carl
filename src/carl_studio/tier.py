@@ -235,7 +235,10 @@ def tier_gate(required_tier: Tier, feature: str | None = None) -> Callable:
             effective = detect_effective_tier(settings.tier)
             feat_name = feature or func.__name__
 
-            if not tier_allows(effective, feat_name):
+            # Check both: the explicit required_tier AND the feature registry.
+            # The decorator's required_tier is the authoritative minimum;
+            # the feature registry may also impose a minimum via tier_allows.
+            if effective < required_tier or not tier_allows(effective, feat_name):
                 raise TierGateError(feat_name, required_tier, effective)
 
             return func(*args, **kwargs)

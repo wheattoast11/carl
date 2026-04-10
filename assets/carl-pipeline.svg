@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200">
+  <defs>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#a855f7"/>
+    </linearGradient>
+    <filter id="blur">
+      <feGaussianBlur stdDeviation="2"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="200" fill="#0a0a0a" rx="12"/>
+
+  <!-- Step boxes -->
+  <!-- 1: Observe -->
+  <g opacity="0.2">
+    <animate attributeName="opacity" values="0.2;1;1;1;1;1;1;0.2" dur="8s" repeatCount="indefinite"/>
+    <rect x="20" y="40" width="100" height="60" rx="8" fill="none" stroke="#06b6d4" stroke-width="2"/>
+    <text x="70" y="75" text-anchor="middle" fill="#06b6d4" font-family="monospace" font-size="13" font-weight="bold">Observe</text>
+    <text x="70" y="120" text-anchor="middle" fill="#666" font-family="monospace" font-size="10">point at run</text>
+  </g>
+
+  <!-- Arrow 1→2 -->
+  <line x1="125" y1="70" x2="150" y2="70" stroke="#333" stroke-width="1.5">
+    <animate attributeName="stroke" values="#333;#06b6d4;#06b6d4;#06b6d4;#06b6d4;#06b6d4;#333;#333" dur="8s" repeatCount="indefinite"/>
+  </line>
+  <polygon points="148,65 158,70 148,75" fill="#333">
+    <animate attributeName="fill" values="#333;#06b6d4;#06b6d4;#06b6d4;#06b6d4;#06b6d4;#333;#333" dur="8s" repeatCount="indefinite"/>
+  </polygon>
+
+  <!-- 2: Measure -->
+  <g opacity="0.2">
+    <animate attributeName="opacity" values="0.2;0.2;1;1;1;1;1;0.2" dur="8s" repeatCount="indefinite"/>
+    <rect x="160" y="40" width="100" height="60" rx="8" fill="none" stroke="#22d3ee" stroke-width="2"/>
+    <text x="210" y="68" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="13" font-weight="bold">Measure</text>
+    <text x="210" y="83" text-anchor="middle" fill="#22d3ee" font-family="monospace" font-size="11">Phi</text>
+    <text x="210" y="120" text-anchor="middle" fill="#666" font-family="monospace" font-size="10">entropy + order</text>
+  </g>
+
+  <!-- Arrow 2→3 -->
+  <line x1="265" y1="70" x2="290" y2="70" stroke="#333" stroke-width="1.5">
+    <animate attributeName="stroke" values="#333;#333;#22d3ee;#22d3ee;#22d3ee;#22d3ee;#333;#333" dur="8s" repeatCount="indefinite"/>
+  </line>
+  <polygon points="288,65 298,70 288,75" fill="#333">
+    <animate attributeName="fill" values="#333;#333;#22d3ee;#22d3ee;#22d3ee;#22d3ee;#333;#333" dur="8s" repeatCount="indefinite"/>
+  </polygon>
+
+  <!-- 3: Train -->
+  <g opacity="0.2">
+    <animate attributeName="opacity" values="0.2;0.2;0.2;1;1;1;1;0.2" dur="8s" repeatCount="indefinite"/>
+    <rect x="300" y="40" width="100" height="60" rx="8" fill="none" stroke="#a855f7" stroke-width="2"/>
+    <text x="350" y="75" text-anchor="middle" fill="#a855f7" font-family="monospace" font-size="13" font-weight="bold">Train</text>
+    <text x="350" y="120" text-anchor="middle" fill="#666" font-family="monospace" font-size="10">CARL rewards</text>
+  </g>
+
+  <!-- Arrow 3→4 -->
+  <line x1="405" y1="70" x2="430" y2="70" stroke="#333" stroke-width="1.5">
+    <animate attributeName="stroke" values="#333;#333;#333;#a855f7;#a855f7;#a855f7;#333;#333" dur="8s" repeatCount="indefinite"/>
+  </line>
+  <polygon points="428,65 438,70 428,75" fill="#333">
+    <animate attributeName="fill" values="#333;#333;#333;#a855f7;#a855f7;#a855f7;#333;#333" dur="8s" repeatCount="indefinite"/>
+  </polygon>
+
+  <!-- 4: Cascade Gate -->
+  <g opacity="0.2">
+    <animate attributeName="opacity" values="0.2;0.2;0.2;0.2;1;1;1;0.2" dur="8s" repeatCount="indefinite"/>
+    <rect x="440" y="40" width="100" height="60" rx="8" fill="none" stroke="#f59e0b" stroke-width="2"/>
+    <text x="490" y="68" text-anchor="middle" fill="#f59e0b" font-family="monospace" font-size="13" font-weight="bold">Cascade</text>
+    <text x="490" y="83" text-anchor="middle" fill="#f59e0b" font-family="monospace" font-size="11">Gate</text>
+    <text x="490" y="120" text-anchor="middle" fill="#666" font-family="monospace" font-size="10">adaptive stage</text>
+  </g>
+
+  <!-- Arrow 4→5 -->
+  <line x1="545" y1="70" x2="570" y2="70" stroke="#333" stroke-width="1.5">
+    <animate attributeName="stroke" values="#333;#333;#333;#333;#f59e0b;#f59e0b;#333;#333" dur="8s" repeatCount="indefinite"/>
+  </line>
+  <polygon points="568,65 578,70 568,75" fill="#333">
+    <animate attributeName="fill" values="#333;#333;#333;#333;#f59e0b;#f59e0b;#333;#333" dur="8s" repeatCount="indefinite"/>
+  </polygon>
+
+  <!-- 5: Eval -->
+  <g opacity="0.2">
+    <animate attributeName="opacity" values="0.2;0.2;0.2;0.2;0.2;1;1;0.2" dur="8s" repeatCount="indefinite"/>
+    <rect x="580" y="40" width="100" height="60" rx="8" fill="none" stroke="#10b981" stroke-width="2"/>
+    <text x="630" y="75" text-anchor="middle" fill="#10b981" font-family="monospace" font-size="13" font-weight="bold">Eval</text>
+    <text x="630" y="120" text-anchor="middle" fill="#666" font-family="monospace" font-size="10">pass/fail gate</text>
+  </g>
+
+  <!-- Arrow 5→6 -->
+  <line x1="685" y1="70" x2="710" y2="70" stroke="#333" stroke-width="1.5">
+    <animate attributeName="stroke" values="#333;#333;#333;#333;#333;#10b981;#333;#333" dur="8s" repeatCount="indefinite"/>
+  </line>
+  <polygon points="708,65 718,70 708,75" fill="#333">
+    <animate attributeName="fill" values="#333;#333;#333;#333;#333;#10b981;#333;#333" dur="8s" repeatCount="indefinite"/>
+  </polygon>
+
+  <!-- 6: Deploy -->
+  <g opacity="0.2">
+    <animate attributeName="opacity" values="0.2;0.2;0.2;0.2;0.2;0.2;1;0.2" dur="8s" repeatCount="indefinite"/>
+    <rect x="720" y="40" width="60" height="60" rx="8" fill="none" stroke="#f43f5e" stroke-width="2"/>
+    <text x="750" y="75" text-anchor="middle" fill="#f43f5e" font-family="monospace" font-size="13" font-weight="bold">Ship</text>
+    <text x="750" y="120" text-anchor="middle" fill="#666" font-family="monospace" font-size="10">push to hub</text>
+  </g>
+
+  <!-- Title -->
+  <text x="400" y="175" text-anchor="middle" fill="#444" font-family="monospace" font-size="11">observe  ->  measure  ->  train  ->  gate  ->  eval  ->  ship</text>
+  <text x="400" y="192" text-anchor="middle" fill="#333" font-family="monospace" font-size="9">CARL: Coherence-Aware Reinforcement Learning | terminals.tech</text>
+</svg>

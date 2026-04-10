@@ -102,7 +102,7 @@ async def test_provision_validates_token_with_whoami(backend):
 
     with (
         patch.object(HFJobsBackend, "_get_token", return_value="hf_test_token"),
-        patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf),
+        patch("huggingface_hub.HfApi", return_value=mock_hf),
     ):
         session_id = await backend.provision("a100-large")
 
@@ -121,7 +121,7 @@ async def test_provision_creates_upload_repo_if_missing(backend):
 
     with (
         patch.object(HFJobsBackend, "_get_token", return_value="hf_test_token"),
-        patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf),
+        patch("huggingface_hub.HfApi", return_value=mock_hf),
     ):
         await backend.provision("l4x1")
 
@@ -142,7 +142,7 @@ async def test_provision_stores_state(backend):
 
     with (
         patch.object(HFJobsBackend, "_get_token", return_value="hf_test_token"),
-        patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf),
+        patch("huggingface_hub.HfApi", return_value=mock_hf),
     ):
         await backend.provision("l40sx1", timeout=7200)
 
@@ -168,7 +168,7 @@ async def test_execute_uploads_and_submits(backend, mock_api):
     mock_hf.upload_file.return_value = None
     mock_hf.run_uv_job.return_value = _make_job_info(job_id="job-xyz789")
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         job_id = await backend.execute(
             script=script_content,
             flavor="a100-large",
@@ -193,7 +193,7 @@ async def test_execute_uploads_and_submits(backend, mock_api):
 async def test_execute_rejects_empty_script(backend, mock_api):
     """execute() raises ValueError for empty script."""
     mock_hf = MagicMock()
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         with pytest.raises(ValueError, match="empty"):
             await backend.execute(script="   ")
 
@@ -206,7 +206,7 @@ async def test_execute_includes_hf_token_in_secrets(backend, mock_api):
     mock_hf.upload_file.return_value = None
     mock_hf.run_uv_job.return_value = _make_job_info()
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         await backend.execute(script="print('test')", secrets={"WANDB_KEY": "WANDB_KEY"})
 
     secrets = mock_hf.run_uv_job.call_args.kwargs["secrets"]
@@ -222,7 +222,7 @@ async def test_execute_includes_carl_studio_label(backend, mock_api):
     mock_hf.upload_file.return_value = None
     mock_hf.run_uv_job.return_value = _make_job_info()
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         await backend.execute(script="print('test')")
 
     labels = mock_hf.run_uv_job.call_args.kwargs["labels"]
@@ -238,7 +238,7 @@ async def test_execute_tracks_active_job(backend, mock_api):
     mock_hf.upload_file.return_value = None
     mock_hf.run_uv_job.return_value = _make_job_info(job_id="job-tracked")
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         job_id = await backend.execute(script="print('test')")
 
     assert job_id in backend._active_jobs
@@ -252,7 +252,7 @@ async def test_execute_upload_failure_raises(backend, mock_api):
     mock_hf.whoami.return_value = {"name": "testuser"}
     mock_hf.upload_file.side_effect = Exception("Upload failed: 403")
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         with pytest.raises(RuntimeError, match="Failed to upload"):
             await backend.execute(script="print('test')")
 
@@ -265,7 +265,7 @@ async def test_execute_submit_failure_raises(backend, mock_api):
     mock_hf.upload_file.return_value = None
     mock_hf.run_uv_job.side_effect = Exception("Quota exceeded")
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         with pytest.raises(RuntimeError, match="Failed to submit"):
             await backend.execute(script="print('test')")
 
@@ -281,7 +281,7 @@ async def test_execute_reads_file_if_path(backend, mock_api, tmp_path):
     mock_hf.upload_file.return_value = None
     mock_hf.run_uv_job.return_value = _make_job_info()
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         await backend.execute(script=str(script_file))
 
     # Verify the file content was uploaded (not the path string)
@@ -310,7 +310,7 @@ async def test_status_normalizes_stages(backend, mock_api, raw_stage, expected):
     mock_hf = MagicMock()
     mock_hf.inspect_job.return_value = _make_job_info(stage=raw_stage)
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         result = await backend.status("job-test")
 
     assert result == expected
@@ -324,7 +324,7 @@ async def test_status_detailed_includes_message(backend, mock_api):
         stage="ERROR", message="OOM at step 68"
     )
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         result = await backend.status_detailed("job-test")
 
     assert result.stage == JobStage.ERROR
@@ -345,7 +345,7 @@ async def test_status_api_failure_raises(backend, mock_api):
     mock_hf = MagicMock()
     mock_hf.inspect_job.side_effect = Exception("Network error")
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         with pytest.raises(RuntimeError, match="Failed to inspect"):
             await backend.status("job-test")
 
@@ -362,7 +362,7 @@ async def test_logs_returns_recent_lines(backend, mock_api):
     mock_hf = MagicMock()
     mock_hf.fetch_job_logs.return_value = all_lines
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         result = await backend.logs("job-test", tail=10)
 
     assert len(result) == 10
@@ -377,7 +377,7 @@ async def test_logs_truncates_long_lines(backend, mock_api):
     mock_hf = MagicMock()
     mock_hf.fetch_job_logs.return_value = [long_line]
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         result = await backend.logs("job-test")
 
     assert len(result[0]) == 300
@@ -403,7 +403,7 @@ async def test_logs_api_failure_raises(backend, mock_api):
     mock_hf = MagicMock()
     mock_hf.fetch_job_logs.side_effect = Exception("Connection reset")
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         with pytest.raises(RuntimeError, match="Failed to fetch logs"):
             await backend.logs("job-test")
 
@@ -422,7 +422,7 @@ async def test_stop_cancels_job(backend, mock_api):
     # Pre-populate active jobs
     backend._active_jobs["job-cancel"] = "abc123"
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         await backend.stop("job-cancel")
 
     mock_hf.cancel_job.assert_called_once_with(job_id="job-cancel", token="hf_test_token")
@@ -442,7 +442,7 @@ async def test_stop_api_failure_raises(backend, mock_api):
     mock_hf = MagicMock()
     mock_hf.cancel_job.side_effect = Exception("Already completed")
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         with pytest.raises(RuntimeError, match="Failed to cancel"):
             await backend.stop("job-test")
 
@@ -631,7 +631,7 @@ async def test_list_jobs_returns_structured_data(backend, mock_api):
         ),
     ]
 
-    with patch("carl_studio.compute.hf_jobs.HfApi", return_value=mock_hf):
+    with patch("huggingface_hub.HfApi", return_value=mock_hf):
         jobs = await backend.list_jobs()
 
     assert len(jobs) == 2

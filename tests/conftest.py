@@ -34,6 +34,25 @@ def _stub_carl_studio_init():
     # Load real submodules that don't need transformers
     import importlib.util
 
+    # Stub intermediate subpackages so their children can be imported
+    _subpackages = {
+        "carl_studio.primitives": "src/carl_studio/primitives",
+        "carl_studio.environments": "src/carl_studio/environments",
+        "carl_studio.environments.builtins": "src/carl_studio/environments/builtins",
+        "carl_studio.compute": "src/carl_studio/compute",
+        "carl_studio.observe": "src/carl_studio/observe",
+        "carl_studio.eval": "src/carl_studio/eval",
+        "carl_studio.data": "src/carl_studio/data",
+        "carl_studio.data.adapters": "src/carl_studio/data/adapters",
+        "carl_studio.training": "src/carl_studio/training",
+        "carl_studio.training.rewards": "src/carl_studio/training/rewards",
+    }
+    for name, path in _subpackages.items():
+        if name not in sys.modules:
+            sub = types.ModuleType(name)
+            sub.__path__ = [path]
+            sys.modules[name] = sub
+
     _light_modules = {
         "carl_studio.types.config": "src/carl_studio/types/config.py",
         "carl_studio.types.reward": "src/carl_studio/types/reward.py",
@@ -41,6 +60,15 @@ def _stub_carl_studio_init():
         "carl_studio.tier": "src/carl_studio/tier.py",
         "carl_studio.settings": "src/carl_studio/settings.py",
         "carl_studio.theme": "src/carl_studio/theme.py",
+        "carl_studio.environments.protocol": "src/carl_studio/environments/protocol.py",
+        "carl_studio.environments.registry": "src/carl_studio/environments/registry.py",
+        "carl_studio.environments.validation": "src/carl_studio/environments/validation.py",
+        "carl_studio.environments.builtins.code_sandbox": "src/carl_studio/environments/builtins/code_sandbox.py",
+        "carl_studio.environments.builtins.sql_sandbox": "src/carl_studio/environments/builtins/sql_sandbox.py",
+        "carl_studio.compute.protocol": "src/carl_studio/compute/protocol.py",
+        "carl_studio.compute.hf_jobs": "src/carl_studio/compute/hf_jobs.py",
+        "carl_studio.observe.data_source": "src/carl_studio/observe/data_source.py",
+        "carl_studio.eval.runner": "src/carl_studio/eval/runner.py",
     }
 
     for name, path in _light_modules.items():
@@ -53,6 +81,22 @@ def _stub_carl_studio_init():
                     spec.loader.exec_module(mod)
             except Exception:
                 pass  # Module may not exist or have other deps
+
+    # Load __init__.py for subpackages that export public API
+    # (e.g. carl_studio.compute.get_backend lives in __init__.py)
+    _init_modules = {
+        "carl_studio.compute": "src/carl_studio/compute/__init__.py",
+        "carl_studio.observe": "src/carl_studio/observe/__init__.py",
+    }
+    for name, path in _init_modules.items():
+        if name in sys.modules:
+            try:
+                spec = importlib.util.spec_from_file_location(name, path)
+                if spec and spec.loader:
+                    existing = sys.modules[name]
+                    spec.loader.exec_module(existing)
+            except Exception:
+                pass
 
 
 # Run stub before any test imports

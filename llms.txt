@@ -1,31 +1,53 @@
 # CARL Studio
 
-> Coherence-Aware Reinforcement Learning SDK. Train, observe, and serve LLMs
-> with information-theoretic reward signals derived from the conservation law
-> T* = κ·d where κ = 64/3 and σ = 3/16.
+> Coherence-Aware Reinforcement Learning SDK. Train, observe, and evaluate LLMs
+> using information-theoretic reward signals. pip install carl-studio.
 
 ## API
 - [TrainingConfig](src/carl_studio/types/config.py): Pydantic config — model, method, compute, rewards, cascade
-- [CoherenceProbe](src/carl_studio/primitives/coherence_probe.py): Measure order parameter Φ, discontinuities, cloud quality from logits
-- [CARLReward](src/carl_studio/training/rewards/composite.py): Composite reward — 50% multiscale + 30% cloud + 20% discontinuity
-- [CascadeManager](src/carl_studio/training/cascade.py): Nemotron Cascade 2 stage gating with warmup
-- [ComputeBackend](src/carl_studio/compute/protocol.py): Protocol for HF Jobs, RunPod, Tinker, local
+- [CARLSettings](src/carl_studio/settings.py): Layered settings — env vars, ~/.carl/config.yaml, presets
+- [CoherenceProbe](src/carl_studio/primitives/coherence_probe.py): Measure Phi, entropy, discontinuities, cloud quality from logits
+- [CoherenceTrace](src/carl_studio/primitives/coherence_trace.py): Per-token arrays — phi, entropy, selected_prob, delta_phi
+- [CARLReward](src/carl_studio/training/rewards/composite.py): 50% multiscale + 30% cloud + 20% discontinuity
+- [CascadeManager](src/carl_studio/training/cascade.py): Adaptive stage gating — self-calibrating from metric distribution
+- [EvalRunner](src/carl_studio/eval/runner.py): Phase 1 (tool-call) + Phase 2' (environment) eval with 3-format parser
+- [CARLTrainer](src/carl_studio/training/trainer.py): Async dispatch to HF Jobs, RunPod, local
+- [ComputeBackend](src/carl_studio/compute/protocol.py): Protocol for compute backends
+- [HFJobsBackend](src/carl_studio/compute/hf_jobs.py): HuggingFace Jobs — provision, execute, status, logs, stop
+- [Tier](src/carl_studio/tier.py): FREE/PRO/ENTERPRISE gating with auto-elevation
 
 ## CLI
-- `carl train --config carl.yaml`: Start training
-- `carl status RUN_ID`: Check coherence health
-- `carl observe RUN_ID`: Force CoherenceObserver assessment
-- `carl bundle --config carl.yaml`: Generate self-contained HF Jobs script
+- `carl observe --url URL`: Crystal metrics on any Trackio run (no GPU)
+- `carl observe --live --url URL`: Real-time Textual TUI dashboard (PRO)
+- `carl observe --diagnose`: Claude-powered coherence diagnosis (PRO)
+- `carl train --model MODEL --method grpo --compute a100`: Train with CARL rewards
+- `carl train --send-it`: Full autonomous pipeline: SFT -> gate -> GRPO -> eval -> push (PRO)
+- `carl eval --adapter HUB_ID`: Run eval gate on checkpoint
+- `carl eval --remote`: Submit eval as HF Job
+- `carl config show`: Display settings
+- `carl config init`: Interactive setup wizard
+- `carl config preset research|production|quick`: Apply preset
+- `carl status ID`: Job status
+- `carl logs ID`: Job logs
+- `carl stop ID`: Cancel job
+- `carl bundle`: Generate self-contained PEP 723 training script
+- `carl mcp`: Start MCP server with 9 tools (ENTERPRISE)
 
 ## Constants (never configurable)
-- KAPPA = 64/3 ≈ 21.33 (conservation constant)
-- SIGMA = 3/16 = 0.1875 (semantic quantum)
-- DEFECT_THRESHOLD = 0.03 (minimum |ΔΦ|)
-- KAPPA × SIGMA = 4 (bits per dimension)
+- KAPPA = 64/3 (conservation constant)
+- SIGMA = 3/16 (semantic quantum)
+- DEFECT_THRESHOLD = 0.03 (minimum |delta_phi|)
+- KAPPA * SIGMA = 4 (bits per dimension)
+
+## Environments
+- [CodeSandboxEnv](src/carl_studio/environments/builtins/code_sandbox.py): read_file, write_file, execute_code, run_shell
+- [SQLSandboxEnv](src/carl_studio/environments/builtins/sql_sandbox.py): execute_query, list_tables, describe_table, insert_data
 
 ## Config Schema
-- [TrainingConfig JSON Schema](src/carl_studio/types/config.py): Use `TrainingConfig.model_json_schema()`
+- `TrainingConfig.model_json_schema()` for full JSON Schema
+- `CARLSettings.load()` for layered config resolution
 
-## Optional
-- [Rewards](src/carl_studio/training/rewards/): discontinuity, cloud, multiscale, task, VLM
-- [Backends](src/carl_studio/compute/): HF Jobs, RunPod, Tinker, Prime, SSH, local
+## Tiers
+- FREE: observe, train, eval, bench, align, learn, push, bundle, compute
+- PRO: --live, --diagnose, --send-it, auto-gating, scheduled runs
+- ENTERPRISE: MCP server, custom environments, orchestration

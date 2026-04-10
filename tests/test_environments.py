@@ -1,126 +1,42 @@
-"""Tests for CARL environment protocol, registry, validation, and builtins."""
+"""Tests for CARL environment protocol, registry, validation, and builtins.
 
-import os
-import sys
+Converted from script-style to pytest to work with conftest.py stubs
+(avoids carl_studio.__init__ triggering transformers import).
+"""
 
-# Allow running from repo root
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+import pytest
 
 from carl_studio.environments.protocol import BaseEnvironment, EnvironmentLane, EnvironmentSpec
-from carl_studio.environments.registry import register_environment, get_environment, list_environments, clear_registry
+from carl_studio.environments.registry import (
+    register_environment, get_environment, list_environments, clear_registry,
+)
 from carl_studio.environments.validation import validate_environment
 
-# =========================================================================
-# Test helpers
-# =========================================================================
-
-_pass = 0
-_fail = 0
-
-
-def assert_eq(a, b, msg=""):
-    global _pass, _fail
-    if a == b:
-        _pass += 1
-    else:
-        _fail += 1
-        print(f"  FAIL: {msg} — expected {b!r}, got {a!r}")
-
-
-def assert_true(val, msg=""):
-    global _pass, _fail
-    if val:
-        _pass += 1
-    else:
-        _fail += 1
-        print(f"  FAIL: {msg} — expected truthy, got {val!r}")
-
-
-def assert_false(val, msg=""):
-    global _pass, _fail
-    if not val:
-        _pass += 1
-    else:
-        _fail += 1
-        print(f"  FAIL: {msg} — expected falsy, got {val!r}")
-
-
-def assert_in(item, container, msg=""):
-    global _pass, _fail
-    if item in container:
-        _pass += 1
-    else:
-        _fail += 1
-        print(f"  FAIL: {msg} — {item!r} not in {container!r}")
-
-
-def assert_raises(exc_type, fn, msg=""):
-    global _pass, _fail
-    try:
-        fn()
-        _fail += 1
-        print(f"  FAIL: {msg} — no exception raised")
-    except exc_type:
-        _pass += 1
-    except Exception as e:
-        _fail += 1
-        print(f"  FAIL: {msg} — expected {exc_type.__name__}, got {type(e).__name__}: {e}")
-
 
 # =========================================================================
-# EnvironmentLane
+# Fixtures
 # =========================================================================
 
-print("Testing EnvironmentLane...")
-assert_eq(EnvironmentLane.CODE, "code", "CODE value")
-assert_eq(EnvironmentLane.QUERY, "query", "QUERY value")
-assert_eq(EnvironmentLane.RETRIEVAL, "retrieval", "RETRIEVAL value")
-assert_eq(EnvironmentLane.ROUTING, "routing", "ROUTING value")
-assert_eq(EnvironmentLane.INFRA, "infra", "INFRA value")
-assert_eq(EnvironmentLane.VISUAL, "visual", "VISUAL value")
-assert_eq(len(EnvironmentLane), 6, "6 lanes (MECE)")
 
-# =========================================================================
-# EnvironmentSpec
-# =========================================================================
+@pytest.fixture(autouse=True)
+def clean_registry():
+    """Clear the environment registry before and after each test."""
+    clear_registry()
+    yield
+    clear_registry()
 
-print("Testing EnvironmentSpec...")
-spec = EnvironmentSpec(
-    lane=EnvironmentLane.CODE,
-    name="test-env",
-    tools=("read", "write"),
-    max_turns=5,
-)
-assert_eq(spec.lane, EnvironmentLane.CODE, "spec lane")
-assert_eq(spec.name, "test-env", "spec name")
-assert_eq(spec.tools, ("read", "write"), "spec tools")
-assert_eq(spec.max_turns, 5, "spec max_turns")
-assert_eq(spec.reward_type, "binary", "spec default reward_type")
-assert_eq(spec.multimodal, False, "spec default multimodal")
 
-# Frozen
-try:
-    spec.name = "changed"
-    _fail += 1
-    print("  FAIL: spec should be frozen")
-except AttributeError:
-    _pass += 1
-
-# =========================================================================
-# Registry
-# =========================================================================
-
-print("Testing Registry...")
-
-clear_registry()
-assert_eq(list_environments(), [], "empty after clear")
-
-# Register a test env
 class _TestEnv(BaseEnvironment):
-    spec = EnvironmentSpec(lane=EnvironmentLane.CODE, name="test-reg", tools=("do_thing",))
+    """Minimal valid environment for testing."""
+
+    spec = EnvironmentSpec(
+        lane=EnvironmentLane.CODE, name="test-reg", tools=("do_thing",),
+    )
+
     def reset(self, **kwargs):
         super().reset(**kwargs)
         return None
+
     def do_thing(self, x: str) -> str:
         """Do a thing.
 
@@ -129,227 +45,382 @@ class _TestEnv(BaseEnvironment):
         """
         return x
 
-register_environment(_TestEnv)
-assert_eq(len(list_environments()), 1, "one registered")
-assert_eq(get_environment("test-reg"), _TestEnv, "lookup works")
 
-# Duplicate raises
-assert_raises(ValueError, lambda: register_environment(_TestEnv), "duplicate raises ValueError")
+# =========================================================================
+# EnvironmentLane
+# =========================================================================
 
-# Unknown raises
-assert_raises(KeyError, lambda: get_environment("nonexistent"), "unknown raises KeyError")
 
-# Filter by lane
-assert_eq(len(list_environments(lane=EnvironmentLane.CODE)), 1, "filter CODE")
-assert_eq(len(list_environments(lane=EnvironmentLane.QUERY)), 0, "filter QUERY empty")
+class TestEnvironmentLane:
+    def test_code_value(self):
+        assert EnvironmentLane.CODE == "code"
 
-clear_registry()
+    def test_query_value(self):
+        assert EnvironmentLane.QUERY == "query"
+
+    def test_retrieval_value(self):
+        assert EnvironmentLane.RETRIEVAL == "retrieval"
+
+    def test_routing_value(self):
+        assert EnvironmentLane.ROUTING == "routing"
+
+    def test_infra_value(self):
+        assert EnvironmentLane.INFRA == "infra"
+
+    def test_visual_value(self):
+        assert EnvironmentLane.VISUAL == "visual"
+
+    def test_mece_count(self):
+        assert len(EnvironmentLane) == 6
+
+
+# =========================================================================
+# EnvironmentSpec
+# =========================================================================
+
+
+class TestEnvironmentSpec:
+    def test_basic_fields(self):
+        spec = EnvironmentSpec(
+            lane=EnvironmentLane.CODE, name="test-env",
+            tools=("read", "write"), max_turns=5,
+        )
+        assert spec.lane == EnvironmentLane.CODE
+        assert spec.name == "test-env"
+        assert spec.tools == ("read", "write")
+        assert spec.max_turns == 5
+
+    def test_defaults(self):
+        spec = EnvironmentSpec(
+            lane=EnvironmentLane.CODE, name="t", tools=("x",),
+        )
+        assert spec.reward_type == "binary"
+        assert spec.multimodal is False
+
+    def test_frozen(self):
+        spec = EnvironmentSpec(
+            lane=EnvironmentLane.CODE, name="t", tools=("x",),
+        )
+        with pytest.raises(AttributeError):
+            spec.name = "changed"
+
+
+# =========================================================================
+# Registry
+# =========================================================================
+
+
+class TestRegistry:
+    def test_empty_after_clear(self):
+        assert list_environments() == []
+
+    def test_register_and_lookup(self):
+        register_environment(_TestEnv)
+        assert len(list_environments()) == 1
+        assert get_environment("test-reg") is _TestEnv
+
+    def test_duplicate_raises(self):
+        register_environment(_TestEnv)
+        with pytest.raises(ValueError):
+            register_environment(_TestEnv)
+
+    def test_unknown_raises(self):
+        with pytest.raises(KeyError):
+            get_environment("nonexistent")
+
+    def test_filter_by_lane(self):
+        register_environment(_TestEnv)
+        assert len(list_environments(lane=EnvironmentLane.CODE)) == 1
+        assert len(list_environments(lane=EnvironmentLane.QUERY)) == 0
+
 
 # =========================================================================
 # Validation
 # =========================================================================
 
-print("Testing Validation...")
 
-# Valid env
-errors = validate_environment(_TestEnv)
-assert_eq(errors, [], "valid env has no errors")
+class TestValidation:
+    def test_valid_env(self):
+        assert validate_environment(_TestEnv) == []
 
-# Missing spec
-class _NoSpec(BaseEnvironment):
-    def reset(self, **kwargs): return None
-    def tool(self, x: str) -> str:
-        """T. Args: x: thing."""
-        return x
+    def test_missing_spec(self):
+        class _NoSpec(BaseEnvironment):
+            def reset(self, **kwargs):
+                return None
+            def tool(self, x: str) -> str:
+                """T. Args: x: thing."""
+                return x
 
-errors = validate_environment(_NoSpec)
-assert_true(any("spec" in e.lower() for e in errors), "missing spec detected")
+        errors = validate_environment(_NoSpec)
+        assert any("spec" in e.lower() for e in errors)
 
-# Init with required args
-class _BadInit(BaseEnvironment):
-    spec = EnvironmentSpec(lane=EnvironmentLane.CODE, name="bad-init", tools=("t",))
-    def __init__(self, required_arg):
-        super().__init__()
-    def reset(self, **kwargs): return None
-    def t(self, x: str) -> str:
-        """T. Args: x: thing."""
-        return x
+    def test_required_init_arg(self):
+        class _BadInit(BaseEnvironment):
+            spec = EnvironmentSpec(
+                lane=EnvironmentLane.CODE, name="bad-init", tools=("t",),
+            )
+            def __init__(self, required_arg):
+                super().__init__()
+            def reset(self, **kwargs):
+                return None
+            def t(self, x: str) -> str:
+                """T. Args: x: thing."""
+                return x
 
-errors = validate_environment(_BadInit)
-assert_true(any("init" in e.lower() or "__init__" in e for e in errors), "required init arg detected")
+        errors = validate_environment(_BadInit)
+        assert any("init" in e.lower() or "__init__" in e for e in errors)
 
-# No tools
-class _NoTools(BaseEnvironment):
-    spec = EnvironmentSpec(lane=EnvironmentLane.CODE, name="no-tools", tools=())
-    def reset(self, **kwargs): return None
+    def test_no_tools(self):
+        class _NoTools(BaseEnvironment):
+            spec = EnvironmentSpec(
+                lane=EnvironmentLane.CODE, name="no-tools", tools=(),
+            )
+            def reset(self, **kwargs):
+                return None
 
-errors = validate_environment(_NoTools)
-assert_true(any("tool" in e.lower() for e in errors), "no tools detected")
+        errors = validate_environment(_NoTools)
+        assert any("tool" in e.lower() for e in errors)
 
-# Tool missing docstring
-class _NoDoc(BaseEnvironment):
-    spec = EnvironmentSpec(lane=EnvironmentLane.CODE, name="no-doc", tools=("bad_tool",))
-    def reset(self, **kwargs): return None
-    def bad_tool(self, x: str) -> str:
-        return x
+    def test_missing_docstring(self):
+        class _NoDoc(BaseEnvironment):
+            spec = EnvironmentSpec(
+                lane=EnvironmentLane.CODE, name="no-doc", tools=("bad_tool",),
+            )
+            def reset(self, **kwargs):
+                return None
+            def bad_tool(self, x: str) -> str:
+                return x
 
-errors = validate_environment(_NoDoc)
-assert_true(any("docstring" in e.lower() for e in errors), "missing docstring detected")
+        errors = validate_environment(_NoDoc)
+        assert any("docstring" in e.lower() for e in errors)
 
-# Tool missing type hint
-class _NoHint(BaseEnvironment):
-    spec = EnvironmentSpec(lane=EnvironmentLane.CODE, name="no-hint", tools=("untyped",))
-    def reset(self, **kwargs): return None
-    def untyped(self, x) -> str:
-        """Do thing. Args: x: thing."""
-        return str(x)
+    def test_missing_type_hint(self):
+        class _NoHint(BaseEnvironment):
+            spec = EnvironmentSpec(
+                lane=EnvironmentLane.CODE, name="no-hint", tools=("untyped",),
+            )
+            def reset(self, **kwargs):
+                return None
+            def untyped(self, x) -> str:
+                """Do thing. Args: x: thing."""
+                return str(x)
 
-errors = validate_environment(_NoHint)
-assert_true(any("type hint" in e.lower() for e in errors), "missing type hint detected")
+        errors = validate_environment(_NoHint)
+        assert any("type hint" in e.lower() for e in errors)
 
-# Spec/method mismatch
-class _Mismatch(BaseEnvironment):
-    spec = EnvironmentSpec(lane=EnvironmentLane.CODE, name="mismatch", tools=("declared_but_missing",))
-    def reset(self, **kwargs): return None
-    def actual_method(self, x: str) -> str:
-        """Do thing. Args: x: thing."""
-        return x
+    def test_spec_method_mismatch(self):
+        class _Mismatch(BaseEnvironment):
+            spec = EnvironmentSpec(
+                lane=EnvironmentLane.CODE, name="mismatch",
+                tools=("declared_but_missing",),
+            )
+            def reset(self, **kwargs):
+                return None
+            def actual_method(self, x: str) -> str:
+                """Do thing. Args: x: thing."""
+                return x
 
-errors = validate_environment(_Mismatch)
-assert_true(any("not found" in e.lower() or "not declared" in e.lower() for e in errors), "mismatch detected")
+        errors = validate_environment(_Mismatch)
+        assert any("not found" in e.lower() or "not declared" in e.lower() for e in errors)
+
 
 # =========================================================================
 # CodingSandboxEnv
 # =========================================================================
 
-print("Testing CodingSandboxEnv...")
-from carl_studio.environments.builtins.code_sandbox import CodingSandboxEnv
-errors = validate_environment(CodingSandboxEnv)
-assert_eq(errors, [], f"CodingSandboxEnv valid: {errors}")
 
-# Spec
-assert_eq(CodingSandboxEnv.spec.lane, EnvironmentLane.CODE, "code lane")
-assert_eq(CodingSandboxEnv.spec.name, "python-sandbox", "name")
-assert_eq(len(CodingSandboxEnv.spec.tools), 4, "4 tools")
+class TestCodingSandboxEnv:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        from carl_studio.environments.builtins.code_sandbox import CodingSandboxEnv
+        self.EnvClass = CodingSandboxEnv
+        self.env = CodingSandboxEnv()
+        self.env.reset(task_description="Test task")
+        yield
+        del self.env
 
-# Reset + execute
-env = CodingSandboxEnv()
-obs = env.reset(task_description="Test task")
-assert_eq(obs, "Test task", "reset returns task")
-assert_eq(env.reward, 0.0, "initial reward 0")
-assert_eq(env.turn_count, 0, "initial turn count 0")
+    def test_validation(self):
+        assert validate_environment(self.EnvClass) == []
 
-# Write + execute
-env.write_file("test.py", "print('hello')")
-assert_eq(env.turn_count, 1, "turn count after write")
+    def test_spec(self):
+        assert self.EnvClass.spec.lane == EnvironmentLane.CODE
+        assert self.EnvClass.spec.name == "python-sandbox"
+        assert len(self.EnvClass.spec.tools) == 4
 
-result = env.execute_code("print('hello')")
-assert_in("hello", result, "execution output")
-assert_eq(env.reward, 1.0, "reward after success")
-assert_eq(env.turn_count, 2, "turn count after execute")
-assert_true(env._execution_succeeded, "execution succeeded flag")
+    def test_reset(self):
+        env = self.EnvClass()
+        obs = env.reset(task_description="Test task")
+        assert obs == "Test task"
+        assert env.reward == 0.0
+        assert env.turn_count == 0
 
-# Failed execution
-result = env.execute_code("raise ValueError('oops')")
-assert_in("Error", result, "error in output")
-assert_eq(env.reward, 0.0, "reward after failure")
+    def test_write_increments_turns(self):
+        self.env.write_file("test.py", "print('hello')")
+        assert self.env.turn_count == 1
 
-# Read file
-env.write_file("data.txt", "content here")
-result = env.read_file("data.txt")
-assert_eq(result, "content here", "read file")
+    def test_execute_success(self):
+        result = self.env.execute_code("print('hello')")
+        assert "hello" in result
+        assert self.env.reward == 1.0
+        assert self.env._execution_succeeded is True
 
-# Read nonexistent
-result = env.read_file("nope.txt")
-assert_in("Error", result, "read nonexistent")
+    def test_execute_failure(self):
+        self.env.execute_code("raise ValueError('oops')")
+        assert self.env.reward == 0.0
 
-# Path escape
-result = env.read_file("../../etc/passwd")
-assert_in("Error", result, "path escape blocked")
+    def test_read_write_file(self):
+        self.env.write_file("data.txt", "content here")
+        result = self.env.read_file("data.txt")
+        assert result == "content here"
 
-# History
-assert_true(len(env.history) > 0, "history recorded")
+    def test_read_nonexistent(self):
+        result = self.env.read_file("nope.txt")
+        assert "Error" in result
 
-# Cleanup
-del env
+    def test_path_escape_blocked(self):
+        result = self.env.read_file("../../etc/passwd")
+        assert "Error" in result
+
+    def test_history_recorded(self):
+        self.env.write_file("t.py", "x = 1")
+        assert len(self.env.history) > 0
+
 
 # =========================================================================
 # SQLSandboxEnv
 # =========================================================================
 
-print("Testing SQLSandboxEnv...")
-from carl_studio.environments.builtins.sql_sandbox import SQLSandboxEnv
 
-# Already registered via @register_environment decorator on import
-errors = validate_environment(SQLSandboxEnv)
-assert_eq(errors, [], f"SQLSandboxEnv valid: {errors}")
+class TestSQLSandboxEnv:
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        from carl_studio.environments.builtins.sql_sandbox import SQLSandboxEnv
+        self.EnvClass = SQLSandboxEnv
+        yield
 
-assert_eq(SQLSandboxEnv.spec.lane, EnvironmentLane.QUERY, "query lane")
-assert_eq(SQLSandboxEnv.spec.name, "sqlite-sandbox", "name")
+    def test_validation(self):
+        assert validate_environment(self.EnvClass) == []
 
-# Reset with schema
-env = SQLSandboxEnv()
-obs = env.reset(
-    task_description="Count users",
-    schema_ddl="CREATE TABLE users (id INTEGER, name TEXT); INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');",
-    expected_result="3",
-)
-assert_eq(obs, "Count users", "sql reset obs")
+    def test_spec(self):
+        assert self.EnvClass.spec.lane == EnvironmentLane.QUERY
+        assert self.EnvClass.spec.name == "sqlite-sandbox"
 
-# Describe schema
-schema = env.describe_schema()
-assert_in("users", schema, "schema has users table")
-assert_in("3 rows", schema, "schema shows row count")
+    def test_reset_returns_task(self):
+        env = self.EnvClass()
+        obs = env.reset(
+            task_description="Count users",
+            schema_ddl=(
+                "CREATE TABLE users (id INTEGER, name TEXT); "
+                "INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');"
+            ),
+            expected_result="3",
+        )
+        assert obs == "Count users"
 
-# Run query
-result = env.run_query("SELECT COUNT(*) as cnt FROM users")
-assert_in("3", result, "count query result")
+    def test_list_tables(self):
+        env = self.EnvClass()
+        env.reset(
+            task_description="Count users",
+            schema_ddl=(
+                "CREATE TABLE users (id INTEGER, name TEXT); "
+                "INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');"
+            ),
+        )
+        tables = env.list_tables()
+        assert "users" in tables
+        assert "3 rows" in tables
 
-# Reject non-SELECT
-result = env.run_query("DROP TABLE users")
-assert_in("Error", result, "non-SELECT blocked")
+    def test_describe_table(self):
+        env = self.EnvClass()
+        env.reset(
+            task_description="Inspect",
+            schema_ddl="CREATE TABLE t (x INTEGER, y TEXT);",
+        )
+        desc = env.describe_table("t")
+        assert "t" in desc
 
-# Submit correct answer
-env.submit_answer("3")
-assert_eq(env.reward, 1.0, "correct answer reward")
-assert_true(env.done, "done after submit")
+    def test_execute_query(self):
+        env = self.EnvClass()
+        env.reset(
+            task_description="Count users",
+            schema_ddl=(
+                "CREATE TABLE users (id INTEGER, name TEXT); "
+                "INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');"
+            ),
+            expected_result="3",
+        )
+        result = env.execute_query("SELECT COUNT(*) as cnt FROM users")
+        assert "3" in result
 
-# Submit wrong answer
-env2 = SQLSandboxEnv()
-env2.reset(task_description="Count", schema_ddl="CREATE TABLE t (x INT);", expected_result="0")
-env2.submit_answer("42")
-assert_eq(env2.reward, 0.0, "wrong answer reward")
+    def test_reject_non_select(self):
+        env = self.EnvClass()
+        env.reset(
+            task_description="Test",
+            schema_ddl="CREATE TABLE t (x INT);",
+        )
+        result = env.execute_query("DROP TABLE t")
+        assert "Error" in result
 
-# Partial match
-env3 = SQLSandboxEnv()
-env3.reset(task_description="Find name", schema_ddl="CREATE TABLE t (x INT);", expected_result="Alice and Bob")
-env3.submit_answer("The answer is Alice")
-assert_eq(env3.reward, 0.5, "partial match reward")
+    def test_correct_score(self):
+        env = self.EnvClass()
+        env.reset(
+            task_description="Count users",
+            schema_ddl=(
+                "CREATE TABLE users (id INTEGER, name TEXT); "
+                "INSERT INTO users VALUES (1, 'Alice'), (2, 'Bob'), (3, 'Charlie');"
+            ),
+            expected_result="3",
+        )
+        env.execute_query("SELECT COUNT(*) as cnt FROM users")
+        assert env.reward == 1.0
 
-# History
-assert_true(env.turn_count > 0, "sql turn count")
+    def test_wrong_score(self):
+        env = self.EnvClass()
+        env.reset(
+            task_description="Count",
+            schema_ddl="CREATE TABLE t (x INT);",
+            expected_result="99",
+        )
+        env.execute_query("SELECT COUNT(*) FROM t")
+        assert env.reward == 0.0
+
+    def test_partial_match_score(self):
+        env = self.EnvClass()
+        env.reset(
+            task_description="Find name",
+            schema_ddl="CREATE TABLE t (name TEXT); INSERT INTO t VALUES ('Alice'), ('Bob');",
+            expected_result="Alice and Bob",
+        )
+        env.execute_query("SELECT name FROM t WHERE name = 'Alice'")
+        assert env.reward == 0.5
+
+    def test_turn_count(self):
+        env = self.EnvClass()
+        env.reset(
+            task_description="Test",
+            schema_ddl="CREATE TABLE t (x INT);",
+        )
+        env.list_tables()
+        env.describe_table("t")
+        assert env.turn_count == 2
+
 
 # =========================================================================
 # Cross-lane registry
 # =========================================================================
 
-print("Testing cross-lane registry...")
-all_envs = list_environments()
-assert_eq(len(all_envs), 2, "2 total environments")
 
-code = list_environments(lane=EnvironmentLane.CODE)
-query = list_environments(lane=EnvironmentLane.QUERY)
-assert_eq(len(code), 1, "1 code env")
-assert_eq(len(query), 1, "1 query env")
+class TestCrossLaneRegistry:
+    def test_both_envs_registered(self):
+        from carl_studio.environments.builtins.code_sandbox import CodingSandboxEnv
+        from carl_studio.environments.builtins.sql_sandbox import SQLSandboxEnv
 
-clear_registry()
+        register_environment(CodingSandboxEnv)
+        register_environment(SQLSandboxEnv)
+        all_envs = list_environments()
+        assert len(all_envs) == 2
 
-# =========================================================================
-# Summary
-# =========================================================================
-
-print(f"\n{'='*40}")
-print(f"  {_pass} passed, {_fail} failed")
-print(f"{'='*40}")
-if _fail > 0:
-    sys.exit(1)
+        code = list_environments(lane=EnvironmentLane.CODE)
+        query = list_environments(lane=EnvironmentLane.QUERY)
+        assert len(code) == 1
+        assert len(query) == 1
