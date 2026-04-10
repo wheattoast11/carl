@@ -57,6 +57,34 @@ Most users should start with:
 pip install 'carl-studio[training,hf]'
 ```
 
+## Auth
+
+CARL Studio does not require a `.env`, and it does not auto-load one.
+
+- Hugging Face workflows work with either `HF_TOKEN` or a prior `hf auth login` / `huggingface-cli login`
+- Claude-powered features use `ANTHROPIC_API_KEY` or `--api-key`
+- RunPod uses `RUNPOD_API_KEY`
+- public Trackio observe works without credentials
+
+If you want a template, copy `.env.example` and load it into your shell before running `carl`:
+
+```bash
+cp .env.example .env
+set -a
+source .env
+set +a
+```
+
+Quick setup:
+
+```bash
+hf auth login
+export ANTHROPIC_API_KEY=sk-ant-xxx   # only for --diagnose / chat
+carl config show
+```
+
+Full auth details: [`docs/auth.md`](docs/auth.md)
+
 ## Use
 
 **See inside a Trackio run** (no GPU required, base install):
@@ -120,6 +148,16 @@ carl eval --adapter your-username/your-model
 
 Managed tiers build on top of these open workflows; extras control local capabilities, not research access.
 
+## Credential Matrix
+
+| Workflow | Auth |
+|---|---|
+| Local file observe | none |
+| Public Trackio observe | none |
+| Claude diagnosis / chat | `ANTHROPIC_API_KEY` or `--api-key` |
+| Hub jobs / push / gated model access | `HF_TOKEN` or prior HF login |
+| RunPod backend | `RUNPOD_API_KEY` |
+
 ---
 
 ## Results
@@ -150,6 +188,8 @@ The math is published and independently reproducible:
 ## Reference
 
 Architecture, API, CLI commands, environments, compute backends → [docs/reference.md](docs/reference.md)
+
+Credential setup and provider auth → [docs/auth.md](docs/auth.md)
 
 ---
 

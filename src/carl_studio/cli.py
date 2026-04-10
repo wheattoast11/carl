@@ -2644,7 +2644,8 @@ def config_init(
     pairs = [(k, v) for k, v in display.items() if k not in ("hf_token", "anthropic_api_key")]
     c.config_block(pairs, title="Your Settings")
     c.blank()
-    c.info("Credentials are auto-detected from environment and HF hub.")
+    c.info("Credentials are auto-detected from exported environment variables and HF hub auth.")
+    c.info(".env files are not auto-loaded; source them before running `carl` if you use one.")
     c.info("Run 'carl config show' to see your full configuration.")
     c.blank()
 

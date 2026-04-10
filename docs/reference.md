@@ -2,6 +2,8 @@
 
 Detailed documentation for carl-studio. For the quick overview, see [README.md](../README.md).
 
+Credential and provider setup lives in [docs/auth.md](auth.md).
+
 ## Architecture
 
 ```
@@ -80,6 +82,14 @@ pip install 'carl-studio[observe]'        observe --diagnose
 pip install 'carl-studio[all]'            Everything
 ```
 
+**Auth notes:**
+```
+HF Hub / HF Jobs / push   HF_TOKEN or prior `hf auth login`
+Anthropic features        ANTHROPIC_API_KEY or --api-key
+RunPod backend            RUNPOD_API_KEY
+.env files                supported if you load them yourself; not auto-loaded
+```
+
 **Optional workflows:**
 ```
 carl observe --live                       Real-time TUI dashboard
@@ -154,6 +164,7 @@ carl eval --adapter username/my-model --phase phase2prime
 carl config init            # Interactive setup
 carl config preset research # Apply research preset (verbose, all metrics)
 carl config set tier pro    # Set tier
+carl config show            # Verify detected credentials (masked by default)
 ```
 
 ## IP Boundaries
