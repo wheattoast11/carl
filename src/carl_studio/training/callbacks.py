@@ -9,7 +9,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from transformers import TrainerCallback
+try:
+    from transformers import TrainerCallback
+except Exception:
+
+    class TrainerCallback:  # type: ignore[no-redef]
+        """Fallback base when transformers is unavailable."""
+
+        pass
+
 
 from carl_studio.primitives.constants import KAPPA, SIGMA
 
@@ -122,6 +130,4 @@ class CoherenceMonitorCallback(TrainerCallback):
                 + 0.2 * m.get("discontinuity", 0.0)
                 for m in batch_metrics
             ]
-            logs["coherence/cryst_to_melt_ratio"] = (
-                sum(composite_vals) / len(composite_vals)
-            )
+            logs["coherence/cryst_to_melt_ratio"] = sum(composite_vals) / len(composite_vals)

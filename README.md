@@ -43,22 +43,42 @@ This is alignment you can measure, not just evaluate.
 ## Install
 
 ```bash
-pip install carl-studio
+pip install carl-studio                     # core CLI + one-shot observe
+pip install 'carl-studio[training]'        # local train/eval
+pip install 'carl-studio[hf]'              # status/logs/stop/push/HF Jobs
+pip install 'carl-studio[tui]'             # observe --live
+pip install 'carl-studio[observe]'         # observe --diagnose
+pip install 'carl-studio[all]'             # everything
+```
+
+Most users should start with:
+
+```bash
+pip install 'carl-studio[training,hf]'
 ```
 
 ## Use
 
-**See inside any training run** (no GPU, no config):
+**See inside a Trackio run** (no GPU required, base install):
 ```bash
-carl observe --url https://your-trackio.hf.space
+carl observe --url https://your-trackio-space.hf.space/ --run your-run
 ```
 
-**Train with coherence rewards:**
+If the dashboard contains multiple projects, add `--project your-project`.
+
+**Train with coherence rewards** (`carl-studio[training]`):
 ```bash
-carl train --model Qwen/Qwen3.5-9B --method grpo --compute a100
+carl project init
+carl train --config carl.yaml
 ```
 
-**Gate a checkpoint:**
+Or run directly from the CLI:
+
+```bash
+carl train --model Tesslate/OmniCoder-9B --method grpo --dataset your-org/your-dataset --output-repo your-org/your-model --compute a100-large
+```
+
+**Gate a checkpoint** (`carl-studio[training]`):
 ```bash
 carl eval --adapter your-username/your-model
 ```
@@ -88,22 +108,17 @@ carl eval --adapter your-username/your-model
 
 ---
 
-## What's Free
+## CLI Install Matrix
 
-Everything a researcher needs to train, observe, and evaluate.
+| Workflow | Command | Install |
+|---|---|---|
+| One-shot observe | `carl observe --url ... --run ...` | `pip install carl-studio` |
+| Live observe | `carl observe --live ...` | `pip install 'carl-studio[tui]'` |
+| Claude diagnosis | `carl observe --diagnose ...` | `pip install 'carl-studio[observe]'` |
+| Local train/eval | `carl train`, `carl eval` | `pip install 'carl-studio[training]'` |
+| HF job management / publish | `carl status`, `carl logs`, `carl stop`, `carl push` | `pip install 'carl-studio[hf]'` |
 
-| | Free | Pro | Enterprise |
-|---|:---:|:---:|:---:|
-| `carl observe` | | | |
-| `carl train` (SFT, GRPO) | | | |
-| `carl eval` (all phases) | | | |
-| BYOK compute | | | |
-| Real-time TUI | | | |
-| Claude-powered diagnosis | | | |
-| Autonomous pipeline (`--send-it`) | | | |
-| MCP server (agent integration) | | | |
-
-The gate is on **autonomy**, not capability. Train for free. Let CARL drive autonomously with Pro.
+Managed tiers build on top of these open workflows; extras control local capabilities, not research access.
 
 ---
 

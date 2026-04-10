@@ -42,10 +42,12 @@ class PhiChart(Static):
         self._last_defect_map: str = ""
         self._last_trace_tokens: int = 0
 
-    def push(self, phi: float, transition: bool = False, frame: "ObserveFrame | None" = None) -> None:
+    def push(
+        self, phi: float, transition: bool = False, frame: "ObserveFrame | None" = None
+    ) -> None:
         self._values.append(phi)
         if len(self._values) > self._max:
-            self._values = self._values[-self._max:]
+            self._values = self._values[-self._max :]
 
         # Update trace-level fields if available
         if frame is not None and frame.phi_sparkline:
@@ -181,6 +183,7 @@ class ObserveApp(App):
         source_type: str = "file",
         source_path: str = "",
         source_space: str = "wheattoast11-trackio",
+        source_project: str = "",
         source_run: str = "",
         poll_interval: float = 2.0,
         **kwargs,
@@ -189,12 +192,13 @@ class ObserveApp(App):
         self._source_type = source_type
         self._source_path = source_path
         self._source_space = source_space
+        self._source_project = source_project
         self._source_run = source_run
         self._poll_interval = poll_interval
 
         # Build data source
         if source_type == "trackio":
-            self._source = TrackioSource(space=source_space, run=source_run)
+            self._source = TrackioSource(space=source_space, project=source_project, run=source_run)
         else:
             self._source = FileSource(source_path)
 
@@ -215,10 +219,15 @@ class ObserveApp(App):
         self.set_interval(self._poll_interval, self._poll_source)
 
     def _poll_source(self) -> None:
-        frames = self._source.poll()
         phi_chart = self.query_one("#phi-chart", PhiChart)
         metrics = self.query_one("#metrics", MetricsTable)
         log = self.query_one("#log", RichLog)
+
+        try:
+            frames = self._source.poll()
+        except Exception as exc:
+            log.write(f"[bold red]Trackio error:[/] {exc}")
+            return
 
         for frame in frames:
             phi_chart.push(frame.phi, frame.phase_transition, frame=frame)
@@ -238,6 +247,7 @@ def run_app(
     source: str = "file",
     path: str = "",
     space: str = "wheattoast11-trackio",
+    project: str = "",
     run: str = "",
     poll: float = 2.0,
 ) -> None:
@@ -246,6 +256,7 @@ def run_app(
         source_type=source,
         source_path=path,
         source_space=space,
+        source_project=project,
         source_run=run,
         poll_interval=poll,
     )

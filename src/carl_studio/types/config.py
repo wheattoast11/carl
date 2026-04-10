@@ -30,6 +30,18 @@ class ComputeTarget(str, Enum):
     LOCAL = "local"
 
 
+COMPUTE_TARGET_ALIASES: dict[str, str] = {
+    "a10g": ComputeTarget.A10G_LARGE.value,
+    "a100": ComputeTarget.A100_LARGE.value,
+}
+
+
+def normalize_compute_target(value: str) -> str:
+    """Normalize common compute target aliases to canonical enum values."""
+    normalized = value.strip().lower()
+    return COMPUTE_TARGET_ALIASES.get(normalized, normalized)
+
+
 class TrainingMethod(str, Enum):
     """Training algorithm."""
 
@@ -63,7 +75,15 @@ class LoraConfig(BaseModel):
     alpha: int = Field(default=128, ge=1, le=1024, description="LoRA alpha")
     dropout: float = Field(default=0.05, ge=0.0, le=1.0, description="LoRA dropout")
     target_modules: List[str] = Field(
-        default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        default_factory=lambda: [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ],
         description="Which modules to apply LoRA to",
     )
     bias: str = Field(default="none", description="Bias handling: none, all, lora_only")
@@ -81,7 +101,9 @@ class QuantizationConfig(BaseModel):
     """Quantization settings for model loading."""
 
     load_in_8bit: bool = Field(default=True, description="Load model in 8-bit quantization")
-    load_in_4bit: bool = Field(default=False, description="Load model in 4-bit quantization (QLoRA)")
+    load_in_4bit: bool = Field(
+        default=False, description="Load model in 4-bit quantization (QLoRA)"
+    )
     bnb_4bit_compute_dtype: str = Field(default="bfloat16", description="Compute dtype for 4-bit")
     bnb_4bit_quant_type: str = Field(default="nf4", description="4-bit quant type: nf4 or fp4")
 
@@ -98,7 +120,9 @@ class CascadeStage(BaseModel):
     name: str = Field(description="Stage identifier (e.g. 'format_only', 'tool_selection')")
     steps: int = Field(ge=1, description="Number of training steps in this stage")
     active_rewards: List[str] = Field(description="Reward function names active in this stage")
-    learning_rate: Optional[float] = Field(default=None, ge=0.0, description="Override LR for this stage")
+    learning_rate: Optional[float] = Field(
+        default=None, ge=0.0, description="Override LR for this stage"
+    )
 
 
 class ObservationConfig(BaseModel):
@@ -126,7 +150,9 @@ class TrainingConfig(BaseModel):
     # Identity
     run_name: str = Field(description="Human-readable run name")
     base_model: str = Field(description="HuggingFace model ID (e.g. 'Tesslate/OmniCoder-9B')")
-    output_repo: str = Field(description="HuggingFace repo to push results (e.g. 'wheattoast11/OmniCoder-9B-Zero-Phase1')")
+    output_repo: str = Field(
+        description="HuggingFace repo to push results (e.g. 'wheattoast11/OmniCoder-9B-Zero-Phase1')"
+    )
 
     # Method
     method: TrainingMethod = Field(description="Training algorithm")
@@ -153,18 +179,44 @@ class TrainingConfig(BaseModel):
     seed: int = Field(default=42)
 
     # GRPO-specific
-    num_generations: int = Field(default=8, ge=1, le=64, description="Rollouts per prompt (GRPO). 8 recommended for reward diversity.")
-    max_completion_length: int = Field(default=512, ge=1, le=131072, description="Max tokens for GRPO completions. Must fit actual output (128+ for coords, 512 for tool-calls).")
+    num_generations: int = Field(
+        default=8,
+        ge=1,
+        le=64,
+        description="Rollouts per prompt (GRPO). 8 recommended for reward diversity.",
+    )
+    max_completion_length: int = Field(
+        default=512,
+        ge=1,
+        le=131072,
+        description="Max tokens for GRPO completions. Must fit actual output (128+ for coords, 512 for tool-calls).",
+    )
     beta: float = Field(default=0.0, ge=0.0, description="KL penalty coefficient")
     cascade_stages: Optional[List[CascadeStage]] = Field(
         default=None, description="GRPO cascade stage definitions"
     )
-    disable_thinking: bool = Field(default=True, description="Disable Qwen3.5 thinking mode (generates <think>...</think> prefix). Required for coordinate/short-output tasks.")
+    disable_thinking: bool = Field(
+        default=True,
+        description="Disable Qwen3.5 thinking mode (generates <think>...</think> prefix). Required for coordinate/short-output tasks.",
+    )
 
     # VLM (Vision Language Model)
-    vlm_mode: bool = Field(default=False, description="Use AutoModelForImageTextToText instead of AutoModelForCausalLM. Required for image inputs.")
-    grpo_temperature: float = Field(default=2.0, ge=0.1, le=5.0, description="Generation temperature for GRPO. 2.0 needed to break mode collapse at high Phi.")
-    grpo_top_k: int = Field(default=50, ge=0, le=200, description="Top-k for GRPO generation. Safety net against garbage at high temperature.")
+    vlm_mode: bool = Field(
+        default=False,
+        description="Use AutoModelForImageTextToText instead of AutoModelForCausalLM. Required for image inputs.",
+    )
+    grpo_temperature: float = Field(
+        default=2.0,
+        ge=0.1,
+        le=5.0,
+        description="Generation temperature for GRPO. 2.0 needed to break mode collapse at high Phi.",
+    )
+    grpo_top_k: int = Field(
+        default=50,
+        ge=0,
+        le=200,
+        description="Top-k for GRPO generation. Safety net against garbage at high temperature.",
+    )
 
     # Adapter
     lora: LoraConfig = Field(default_factory=LoraConfig)
@@ -194,7 +246,14 @@ class TrainingConfig(BaseModel):
     @field_validator("lr_scheduler_type")
     @classmethod
     def validate_scheduler(cls, v: str) -> str:
-        allowed = {"linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"}
+        allowed = {
+            "linear",
+            "cosine",
+            "cosine_with_restarts",
+            "polynomial",
+            "constant",
+            "constant_with_warmup",
+        }
         if v not in allowed:
             raise ValueError(f"lr_scheduler_type must be one of {allowed}, got {v!r}")
         return v

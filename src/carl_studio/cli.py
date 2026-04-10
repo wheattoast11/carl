@@ -6,10 +6,13 @@ Train AI models at summer camp. carl.camp
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
+from typing import Any
 
 import typer
+from pydantic import ValidationError
 
 from carl_studio import __version__
 from carl_studio.console import CampConsole, get_console
@@ -31,6 +34,7 @@ def _camp_header() -> None:
 # Pipeline event renderer (used by --send-it)
 # ---------------------------------------------------------------------------
 
+
 def _render_pipeline_event(c: CampConsole, event) -> None:
     """Render a SendItPipeline event to the console."""
     stage = event.stage.value
@@ -44,6 +48,112 @@ def _render_pipeline_event(c: CampConsole, event) -> None:
         c.info(f"[{stage}] {event.message}")
 
 
+def _slugify_identifier(value: str) -> str:
+    """Convert a human/model identifier into a safe run slug."""
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "carl-run"
+
+
+def _default_run_name(raw: dict[str, Any]) -> str:
+    """Derive a run name for CLI-first training flows."""
+    if raw.get("run_name"):
+        return str(raw["run_name"])
+    if raw.get("output_repo"):
+        return _slugify_identifier(str(raw["output_repo"]).split("/")[-1])
+
+    model_name = str(raw.get("base_model", "model")).split("/")[-1]
+    method = str(raw.get("method", "train"))
+    return _slugify_identifier(f"{model_name}-{method}")
+
+
+def _normalize_training_config(raw: dict[str, Any]) -> dict[str, Any]:
+    """Apply CLI conveniences before constructing TrainingConfig."""
+    from carl_studio.types.config import normalize_compute_target
+
+    normalized = dict(raw)
+    compute = normalized.get("compute_target")
+    if isinstance(compute, str):
+        normalized["compute_target"] = normalize_compute_target(compute)
+
+    if not normalized.get("run_name") and (
+        normalized.get("base_model") or normalized.get("output_repo")
+    ):
+        normalized["run_name"] = _default_run_name(normalized)
+
+    return normalized
+
+
+def _print_observe_usage(c: CampConsole) -> None:
+    """Render concise observe usage examples."""
+    c.blank()
+    c.print("  [camp.muted]Usage:[/]")
+    c.print("    carl observe --url https://wheattoast11-trackio.hf.space/ --run your-run")
+    c.print(
+        "    carl observe --url https://huggingface.co/spaces/owner/trackio --project your-project --run your-run"
+    )
+    c.print("    carl observe --file logs/train.jsonl")
+    c.blank()
+
+
+def _render_training_config_error(
+    c: CampConsole, raw: dict[str, Any], exc: ValidationError
+) -> None:
+    """Convert Pydantic validation output into actionable CLI guidance."""
+    from carl_studio.types.config import ComputeTarget
+
+    missing_fields: list[str] = []
+    invalid_fields: list[tuple[str, str]] = []
+    for err in exc.errors():
+        field = ".".join(str(part) for part in err.get("loc", ())) or "config"
+        if err.get("type") == "missing":
+            missing_fields.append(field)
+        else:
+            invalid_fields.append((field, err.get("msg", "Invalid value")))
+
+    c.error("Training config is incomplete or invalid.")
+    if missing_fields:
+        c.info(f"Missing required fields: {', '.join(sorted(set(missing_fields)))}")
+    for field, message in invalid_fields:
+        c.info(f"{field}: {message}")
+
+    valid_compute = ", ".join(ct.value for ct in ComputeTarget)
+    c.blank()
+    c.info(f"Valid compute targets: {valid_compute}")
+    c.info("Aliases accepted on the CLI: a100 -> a100-large, a10g -> a10g-large")
+    c.blank()
+
+    example_model = str(raw.get("base_model", "Tesslate/OmniCoder-9B"))
+    example_method = str(raw.get("method", "grpo"))
+    c.print("  [camp.primary]Quick start[/]")
+    c.print(
+        "    carl train "
+        f"--model {example_model} --method {example_method} "
+        "--dataset your-org/your-dataset --output-repo your-org/your-model "
+        "--compute a100-large"
+    )
+    c.info("Tip: run 'carl project init' to create carl.yaml interactively.")
+
+
+def _render_extra_install_hint(
+    c: CampConsole,
+    extra: str,
+    context: str,
+    exc: Exception | None = None,
+    quoted: bool = False,
+) -> None:
+    """Render a consistent optional-dependency hint."""
+    from rich.markup import escape
+
+    c.error(context)
+    package = f"carl-studio[{extra}]"
+    c.info(f"Install: pip install {escape(package)}")
+    if quoted:
+        shell_package = f"'carl-studio[{extra}]'"
+        c.info(f"Install: pip install {escape(shell_package)}")
+    if exc is not None:
+        c.info(str(exc))
+
+
 # ---------------------------------------------------------------------------
 # carl eval
 # ---------------------------------------------------------------------------
@@ -51,12 +161,14 @@ def _render_pipeline_event(c: CampConsole, event) -> None:
 def eval_cmd(
     adapter: str = typer.Option(
         "wheattoast11/OmniCoder-9B-Zero-Phase2Prime",
-        "--adapter", "-a",
+        "--adapter",
+        "-a",
         help="HF adapter/checkpoint ID to evaluate",
     ),
     base_model: str = typer.Option(
         "Tesslate/OmniCoder-9B",
-        "--base-model", "-b",
+        "--base-model",
+        "-b",
         help="Base model ID (for Phase 2' adapter merging)",
     ),
     sft_adapter: str | None = typer.Option(
@@ -66,7 +178,8 @@ def eval_cmd(
     ),
     dataset: str = typer.Option(
         "wheattoast11/zero-rl-tool-calling-data",
-        "--dataset", "-d",
+        "--dataset",
+        "-d",
         help="HF dataset ID or local path",
     ),
     data_files: str | None = typer.Option(
@@ -76,17 +189,20 @@ def eval_cmd(
     ),
     phase: str = typer.Option(
         "auto",
-        "--phase", "-p",
+        "--phase",
+        "-p",
         help="Eval phase: 1, 2, 2prime, auto",
     ),
     threshold: float = typer.Option(
         0.30,
-        "--threshold", "-t",
+        "--threshold",
+        "-t",
         help="Pass threshold for primary metric",
     ),
     max_samples: int | None = typer.Option(
         None,
-        "--max-samples", "-n",
+        "--max-samples",
+        "-n",
         help="Cap number of eval samples",
     ),
     max_turns: int = typer.Option(
@@ -134,7 +250,11 @@ def eval_cmd(
         c.info(f"Monitoring eval job: {job_id}")
         from carl_studio.eval.runner import poll_eval_results
 
-        report = poll_eval_results(job_id, poll_interval=15.0)
+        try:
+            report = poll_eval_results(job_id, poll_interval=15.0)
+        except ImportError as exc:
+            _render_extra_install_hint(c, "hf", "HF Jobs support is not installed.", exc)
+            raise typer.Exit(1)
         if report is None:
             c.error("Eval job failed or timed out")
             raise typer.Exit(1)
@@ -161,17 +281,23 @@ def eval_cmd(
         from carl_studio.eval.runner import submit_eval_job
 
         c.info(f"Submitting eval job on {hardware}...")
-        c.config_block([
-            ("Adapter", adapter),
-            ("Base model", base_model),
-            ("Phase", phase),
-            ("Hardware", hardware),
-            ("Max samples", str(max_samples or "all")),
-        ], title="Eval Config")
+        c.config_block(
+            [
+                ("Adapter", adapter),
+                ("Base model", base_model),
+                ("Phase", phase),
+                ("Hardware", hardware),
+                ("Max samples", str(max_samples or "all")),
+            ],
+            title="Eval Config",
+        )
         c.blank()
 
         try:
             submitted_job_id = submit_eval_job(eval_config, hardware=hardware)
+        except ImportError as exc:
+            _render_extra_install_hint(c, "hf", "HF Jobs support is not installed.", exc)
+            raise typer.Exit(1)
         except Exception as e:
             c.error(f"Submission failed: {e}")
             raise typer.Exit(1)
@@ -182,20 +308,26 @@ def eval_cmd(
         raise typer.Exit(0)
 
     # -- Local eval --
-    c.config_block([
-        ("Adapter", adapter),
-        ("Base model", base_model),
-        ("Phase", eval_config.phase),
-        ("Dataset", dataset),
-        ("Threshold", f"{threshold:.0%}"),
-        ("Max samples", str(max_samples or "all")),
-    ], title="Eval Config")
+    c.config_block(
+        [
+            ("Adapter", adapter),
+            ("Base model", base_model),
+            ("Phase", eval_config.phase),
+            ("Dataset", dataset),
+            ("Threshold", f"{threshold:.0%}"),
+            ("Max samples", str(max_samples or "all")),
+        ],
+        title="Eval Config",
+    )
     c.blank()
     c.info("Running eval (this may take a while)...")
 
     try:
         runner = EvalRunner(eval_config)
         report = runner.run()
+    except ImportError as exc:
+        _render_extra_install_hint(c, "training", "Eval dependencies are not installed.", exc)
+        raise typer.Exit(1)
     except Exception as e:
         c.error(f"Eval failed: {e}")
         raise typer.Exit(1)
@@ -222,6 +354,7 @@ def _render_eval_report(c: "CampConsole", report: "EvalReport", json_output: boo
         if report.coherence:
             output["coherence"] = report.coherence
         from rich.syntax import Syntax
+
         c.print(Syntax(json_mod.dumps(output, indent=2), "json", theme="monokai"))
         return
 
@@ -233,7 +366,13 @@ def _render_eval_report(c: "CampConsole", report: "EvalReport", json_output: boo
     table = c.make_table("Metric", "Value", title="Metrics")
     for k, v in report.metrics.items():
         if isinstance(v, float):
-            if k.endswith("_rate") or k == "task_completion" or k == "tool_format_compliance" or k == "failure_rate":
+            if (
+                k.endswith("_rate")
+                or k == "task_completion"
+                or k == "task_completion_rate"
+                or k == "tool_format_compliance"
+                or k == "failure_rate"
+            ):
                 display = f"{v:.2%}"
             else:
                 display = f"{v:.2f}"
@@ -267,15 +406,36 @@ def _render_eval_report(c: "CampConsole", report: "EvalReport", json_output: boo
 @app.command()
 def train(
     config: str = typer.Option("carl.yaml", "--config", "-c", help="Path to carl.yaml config"),
+    name: str | None = typer.Option(
+        None, "--name", help="Run name (defaults from model/output repo)"
+    ),
     model: str | None = typer.Option(None, "--model", "-m", help="Model ID (overrides config)"),
-    method: str | None = typer.Option(None, "--method", help="Training method: sft, grpo, dpo, kto, orpo"),
-    compute: str | None = typer.Option(None, "--compute", help="Compute target: local, l4x1, a10g-large, ..."),
-    hardware: str | None = typer.Option(None, "--hardware", help="Hardware flavor (alias for --compute)"),
+    dataset: str | None = typer.Option(
+        None, "--dataset", "-d", help="Dataset repo ID or local path"
+    ),
+    output_repo: str | None = typer.Option(
+        None, "--output-repo", "-o", help="HF repo to push checkpoints to"
+    ),
+    method: str | None = typer.Option(
+        None, "--method", help="Training method: sft, grpo, dpo, kto, orpo"
+    ),
+    compute: str | None = typer.Option(
+        None, "--compute", help="Compute target: local, l4x1, a10g-large, a100-large, ..."
+    ),
+    hardware: str | None = typer.Option(
+        None, "--hardware", help="Hardware flavor (alias for --compute)"
+    ),
     max_steps: int | None = typer.Option(None, "--max-steps", help="Maximum training steps"),
     vlm: bool = typer.Option(False, "--vlm", help="Enable VLM mode (Phase 2 vision-language)"),
-    gate: bool = typer.Option(False, "--gate", help="Auto phase-transition gating (eval gate between stages)"),
-    send_it: bool = typer.Option(False, "--send-it", help="Full pipeline: SFT -> gate -> GRPO -> eval -> push"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Show what --send-it would do without executing"),
+    gate: bool = typer.Option(
+        False, "--gate", help="Auto phase-transition gating (eval gate between stages)"
+    ),
+    send_it: bool = typer.Option(
+        False, "--send-it", help="Full pipeline: SFT -> gate -> GRPO -> eval -> push"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what --send-it would do without executing"
+    ),
 ) -> None:
     """Start a CARL training run. Use --send-it for full autonomous pipeline."""
     import yaml
@@ -290,8 +450,14 @@ def train(
         raw = {}
 
     # CLI overrides
+    if name:
+        raw["run_name"] = name
     if model:
         raw["base_model"] = model
+    if dataset:
+        raw["dataset_repo"] = dataset
+    if output_repo:
+        raw["output_repo"] = output_repo
     if method:
         raw["method"] = method
     if compute:
@@ -309,8 +475,13 @@ def train(
         get_console().error("--model or base_model in config required")
         raise typer.Exit(1)
 
-    training_config = TrainingConfig(**raw)
     c = get_console()
+    raw = _normalize_training_config(raw)
+    try:
+        training_config = TrainingConfig(**raw)
+    except ValidationError as exc:
+        _render_training_config_error(c, raw, exc)
+        raise typer.Exit(1)
 
     # --send-it / --dry-run: full pipeline mode
     if send_it or dry_run:
@@ -339,6 +510,7 @@ def train(
         import anyio
 
         from rich.progress import Progress, SpinnerColumn, TextColumn
+
         with Progress(SpinnerColumn(), TextColumn("{task.description}"), console=c.raw) as progress:
             task = progress.add_task("Pipeline running...", total=None)
             run = anyio.run(pipeline.run)
@@ -372,11 +544,19 @@ def train(
     c.constants()
     c.blank()
 
-    from carl_studio.training.trainer import CARLTrainer
-    import anyio
+    try:
+        from carl_studio.training.trainer import CARLTrainer
+        import anyio
+    except ImportError as exc:
+        _render_extra_install_hint(c, "training", "Training dependencies are not installed.", exc)
+        raise typer.Exit(1)
 
     trainer = CARLTrainer(training_config)
-    run = anyio.run(trainer.train)
+    try:
+        run = anyio.run(trainer.train)
+    except ImportError as exc:
+        _render_extra_install_hint(c, "training", "Training dependencies are not installed.", exc)
+        raise typer.Exit(1)
 
     if run.hub_job_id:
         c.ok(f"Job submitted: {run.hub_job_id}")
@@ -396,8 +576,8 @@ def status(
     c = get_console()
     try:
         from huggingface_hub import HfApi
-    except ImportError:
-        c.error("install carl-studio[hf] for job management")
+    except ImportError as exc:
+        _render_extra_install_hint(c, "hf", "HF Jobs support is not installed.", exc)
         raise typer.Exit(1)
 
     api = HfApi()
@@ -428,8 +608,8 @@ def logs(
     c = get_console()
     try:
         from huggingface_hub import HfApi
-    except ImportError:
-        c.error("install carl-studio[hf] for job management")
+    except ImportError as exc:
+        _render_extra_install_hint(c, "hf", "HF Jobs support is not installed.", exc)
         raise typer.Exit(1)
 
     api = HfApi()
@@ -444,6 +624,7 @@ def logs(
         raise typer.Exit(0)
 
     from rich.syntax import Syntax
+
     log_text = "\n".join(str(e)[:200] for e in entries[-tail:])
     c.print(Syntax(log_text, "log", theme="monokai", line_numbers=False))
 
@@ -459,8 +640,8 @@ def stop(
     c = get_console()
     try:
         from huggingface_hub import HfApi
-    except ImportError:
-        c.error("install carl-studio[hf] for job management")
+    except ImportError as exc:
+        _render_extra_install_hint(c, "hf", "HF Jobs support is not installed.", exc)
         raise typer.Exit(1)
 
     api = HfApi()
@@ -638,33 +819,28 @@ def _load_frames(
     url: str | None,
     file: str | None,
     source: str,
-) -> list:
+    space: str,
+    project: str,
+    run_name: str,
+) -> tuple[list, str]:
     """Load ObserveFrames from the specified source. Returns (frames, source_desc)."""
-    from carl_studio.observe.data_source import FileSource, TrackioSource
+    from carl_studio.observe.data_source import FileSource, TrackioSource, normalize_trackio_space
 
     if file:
         src = FileSource(file)
         frames = src.poll()
         return frames, f"file: {file}"
 
-    if url:
-        # Parse Trackio URL: https://<space>.hf.space/
-        # Extract space name from URL
-        import re
-        match = re.match(r"https?://([^.]+(?:\.[^.]+)*?)\.hf\.space/?", url)
-        if match:
-            space = match.group(1)
-        else:
-            space = url.rstrip("/").split("/")[-1] if "/" in url else url
-
-        src = TrackioSource(space=space)
+    resolved_space = normalize_trackio_space(url or space)
+    if url or source == "trackio":
+        src = TrackioSource(space=resolved_space, project=project, run=run_name)
         frames = src.poll()
-        return frames, f"trackio: {space}"
-
-    if source == "trackio":
-        src = TrackioSource()
-        frames = src.poll()
-        return frames, "trackio: wheattoast11-trackio"
+        source_desc = f"trackio: {resolved_space}"
+        if src.resolved_project:
+            source_desc += f"  |  project: {src.resolved_project}"
+        if src.resolved_run:
+            source_desc += f"  |  run: {src.resolved_run}"
+        return frames, source_desc
 
     return [], "no source"
 
@@ -677,13 +853,14 @@ def _render_observe_report(c: "CampConsole", frames: list, source_desc: str) -> 
         c.blank()
         c.header("CARL Observer")
         c.warn("No data found.")
-        c.info(f"Source: {source_desc}")
-        c.blank()
-        c.print("  [camp.muted]Usage:[/]")
-        c.print("    carl observe --url https://wheattoast11-trackio.hf.space/")
-        c.print("    carl observe --file logs/train.jsonl")
-        c.print("    carl observe --live --url https://trackio.hf.space/")
-        c.blank()
+        source_parts = source_desc.split("  |  ")
+        if source_parts:
+            c.info(f"Source: {source_parts[0]}")
+            for part in source_parts[1:]:
+                c.info(part)
+        else:
+            c.info(f"Source: {source_desc}")
+        _print_observe_usage(c)
         return {}
 
     # Extract time series
@@ -729,10 +906,13 @@ def _render_observe_report(c: "CampConsole", frames: list, source_desc: str) -> 
     # Entropy from phi distribution (proxy)
     if len(phis) > 1:
         import math
+
         # Use phi variance as entropy proxy
         entropy_mean_val = phi_std
-        entropy_std_val = (sum((abs(phis[i] - phis[i - 1]) - phi_std) ** 2
-                               for i in range(1, len(phis))) / (len(phis) - 1)) ** 0.5
+        entropy_std_val = (
+            sum((abs(phis[i] - phis[i - 1]) - phi_std) ** 2 for i in range(1, len(phis)))
+            / (len(phis) - 1)
+        ) ** 0.5
     else:
         entropy_mean_val = 0.0
         entropy_std_val = 0.0
@@ -741,8 +921,11 @@ def _render_observe_report(c: "CampConsole", frames: list, source_desc: str) -> 
     phase = _phase_state(phis, defect_densities)
 
     # Cloud quality from rewards
-    cloud_vals = [f.rewards.get("reward_carl", f.rewards.get("reward_cloud", 0.0))
-                  for f in frames if f.rewards]
+    cloud_vals = [
+        f.rewards.get("reward_carl", f.rewards.get("reward_cloud", 0.0))
+        for f in frames
+        if f.rewards
+    ]
     cloud_mean = sum(cloud_vals) / len(cloud_vals) if cloud_vals else 0.0
 
     # Discontinuity events: count frames where phi jumps exceed threshold
@@ -769,14 +952,21 @@ def _render_observe_report(c: "CampConsole", frames: list, source_desc: str) -> 
 
     # Health assessment
     health_label, health_reason = _health_assessment(
-        phi_mean, phi_trend, entropy_std_val, phase, frac_zero_reward, lyapunov_proxy,
+        phi_mean,
+        phi_trend,
+        entropy_std_val,
+        phase,
+        frac_zero_reward,
+        lyapunov_proxy,
     )
 
     # ---- Render ----
     c.blank()
     c.header("CARL Observer")
-    c.print(f"  [camp.muted]Source: {source_desc}  |  {len(frames)} steps  |  "
-            f"range: {steps[0]}-{steps[-1]}[/]")
+    c.print(
+        f"  [camp.muted]Source: {source_desc}  |  {len(frames)} steps  |  "
+        f"range: {steps[0]}-{steps[-1]}[/]"
+    )
     c.blank()
 
     # Health badge
@@ -803,7 +993,9 @@ def _render_observe_report(c: "CampConsole", frames: list, source_desc: str) -> 
     table.add_row("Entropy std", f"{entropy_std_val:.4f}", "")
     table.add_row("Loss mean", f"{loss_mean:.4f}", _trend_arrow(losses))
     table.add_row("Reward mean", f"{reward_mean:.4f}", _trend_arrow(reward_means))
-    table.add_row("Cloud quality", f"{cloud_mean:.4f}", _trend_arrow(cloud_vals) if cloud_vals else "~")
+    table.add_row(
+        "Cloud quality", f"{cloud_mean:.4f}", _trend_arrow(cloud_vals) if cloud_vals else "~"
+    )
     c.print(table)
     c.blank()
 
@@ -812,7 +1004,10 @@ def _render_observe_report(c: "CampConsole", frames: list, source_desc: str) -> 
     phase_table.add_row("Phase state", phase)
     phase_table.add_row("Discontinuity events", f"{discontinuity_events} / {len(frames) - 1} steps")
     phase_table.add_row("Lyapunov proxy", f"{lyapunov_proxy:.4f}")
-    phase_table.add_row("Conservation (kappa*sigma)", f"{conservation_product:.4f} (error: {conservation_error:.2e})")
+    phase_table.add_row(
+        "Conservation (kappa*sigma)",
+        f"{conservation_product:.4f} (error: {conservation_error:.2e})",
+    )
     phase_table.add_row("Zero-reward fraction", f"{frac_zero_reward:.1%}")
     c.print(phase_table)
     c.blank()
@@ -867,6 +1062,19 @@ def _render_diagnose(c: "CampConsole", frames: list, api_key: str | None) -> Non
         c.blank()
         return
 
+    try:
+        import anthropic  # noqa: F401
+    except ImportError as exc:
+        _render_extra_install_hint(
+            c,
+            "observe",
+            "Claude-powered diagnosis dependencies are not installed.",
+            exc,
+            quoted=True,
+        )
+        c.blank()
+        return
+
     if not frames:
         c.warn("No data to diagnose.")
         return
@@ -882,15 +1090,21 @@ def _render_diagnose(c: "CampConsole", frames: list, api_key: str | None) -> Non
     for f in frames:
         snap = CoherenceSnapshot(
             step=f.step,
-            n_tokens=f.trace_n_tokens if hasattr(f, "trace_n_tokens") and f.trace_n_tokens > 0 else 512,
+            n_tokens=f.trace_n_tokens
+            if hasattr(f, "trace_n_tokens") and f.trace_n_tokens > 0
+            else 512,
             phi_mean=f.phi,
             phi_std=0.0,
             phi_trajectory=[f.phi],
             n_defects=0,
-            n_crystallizations=f.trace_crystallizations if hasattr(f, "trace_crystallizations") else 0,
+            n_crystallizations=f.trace_crystallizations
+            if hasattr(f, "trace_crystallizations")
+            else 0,
             n_meltings=f.trace_meltings if hasattr(f, "trace_meltings") else 0,
             defect_density=0.0,
-            cloud_quality_mean=f.rewards.get("reward_carl", f.rewards.get("reward_cloud", 0.0)) if f.rewards else 0.0,
+            cloud_quality_mean=f.rewards.get("reward_carl", f.rewards.get("reward_cloud", 0.0))
+            if f.rewards
+            else 0.0,
             scale_coherence={},
             entropy_mean=0.0,
             entropy_std=0.0,
@@ -910,7 +1124,7 @@ def _render_diagnose(c: "CampConsole", frames: list, api_key: str | None) -> Non
     for snap in snapshots:
         observer._buffer.append(snap)
     if len(observer._buffer) > observer.window_size:
-        observer._buffer = observer._buffer[-observer.window_size:]
+        observer._buffer = observer._buffer[-observer.window_size :]
 
     # Force the Claude call
     assessment = observer.force_observe()
@@ -960,32 +1174,52 @@ def _render_diagnose(c: "CampConsole", frames: list, api_key: str | None) -> Non
 
 @app.command()
 def observe(
-    url: str | None = typer.Option(None, "--url", "-u", help="Trackio space URL (e.g. https://wheattoast11-trackio.hf.space/)"),
+    url: str | None = typer.Option(
+        None, "--url", "-u", help="Trackio space URL (e.g. https://wheattoast11-trackio.hf.space/)"
+    ),
     file: str | None = typer.Option(None, "--file", "-f", help="Local JSONL log file path"),
     live: bool = typer.Option(False, "--live", "-l", help="Launch real-time Textual TUI dashboard"),
-    source: str = typer.Option("auto", "--source", "-s", help="Data source: trackio, file, or auto"),
-    diagnose: bool = typer.Option(False, "--diagnose", "-d", help="Enable Claude-powered analysis (requires ANTHROPIC_API_KEY)"),
-    api_key: str | None = typer.Option(None, "--api-key", envvar="ANTHROPIC_API_KEY", help="Anthropic API key for --diagnose"),
+    source: str = typer.Option(
+        "auto", "--source", "-s", help="Data source: trackio, file, or auto"
+    ),
+    diagnose: bool = typer.Option(
+        False,
+        "--diagnose",
+        "-d",
+        help="Enable Claude-powered analysis (requires ANTHROPIC_API_KEY)",
+    ),
+    api_key: str | None = typer.Option(
+        None, "--api-key", envvar="ANTHROPIC_API_KEY", help="Anthropic API key for --diagnose"
+    ),
     poll: float = typer.Option(2.0, "--poll", help="Poll interval in seconds (for --live)"),
+    project: str = typer.Option(
+        "", "--project", help="Trackio project name (auto-detected when only one exists)"
+    ),
     run_name: str = typer.Option("", "--run", help="Trackio run name"),
-    space: str = typer.Option("wheattoast11-trackio", "--space", help="Trackio space name (if not using --url)"),
+    space: str = typer.Option(
+        "wheattoast11-trackio", "--space", help="Trackio space name (if not using --url)"
+    ),
 ) -> None:
     """Observe training coherence dynamics. Rich defaults, zero config.
 
     \b
     One-shot (default):
-      carl observe --url https://wheattoast11-trackio.hf.space/
+      carl observe --url https://wheattoast11-trackio.hf.space/ --run my-run
       carl observe --file logs/train.jsonl
 
     \b
     Live TUI:
-      carl observe --live --url https://trackio.hf.space/
+      carl observe --live --url https://wheattoast11-trackio.hf.space/ --run my-run
 
     \b
     Claude-powered analysis:
-      carl observe --diagnose --url https://trackio.hf.space/
+      carl observe --diagnose --url https://wheattoast11-trackio.hf.space/ --run my-run
     """
     c = get_console()
+
+    if url and file:
+        c.error("Use either --url or --file, not both.")
+        raise typer.Exit(1)
 
     # Resolve source type
     resolved_source = source
@@ -1001,8 +1235,8 @@ def observe(
     if live:
         try:
             from carl_studio.observe.app import run_app
-        except ImportError:
-            c.error("install carl-studio[tui] for live dashboard (textual)")
+        except ImportError as exc:
+            _render_extra_install_hint(c, "tui", "Live dashboard support is not installed.", exc)
             raise typer.Exit(1)
 
         # Resolve path/space from --url or --file for the TUI
@@ -1010,23 +1244,42 @@ def observe(
         tui_path = file or ""
         tui_space = space
 
-        if url and resolved_source == "trackio":
-            import re
-            match = re.match(r"https?://([^.]+(?:\.[^.]+)*?)\.hf\.space/?", url)
-            if match:
-                tui_space = match.group(1)
+        if resolved_source == "trackio":
+            from carl_studio.observe.data_source import TrackioError, normalize_trackio_space
+
+            try:
+                tui_space = normalize_trackio_space(url or space)
+            except TrackioError as exc:
+                c.error(str(exc))
+                _print_observe_usage(c)
+                raise typer.Exit(1)
 
         run_app(
             source=tui_source,
             path=tui_path,
             space=tui_space,
+            project=project,
             run=run_name,
             poll=poll,
         )
         raise typer.Exit(0)
 
     # ---- One-shot rich report ----
-    frames, source_desc = _load_frames(url=url, file=file, source=resolved_source)
+    try:
+        frames, source_desc = _load_frames(
+            url=url,
+            file=file,
+            source=resolved_source,
+            space=space,
+            project=project,
+            run_name=run_name,
+        )
+    except Exception as exc:
+        c.blank()
+        c.header("CARL Observer")
+        c.error(str(exc))
+        _print_observe_usage(c)
+        raise typer.Exit(1)
     _render_observe_report(c, frames, source_desc)
 
     # ---- Optional Claude diagnosis ----
@@ -1035,7 +1288,7 @@ def observe(
 
 
 # ---------------------------------------------------------------------------
-# carl push (coming soon)
+# carl push
 # ---------------------------------------------------------------------------
 @app.command()
 def push(
@@ -1048,21 +1301,36 @@ def push(
 ) -> None:
     """Push model to HuggingFace Hub with CARL coherence metadata."""
     import anyio
-    from carl_studio.hub.models import push_with_metadata
 
     c = get_console()
-    c.info(f"Pushing {model_path} -> {repo_id}")
+    artifact_path = Path(model_path)
+    if not artifact_path.exists():
+        c.error(f"Model path not found: {model_path}")
+        raise typer.Exit(1)
 
-    url = anyio.run(
-        push_with_metadata,
-        model_path,
-        repo_id,
-        base_model,
-        method,
-        dataset,
-        None,  # coherence_metrics
-        private,
-    )
+    try:
+        from carl_studio.hub.models import push_with_metadata
+    except ImportError as exc:
+        _render_extra_install_hint(c, "hf", "Hub publishing support is not installed.", exc)
+        raise typer.Exit(1)
+
+    c.info(f"Publishing artifacts from {model_path} -> {repo_id}")
+
+    try:
+        url = anyio.run(
+            push_with_metadata,
+            model_path,
+            repo_id,
+            base_model,
+            method,
+            dataset,
+            None,  # coherence_metrics
+            private,
+        )
+    except Exception as exc:
+        c.error(f"Publish failed: {exc}")
+        raise typer.Exit(1)
+
     c.ok(f"Published: {url}")
     c.blank()
 
@@ -1079,8 +1347,8 @@ def mcp_serve(
     c = get_console()
     try:
         from carl_studio.mcp import mcp as mcp_server
-    except ImportError:
-        c.error("install carl-studio[mcp] for MCP server")
+    except ImportError as exc:
+        _render_extra_install_hint(c, "mcp", "MCP server support is not installed.", exc)
         raise typer.Exit(1)
 
     if transport == "stdio":
@@ -1095,10 +1363,16 @@ def mcp_serve(
 # ---------------------------------------------------------------------------
 # carl golf [experimental — requires zero-rl-pipeline as sibling]
 # ---------------------------------------------------------------------------
-golf_app = typer.Typer(name="golf", help="[experimental] Parameter Golf tools (requires zero-rl-pipeline repo)", no_args_is_help=True)
+golf_app = typer.Typer(
+    name="golf",
+    help="[experimental] Parameter Golf tools (requires zero-rl-pipeline repo)",
+    no_args_is_help=True,
+)
 app.add_typer(golf_app)
 
-_GOLF_BASE = Path(__file__).resolve().parent.parent.parent.parent / "zero-rl-pipeline" / "parameter-golf"
+_GOLF_BASE = (
+    Path(__file__).resolve().parent.parent.parent.parent / "zero-rl-pipeline" / "parameter-golf"
+)
 
 
 def _golf_check() -> Path:
@@ -1149,7 +1423,9 @@ def golf_configs() -> None:
 # carl checkpoint — model checkpoint management
 # ---------------------------------------------------------------------------
 
-checkpoint_app = typer.Typer(name="checkpoint", help="Model checkpoint management", no_args_is_help=True)
+checkpoint_app = typer.Typer(
+    name="checkpoint", help="Model checkpoint management", no_args_is_help=True
+)
 app.add_typer(checkpoint_app)
 
 
@@ -1161,8 +1437,8 @@ def checkpoint_list(
     c = get_console()
     try:
         from huggingface_hub import HfApi
-    except ImportError:
-        c.error("install carl-studio[hf]")
+    except ImportError as exc:
+        _render_extra_install_hint(c, "hf", "HF Hub support is not installed.", exc)
         raise typer.Exit(1)
 
     import json
@@ -1184,6 +1460,7 @@ def checkpoint_list(
     if "pipeline_state.json" in files:
         try:
             from huggingface_hub import hf_hub_download
+
             state_path = hf_hub_download(model, "pipeline_state.json")
             with open(state_path) as f:
                 state = json.load(f)
@@ -1221,8 +1498,8 @@ def checkpoint_state(
     c = get_console()
     try:
         from huggingface_hub import hf_hub_download
-    except ImportError:
-        c.error("install carl-studio[hf]")
+    except ImportError as exc:
+        _render_extra_install_hint(c, "hf", "HF Hub support is not installed.", exc)
         raise typer.Exit(1)
 
     try:
@@ -1230,6 +1507,7 @@ def checkpoint_state(
         with open(state_path) as f:
             state = json.load(f)
         from rich.syntax import Syntax
+
         c.print(Syntax(json.dumps(state, indent=2), "json", theme="monokai"))
     except Exception as exc:
         c.error(f"No pipeline state found: {exc}")
@@ -1244,8 +1522,8 @@ def checkpoint_resume_info(
     c = get_console()
     try:
         from huggingface_hub import HfApi
-    except ImportError:
-        c.error("install carl-studio[hf]")
+    except ImportError as exc:
+        _render_extra_install_hint(c, "hf", "HF Hub support is not installed.", exc)
         raise typer.Exit(1)
 
     api = HfApi()
@@ -1295,6 +1573,7 @@ def checkpoint_resume_info(
 # carl setup — first-run persona selection
 # ---------------------------------------------------------------------------
 
+
 @app.command(name="setup")
 def setup() -> None:
     """First-time setup. Pick your camp director and configure your experience."""
@@ -1311,10 +1590,10 @@ def setup() -> None:
             raise typer.Exit(0)
 
     c.print("\n  Pick your camp director:\n")
-    c.print('  [camp.primary][1][/] CARL  -- Methodical, precise, dry humor.')
+    c.print("  [camp.primary][1][/] CARL  -- Methodical, precise, dry humor.")
     c.print('  [camp.muted]    "Welcome to Camp CARL."[/]')
     c.blank()
-    c.print('  [camp.accent][2][/] CARLI -- Warm, encouraging, high energy.')
+    c.print("  [camp.accent][2][/] CARLI -- Warm, encouraging, high energy.")
     c.print('  [camp.muted]    "Hey! Welcome to camp!"[/]')
     c.blank()
 
@@ -1341,7 +1620,9 @@ def setup() -> None:
 # carl project — project configuration management
 # ---------------------------------------------------------------------------
 
-project_app = typer.Typer(name="project", help="Project configuration (carl.yaml)", no_args_is_help=True)
+project_app = typer.Typer(
+    name="project", help="Project configuration (carl.yaml)", no_args_is_help=True
+)
 app.add_typer(project_app)
 
 
@@ -1351,7 +1632,9 @@ def project_init(
     model: str = typer.Option("", "--model", "-m", help="Base model ID"),
     method: str = typer.Option("grpo", "--method", help="Training method"),
     output: str = typer.Option("carl.yaml", "--output", "-o", help="Output file"),
-    interactive: bool = typer.Option(True, "--interactive/--no-interactive", help="Interactive wizard"),
+    interactive: bool = typer.Option(
+        True, "--interactive/--no-interactive", help="Interactive wizard"
+    ),
 ) -> None:
     """Initialize a new carl.yaml project file."""
     from carl_studio.project import CARLProject, save_project
@@ -1424,7 +1707,9 @@ def project_show(
 
 @project_app.command(name="set")
 def project_set(
-    key: str = typer.Argument(..., help="Config key to set (e.g. base_model, method, compute_target)"),
+    key: str = typer.Argument(
+        ..., help="Config key to set (e.g. base_model, method, compute_target)"
+    ),
     value: str = typer.Argument(..., help="Value to set"),
     config: str = typer.Option("carl.yaml", "--config", "-c", help="Project file"),
 ) -> None:
@@ -1462,23 +1747,29 @@ def project_set(
 # carl browse — HuggingFace Hub discovery
 # ---------------------------------------------------------------------------
 
-browse_app = typer.Typer(name="browse", help="Browse HuggingFace Hub for models, datasets, spaces", no_args_is_help=True)
+browse_app = typer.Typer(
+    name="browse", help="Browse HuggingFace Hub for models, datasets, spaces", no_args_is_help=True
+)
 app.add_typer(browse_app)
 
 
 @browse_app.command(name="models")
 def browse_models(
     query: str = typer.Argument("", help="Search query"),
-    task: str = typer.Option("", "--task", "-t", help="Filter by task (text-generation, image-text-to-text, ...)"),
-    sort: str = typer.Option("trending", "--sort", "-s", help="Sort: trending, downloads, likes, created"),
+    task: str = typer.Option(
+        "", "--task", "-t", help="Filter by task (text-generation, image-text-to-text, ...)"
+    ),
+    sort: str = typer.Option(
+        "trending", "--sort", "-s", help="Sort: trending, downloads, likes, created"
+    ),
     limit: int = typer.Option(10, "--limit", "-n", help="Number of results"),
 ) -> None:
     """Search HuggingFace Hub for models."""
     c = get_console()
     try:
         from huggingface_hub import HfApi
-    except ImportError:
-        c.error("install carl-studio[hf]")
+    except ImportError as exc:
+        _render_extra_install_hint(c, "hf", "HF Hub support is not installed.", exc)
         raise typer.Exit(1)
 
     api = HfApi()
@@ -1493,7 +1784,9 @@ def browse_models(
         c.info("No models found.")
         raise typer.Exit(0)
 
-    table = c.make_table("Model", "Task", "Downloads", "Likes", title=f"HuggingFace Models (top {len(models)})")
+    table = c.make_table(
+        "Model", "Task", "Downloads", "Likes", title=f"HuggingFace Models (top {len(models)})"
+    )
     for m in models:
         downloads = getattr(m, "downloads", 0) or 0
         likes = getattr(m, "likes", 0) or 0
@@ -1515,8 +1808,8 @@ def browse_datasets(
     c = get_console()
     try:
         from huggingface_hub import HfApi
-    except ImportError:
-        c.error("install carl-studio[hf]")
+    except ImportError as exc:
+        _render_extra_install_hint(c, "hf", "HF Hub support is not installed.", exc)
         raise typer.Exit(1)
 
     api = HfApi()
@@ -1531,7 +1824,9 @@ def browse_datasets(
         c.info("No datasets found.")
         raise typer.Exit(0)
 
-    table = c.make_table("Dataset", "Downloads", "Likes", title=f"HuggingFace Datasets (top {len(datasets)})")
+    table = c.make_table(
+        "Dataset", "Downloads", "Likes", title=f"HuggingFace Datasets (top {len(datasets)})"
+    )
     for d in datasets:
         downloads = getattr(d, "downloads", 0) or 0
         likes = getattr(d, "likes", 0) or 0
@@ -1545,7 +1840,9 @@ def browse_datasets(
 # carl data — data generation and validation
 # ---------------------------------------------------------------------------
 
-data_app = typer.Typer(name="data", help="Data generation, validation, and statistics", no_args_is_help=True)
+data_app = typer.Typer(
+    name="data", help="Data generation, validation, and statistics", no_args_is_help=True
+)
 app.add_typer(data_app)
 
 
@@ -1573,18 +1870,18 @@ def data_validate(
         try:
             obj = json_mod.loads(line)
         except json_mod.JSONDecodeError:
-            issues.append(f"Line {i+1}: invalid JSON")
+            issues.append(f"Line {i + 1}: invalid JSON")
             continue
 
         # Check required fields
         if "messages" not in obj and "prompt" not in obj and "conversations" not in obj:
-            issues.append(f"Line {i+1}: missing messages/prompt/conversations field")
+            issues.append(f"Line {i + 1}: missing messages/prompt/conversations field")
             continue
 
         # Check non-empty content
         messages = obj.get("messages") or obj.get("conversations") or []
         if isinstance(messages, list) and len(messages) < 2:
-            issues.append(f"Line {i+1}: fewer than 2 messages")
+            issues.append(f"Line {i + 1}: fewer than 2 messages")
             continue
 
         valid += 1
@@ -1594,13 +1891,15 @@ def data_validate(
 
     c.blank()
     c.header("Dataset Validation")
-    c.config_block([
-        ("File", path),
-        ("Total samples", str(total)),
-        ("Valid samples", str(valid)),
-        ("Pass rate", f"{pass_rate:.1%}"),
-        ("Gate threshold", f"{gate:.1%}"),
-    ])
+    c.config_block(
+        [
+            ("File", path),
+            ("Total samples", str(total)),
+            ("Valid samples", str(valid)),
+            ("Pass rate", f"{pass_rate:.1%}"),
+            ("Gate threshold", f"{gate:.1%}"),
+        ]
+    )
     c.gate(passed)
 
     if issues[:5]:
@@ -1648,12 +1947,15 @@ def data_stats(
     max_msgs = max(msg_counts) if msg_counts else 0
 
     c.blank()
-    c.config_block([
-        ("File", path),
-        ("Samples", str(total)),
-        ("Avg messages", f"{avg_msgs:.1f}"),
-        ("Max messages", str(max_msgs)),
-    ], title="Dataset Statistics")
+    c.config_block(
+        [
+            ("File", path),
+            ("Samples", str(total)),
+            ("Avg messages", f"{avg_msgs:.1f}"),
+            ("Max messages", str(max_msgs)),
+        ],
+        title="Dataset Statistics",
+    )
 
     table = c.make_table("Role", "Count", title="Role Distribution")
     for role, count in sorted(roles.items()):
@@ -1666,9 +1968,12 @@ def data_stats(
 # carl dev — development workflow orchestration
 # ---------------------------------------------------------------------------
 
+
 @app.command(name="dev")
 def dev(
-    phase: str = typer.Option("all", "--phase", "-p", help="Phase: ground, test, data, scripts, validate, update, all"),
+    phase: str = typer.Option(
+        "all", "--phase", "-p", help="Phase: ground, test, data, scripts, validate, update, all"
+    ),
 ) -> None:
     """[experimental] Interactive development workflow (gated process).
 
@@ -1682,7 +1987,7 @@ def dev(
         c.error(f"Unknown phase: {phase}. Choose from: {', '.join(phases)}, all")
         raise typer.Exit(1)
 
-    target_phases = phases if phase == "all" else phases[phases.index(phase):]
+    target_phases = phases if phase == "all" else phases[phases.index(phase) :]
 
     c.blank()
     c.header("CARL Dev -- Gated Workflow")
@@ -1736,11 +2041,16 @@ def dev(
 # carl chat — interactive agent REPL
 # ---------------------------------------------------------------------------
 
+
 @app.command(name="chat")
 def chat(
-    model: str = typer.Option("claude-sonnet-4-20250514", "--model", "-m", help="Claude model for agent"),
+    model: str = typer.Option(
+        "claude-sonnet-4-20250514", "--model", "-m", help="Claude model for agent"
+    ),
     config: str = typer.Option("carl.yaml", "--config", "-c", help="Project config for context"),
-    api_key: str | None = typer.Option(None, "--api-key", envvar="ANTHROPIC_API_KEY", help="Anthropic API key"),
+    api_key: str | None = typer.Option(
+        None, "--api-key", envvar="ANTHROPIC_API_KEY", help="Anthropic API key"
+    ),
 ) -> None:
     """Interactive CARL agent chat. Discuss training, get recommendations, dispatch runs."""
     c = get_console()
@@ -1751,8 +2061,14 @@ def chat(
 
     try:
         import anthropic
-    except ImportError:
-        c.error("install carl-studio[observe] for Anthropic SDK")
+    except ImportError as exc:
+        _render_extra_install_hint(
+            c,
+            "observe",
+            "Anthropic SDK support is not installed.",
+            exc,
+            quoted=True,
+        )
         raise typer.Exit(1)
 
     from carl_studio.primitives.constants import KAPPA, SIGMA
@@ -1761,6 +2077,7 @@ def chat(
     project_context = ""
     try:
         from carl_studio.project import load_project
+
         proj = load_project(config)
         project_context = f"""Current project: {proj.name}
 Model: {proj.base_model}
@@ -1825,6 +2142,7 @@ Keep responses concise. Lead with recommendations, not explanations."""
             messages.append({"role": "assistant", "content": assistant_text})
             c.blank()
             from rich.markdown import Markdown
+
             c.print(Markdown(f"**carl>** {assistant_text}"))
             c.blank()
 
@@ -1841,10 +2159,13 @@ Keep responses concise. Lead with recommendations, not explanations."""
 # carl bench — trainability meta-benchmarks
 # ---------------------------------------------------------------------------
 
+
 @app.command(name="bench")
 def bench_cmd(
     model_id: str = typer.Argument(..., help="HF model ID to benchmark"),
-    suite: str = typer.Option("all", "--suite", "-s", help="Probe suite: all, transition, stability, pressure, adaptation"),
+    suite: str = typer.Option(
+        "all", "--suite", "-s", help="Probe suite: all, transition, stability, pressure, adaptation"
+    ),
     compare: str = typer.Option("", "--compare", "-c", help="Compare against baseline model"),
 ) -> None:
     """Measure model trainability with CARL meta-benchmarks (CTI score)."""
@@ -1873,6 +2194,7 @@ def bench_cmd(
         result = getattr(cti, probe_name)
         grade_style = "camp.success" if result.grade in ("A", "B") else "camp.warning"
         from rich.text import Text
+
         grade = Text(result.grade, style=grade_style)
         table.add_row(probe_name, grade, f"{result.score:.2f}", result.detail)
     c.print(table)
@@ -1887,13 +2209,20 @@ def bench_cmd(
 # carl align — targeted realignment
 # ---------------------------------------------------------------------------
 
+
 @app.command(name="align")
 def align_cmd(
-    mode: str = typer.Option(..., "--mode", "-m", help="Alignment mode: patterns, temporal, format"),
-    source: str = typer.Option("", "--source", "-s", help="Source material (URL, file, or directory)"),
+    mode: str = typer.Option(
+        ..., "--mode", "-m", help="Alignment mode: patterns, temporal, format"
+    ),
+    source: str = typer.Option(
+        "", "--source", "-s", help="Source material (URL, file, or directory)"
+    ),
     model_id: str = typer.Option("", "--model", help="Model to align (HF ID or local path)"),
     quick: bool = typer.Option(False, "--quick", help="Quick mode with sensible defaults"),
-    config: str = typer.Option("carl.yaml", "--config", "-c", help="Project config (for model defaults)"),
+    config: str = typer.Option(
+        "carl.yaml", "--config", "-c", help="Project config (for model defaults)"
+    ),
 ) -> None:
     """Targeted model realignment (patterns, temporal, or format drift)."""
     c = get_console()
@@ -1907,6 +2236,7 @@ def align_cmd(
     if not model_id:
         try:
             from carl_studio.project import load_project
+
             proj = load_project(config)
             model_id = proj.base_model
         except Exception:
@@ -1936,11 +2266,14 @@ def align_cmd(
 # carl learn — knowledge ingestion
 # ---------------------------------------------------------------------------
 
+
 @app.command(name="learn")
 def learn_cmd(
     source: str = typer.Argument(..., help="Source material (URL, file, directory, or HF dataset)"),
     model_id: str = typer.Option("", "--model", "-m", help="Model to teach"),
-    depth: str = typer.Option("shallow", "--depth", "-d", help="Depth: shallow (fewer pairs) or deep"),
+    depth: str = typer.Option(
+        "shallow", "--depth", "-d", help="Depth: shallow (fewer pairs) or deep"
+    ),
     quality_threshold: float = typer.Option(0.9, "--gate", "-g", help="Quality gate threshold"),
     output: str = typer.Option("", "--output", "-o", help="Save generated pairs to JSONL"),
     config: str = typer.Option("carl.yaml", "--config", "-c", help="Project config"),
@@ -1957,6 +2290,7 @@ def learn_cmd(
     if not model_id:
         try:
             from carl_studio.project import load_project
+
             proj = load_project(config)
             model_id = proj.base_model
         except Exception:
@@ -1986,6 +2320,7 @@ def learn_cmd(
     # Save pairs if requested
     if output and "pairs" in result:
         import json as json_mod
+
         with open(output, "w") as f:
             for pair in result["pairs"]:
                 f.write(json_mod.dumps(pair) + "\n")
@@ -1997,21 +2332,29 @@ def learn_cmd(
 # carl paper — paper generation and experimental design
 # ---------------------------------------------------------------------------
 
-paper_app = typer.Typer(name="paper", help="Research paper generation and experimental design", no_args_is_help=True)
+paper_app = typer.Typer(
+    name="paper", help="Research paper generation and experimental design", no_args_is_help=True
+)
 app.add_typer(paper_app)
 
 
 @paper_app.command(name="draft")
 def paper_draft(
-    template: str = typer.Option("unified", "--template", "-t", help="Paper template: unified, carl"),
-    results_dir: str = typer.Option("experiments/results", "--results", "-r", help="Experimental results directory"),
+    template: str = typer.Option(
+        "unified", "--template", "-t", help="Paper template: unified, carl"
+    ),
+    results_dir: str = typer.Option(
+        "experiments/results", "--results", "-r", help="Experimental results directory"
+    ),
     output: str = typer.Option("paper/output/paper.md", "--output", "-o", help="Output file"),
 ) -> None:
     """Generate a paper draft from experimental results."""
     from carl_studio.paper import PaperGenerator, PaperConfig
 
     c = get_console()
-    config = PaperConfig(template=template, results_dir=results_dir, output_dir=str(Path(output).parent))
+    config = PaperConfig(
+        template=template, results_dir=results_dir, output_dir=str(Path(output).parent)
+    )
     gen = PaperGenerator(config)
     out_path = gen.save_draft(output)
     c.ok(f"Paper draft saved to {out_path}")
@@ -2021,8 +2364,12 @@ def paper_draft(
 
 @paper_app.command(name="figures")
 def paper_figures(
-    results_dir: str = typer.Option("experiments/results", "--results", "-r", help="Experimental results directory"),
-    output: str = typer.Option("paper/output/generate_figures.py", "--output", "-o", help="Output script path"),
+    results_dir: str = typer.Option(
+        "experiments/results", "--results", "-r", help="Experimental results directory"
+    ),
+    output: str = typer.Option(
+        "paper/output/generate_figures.py", "--output", "-o", help="Output script path"
+    ),
 ) -> None:
     """Generate a figure-generation script for the paper."""
     from carl_studio.paper import PaperGenerator, PaperConfig
@@ -2039,7 +2386,9 @@ def paper_figures(
 @paper_app.command(name="experiments")
 def paper_experiments(
     model_id: str = typer.Option("", "--model", "-m", help="Model ID for experiments"),
-    output_dir: str = typer.Option("experiments/results", "--output", "-o", help="Results output directory"),
+    output_dir: str = typer.Option(
+        "experiments/results", "--output", "-o", help="Results output directory"
+    ),
     seed: int = typer.Option(42, "--seed", help="Random seed"),
 ) -> None:
     """Run experimental design suite and save structured results."""
@@ -2062,7 +2411,9 @@ def paper_experiments(
 # carl config — settings management
 # ---------------------------------------------------------------------------
 
-config_app = typer.Typer(name="config", help="User settings and tier management", no_args_is_help=True)
+config_app = typer.Typer(
+    name="config", help="User settings and tier management", no_args_is_help=True
+)
 app.add_typer(config_app)
 
 
@@ -2185,8 +2536,12 @@ def config_reset(
 
 @config_app.command(name="init")
 def config_init(
-    preset: str = typer.Option("", "--preset", "-p", help="Start with a preset: research, production, quick"),
-    interactive: bool = typer.Option(True, "--interactive/--no-interactive", help="Interactive setup"),
+    preset: str = typer.Option(
+        "", "--preset", "-p", help="Start with a preset: research, production, quick"
+    ),
+    interactive: bool = typer.Option(
+        True, "--interactive/--no-interactive", help="Interactive setup"
+    ),
 ) -> None:
     """Create ~/.carl/config.yaml with optional interactive prompts."""
     from carl_studio.settings import CARLSettings, GLOBAL_CONFIG, Preset, ObserveDefaults
@@ -2219,8 +2574,14 @@ def config_init(
         c.print("  [camp.accent][2][/]  Pro        -- train, align, learn, push, full eval")
         c.print("  [camp.warning][3][/] Enterprise -- MCP, custom envs, orchestration")
         tier_choice = typer.prompt("  Tier", default="1")
-        tier_map = {"1": Tier.FREE, "2": Tier.PRO, "3": Tier.ENTERPRISE,
-                    "free": Tier.FREE, "pro": Tier.PRO, "enterprise": Tier.ENTERPRISE}
+        tier_map = {
+            "1": Tier.FREE,
+            "2": Tier.PRO,
+            "3": Tier.ENTERPRISE,
+            "free": Tier.FREE,
+            "pro": Tier.PRO,
+            "enterprise": Tier.ENTERPRISE,
+        }
         settings.tier = tier_map.get(tier_choice.strip().lower(), Tier.FREE)
 
         # Preset
@@ -2231,9 +2592,16 @@ def config_init(
         c.print("  [camp.primary][3][/] Quick      -- fast defaults, L4 compute, 20 steps max")
         c.print("  [camp.primary][4][/] Custom     -- configure everything manually")
         preset_choice = typer.prompt("  Preset", default="4")
-        preset_map = {"1": Preset.RESEARCH, "2": Preset.PRODUCTION, "3": Preset.QUICK, "4": Preset.CUSTOM,
-                      "research": Preset.RESEARCH, "production": Preset.PRODUCTION,
-                      "quick": Preset.QUICK, "custom": Preset.CUSTOM}
+        preset_map = {
+            "1": Preset.RESEARCH,
+            "2": Preset.PRODUCTION,
+            "3": Preset.QUICK,
+            "4": Preset.CUSTOM,
+            "research": Preset.RESEARCH,
+            "production": Preset.PRODUCTION,
+            "quick": Preset.QUICK,
+            "custom": Preset.CUSTOM,
+        }
         settings.preset = preset_map.get(preset_choice.strip().lower(), Preset.CUSTOM)
 
         # Model
@@ -2273,8 +2641,7 @@ def config_init(
 
     # Show summary
     display = settings.display_dict()
-    pairs = [(k, v) for k, v in display.items()
-             if k not in ("hf_token", "anthropic_api_key")]
+    pairs = [(k, v) for k, v in display.items() if k not in ("hf_token", "anthropic_api_key")]
     c.config_block(pairs, title="Your Settings")
     c.blank()
     c.info("Credentials are auto-detected from environment and HF hub.")
@@ -2327,9 +2694,19 @@ def config_preset(
     c.ok(f"Applied preset: {name}")
     display = settings.display_dict()
     c.config_block(
-        [(k, v) for k, v in display.items()
-         if k in ("default_compute", "log_level", "observe.entropy", "observe.phi",
-                   "observe.sparkline", "observe.poll_interval")],
+        [
+            (k, v)
+            for k, v in display.items()
+            if k
+            in (
+                "default_compute",
+                "log_level",
+                "observe.entropy",
+                "observe.phi",
+                "observe.sparkline",
+                "observe.poll_interval",
+            )
+        ],
         title=f"Preset: {name}",
     )
     c.info(f"Saved to {path}")

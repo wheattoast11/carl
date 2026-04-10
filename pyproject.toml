@@ -55,6 +55,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "typer>=0.12",
     "rich>=14.0",
+    "gradio-client>=1.0",
     "numpy",
     "anyio>=4.0",
     "pyyaml>=6.0",

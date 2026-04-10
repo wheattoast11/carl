@@ -1,5 +1,8 @@
 """HuggingFace Hub integration with coherence metadata."""
+
 from __future__ import annotations
+
+from pathlib import Path
 
 from carl_studio.primitives.constants import KAPPA, SIGMA
 
@@ -74,10 +77,30 @@ async def push_with_metadata(
     """
     from huggingface_hub import HfApi, get_token
 
+    path = Path(model_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Model path not found: {model_path}")
+
     api = HfApi(token=get_token())
 
     # Create or get repo
     api.create_repo(repo_id, exist_ok=True, private=private)
+
+    # Upload model artifacts first.
+    if path.is_dir():
+        api.upload_folder(
+            folder_path=str(path),
+            repo_id=repo_id,
+            commit_message="Upload model artifacts from CARL Studio",
+            ignore_patterns=["**/__pycache__/**", ".DS_Store"],
+        )
+    else:
+        api.upload_file(
+            path_or_fileobj=str(path),
+            path_in_repo=path.name,
+            repo_id=repo_id,
+            commit_message="Upload model artifact from CARL Studio",
+        )
 
     # Generate model card
     metrics = coherence_metrics or {}

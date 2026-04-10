@@ -7,7 +7,7 @@ Detailed documentation for carl-studio. For the quick overview, see [README.md](
 ```
 Layer 4  MCP Server       9 tools for AI agent consumption
          ──────────────────────────────────────────────────
-Layer 3  CLI              carl observe | train | eval | config | status | logs
+Layer 3  CLI              carl observe | train | eval | project | config | status | logs
          ──────────────────────────────────────────────────
 Layer 2  Training         CARLTrainer, CascadeRewardManager, environments
          ──────────────────────────────────────────────────
@@ -54,9 +54,11 @@ Three papers, independently reproducible:
 
 ## CLI Reference
 
-**Core (FREE):**
+**Core:**
 ```
-carl observe [--url URL] [--file PATH]    See crystal metrics on any run
+carl observe --url URL --run RUN          See crystal metrics on a Trackio run
+carl observe --file PATH                  See crystal metrics from a local JSONL log
+carl project init                         Create carl.yaml interactively
 carl train [--config carl.yaml]           Train with CARL rewards
 carl eval [--adapter HUB_ID]              Pass/fail checkpoint gate
 carl config [show|set|init|preset]        Manage settings
@@ -68,15 +70,21 @@ carl bundle                               Generate self-contained script
 carl compute                              List GPU flavors
 ```
 
-**Autonomous (PRO):**
+**Install notes:**
+```
+pip install carl-studio                   Base CLI + one-shot observe
+pip install 'carl-studio[training]'       Local train/eval stack
+pip install 'carl-studio[hf]'             Hub jobs + publish
+pip install 'carl-studio[tui]'            observe --live
+pip install 'carl-studio[observe]'        observe --diagnose
+pip install 'carl-studio[all]'            Everything
+```
+
+**Optional workflows:**
 ```
 carl observe --live                       Real-time TUI dashboard
 carl observe --diagnose                   Claude-powered analysis
 carl train --send-it                      Full SFT->gate->GRPO->eval->push pipeline
-```
-
-**Agent Integration (ENTERPRISE):**
-```
 carl mcp                                  Start MCP server (9 tools)
 ```
 
@@ -84,9 +92,9 @@ carl mcp                                  Start MCP server (9 tools)
 
 | Backend | Flag | VRAM |
 |---------|------|------|
-| HuggingFace Jobs | `--compute l4x1` / `a100` / `h200` | 24-141 GB |
-| RunPod | `--compute runpod` | Configurable |
+| HuggingFace Jobs | `--compute l4x1` / `a10g-large` / `a100-large` / `l40sx1` | 24-80 GB |
 | Local | `--compute local` | Your GPU |
+| Other backends | Configure `backend` in `carl.yaml` / `carl project` | Depends |
 
 ## Environments
 
@@ -111,10 +119,14 @@ carl mcp                                  Start MCP server (9 tools)
 ```python
 from carl_studio.observe.data_source import TrackioSource
 
-source = TrackioSource(space="wheattoast11-trackio", run_name="my-run")
-frames = source.fetch_latest(n=20)
+source = TrackioSource(
+    space="wheattoast11-trackio",
+    project="my-project",
+    run="my-run",
+)
+frames = source.poll()
 for f in frames:
-    print(f"step={f.step}  phi={f.phi_mean:.3f}  reward={f.reward:.3f}")
+    print(f"step={f.step}  phi={f.phi:.3f}  reward={f.reward_mean:.3f}")
 ```
 
 ### Train
@@ -127,7 +139,7 @@ trainer = CARLTrainer(TrainingConfig(
     output_repo="username/my-model",
     method="grpo",
     dataset_repo="username/my-data",
-    compute_target="a100",
+    compute_target="a100-large",
 ))
 run = await trainer.train()
 ```

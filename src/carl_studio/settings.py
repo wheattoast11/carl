@@ -18,12 +18,13 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from carl_studio.tier import Tier
-from carl_studio.types.config import ComputeTarget
+from carl_studio.types.config import ComputeTarget, normalize_compute_target
 
 
 # ---------------------------------------------------------------------------
 # Sub-models
 # ---------------------------------------------------------------------------
+
 
 class ObserveDefaults(BaseModel):
     """Default flags for carl observe."""
@@ -32,7 +33,9 @@ class ObserveDefaults(BaseModel):
     show_phi: bool = Field(default=True, description="Display coherence (Phi)")
     show_sparkline: bool = Field(default=True, description="Inline sparklines")
     show_discontinuity: bool = Field(default=True, description="Discontinuity alerts")
-    default_poll_interval: float = Field(default=2.0, ge=0.5, le=60.0, description="Live poll interval (seconds)")
+    default_poll_interval: float = Field(
+        default=2.0, ge=0.5, le=60.0, description="Live poll interval (seconds)"
+    )
     default_source: str = Field(default="file", description="Default data source: file or trackio")
 
 
@@ -109,6 +112,7 @@ def _find_local_config() -> Path | None:
 # Main settings model
 # ---------------------------------------------------------------------------
 
+
 class CARLSettings(BaseSettings):
     """CARL Studio user settings.
 
@@ -132,12 +136,18 @@ class CARLSettings(BaseSettings):
 
     # -- Credentials (auto-detect where possible) --
     hf_token: str | None = Field(default=None, description="HuggingFace token (auto-detected)")
-    anthropic_api_key: str | None = Field(default=None, description="Anthropic API key (for --diagnose)")
+    anthropic_api_key: str | None = Field(
+        default=None, description="Anthropic API key (for --diagnose)"
+    )
 
     # -- Defaults --
-    default_compute: ComputeTarget = Field(default=ComputeTarget.L40SX1, description="Default compute target")
+    default_compute: ComputeTarget = Field(
+        default=ComputeTarget.L40SX1, description="Default compute target"
+    )
     default_model: str = Field(default="Tesslate/OmniCoder-9B", description="Default base model")
-    hub_namespace: str = Field(default="", description="HF Hub namespace (auto-detected from whoami)")
+    hub_namespace: str = Field(
+        default="", description="HF Hub namespace (auto-detected from whoami)"
+    )
     trackio_url: str | None = Field(default=None, description="Trackio dashboard URL")
     naming_prefix: str = Field(default="il-terminals-carl", description="Naming convention prefix")
     log_level: str = Field(default="info", description="Logging level")
@@ -180,6 +190,7 @@ class CARLSettings(BaseSettings):
             if self.hf_token is None:
                 try:
                     from huggingface_hub import get_token
+
                     self.hf_token = get_token()
                 except Exception:
                     pass
@@ -190,6 +201,7 @@ class CARLSettings(BaseSettings):
         if not self.hub_namespace and self.hf_token:
             try:
                 from huggingface_hub import HfApi
+
                 info = HfApi(token=self.hf_token).whoami()
                 self.hub_namespace = info.get("name", "")
             except Exception:
@@ -210,9 +222,19 @@ class CARLSettings(BaseSettings):
         if local_config is not None:
             local_data = _load_yaml(local_config)
             # Only pull settings-relevant keys (not full project config)
-            for key in ("tier", "log_level", "default_compute", "default_model",
-                        "hub_namespace", "trackio_url", "naming_prefix",
-                        "observe_defaults", "preset", "hf_token", "anthropic_api_key"):
+            for key in (
+                "tier",
+                "log_level",
+                "default_compute",
+                "default_model",
+                "hub_namespace",
+                "trackio_url",
+                "naming_prefix",
+                "observe_defaults",
+                "preset",
+                "hf_token",
+                "anthropic_api_key",
+            ):
                 if key in local_data:
                     merged[key] = local_data[key]
 
@@ -256,12 +278,14 @@ class CARLSettings(BaseSettings):
     def tier_allows(self, feature: str) -> bool:
         """Check if the current effective tier allows a feature."""
         from carl_studio.tier import detect_effective_tier, tier_allows
+
         effective = detect_effective_tier(self.tier)
         return tier_allows(effective, feature)
 
     def get_effective_tier(self) -> Tier:
         """Get the effective tier after auto-elevation."""
         from carl_studio.tier import detect_effective_tier
+
         return detect_effective_tier(self.tier)
 
     def display_dict(self, mask_secrets: bool = True) -> dict[str, str]:
@@ -300,6 +324,7 @@ class CARLSettings(BaseSettings):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     """Load a YAML file, returning empty dict on any error."""
@@ -371,10 +396,12 @@ def set_field(settings: CARLSettings, key: str, value: str) -> CARLSettings:
         try:
             parsed = Preset(value.lower())
         except ValueError:
-            raise ValueError(f"Invalid preset '{value}'. Must be: research, production, quick, custom")
+            raise ValueError(
+                f"Invalid preset '{value}'. Must be: research, production, quick, custom"
+            )
     elif key == "default_compute":
         try:
-            parsed = ComputeTarget(value.lower())
+            parsed = ComputeTarget(normalize_compute_target(value))
         except ValueError:
             valid = ", ".join(ct.value for ct in ComputeTarget)
             raise ValueError(f"Invalid compute target '{value}'. Must be one of: {valid}")

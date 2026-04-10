@@ -25,6 +25,9 @@ from carl_studio.types.run import RunPhase, TrainingRun
 logger = logging.getLogger(__name__)
 
 
+TRAINING_EXTRA_HINT = "Install training dependencies with: pip install 'carl-studio[training]'"
+
+
 # ---------------------------------------------------------------------------
 # Compute target -> backend mapping
 # ---------------------------------------------------------------------------
@@ -105,6 +108,7 @@ class CARLTrainer:
             raise ValueError("No job to watch — call train() first")
 
         from carl_studio.compute import get_backend
+
         backend = get_backend(_REMOTE_BACKEND)
         import asyncio
 
@@ -151,6 +155,7 @@ class CARLTrainer:
         """Gate: does a checkpoint exist on Hub with actual weights?"""
         try:
             from huggingface_hub import HfApi
+
             api = HfApi(token=token)
             info = api.model_info(model_id, token=token)
             files = {s.rfilename for s in info.siblings}
@@ -183,8 +188,7 @@ class CARLTrainer:
         flavor = _COMPUTE_TO_FLAVOR.get(self.config.compute_target)
         if flavor is None:
             raise ValueError(
-                f"No hardware flavor mapping for compute target: "
-                f"{self.config.compute_target}"
+                f"No hardware flavor mapping for compute target: {self.config.compute_target}"
             )
 
         timeout_seconds = self._parse_timeout(self.config.timeout)
@@ -224,9 +228,7 @@ class CARLTrainer:
         elif self.config.method == TrainingMethod.GRPO:
             await self._run_grpo()
         else:
-            raise ValueError(
-                f"Local training not yet supported for method: {self.config.method}"
-            )
+            raise ValueError(f"Local training not yet supported for method: {self.config.method}")
 
         self.run.phase = RunPhase.COMPLETE
         logger.info("Local training complete: run_id=%s", self.run.id)
@@ -243,8 +245,11 @@ class CARLTrainer:
         to activate the vision encoder. Do NOT pass tokenizer to TRL trainers
         in VLM mode — let them auto-load AutoProcessor.
         """
-        import torch
-        from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        try:
+            import torch
+            from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+        except ImportError as exc:
+            raise ImportError(TRAINING_EXTRA_HINT) from exc
 
         cfg = self.config
         hf_token = self._get_hf_token()
@@ -275,6 +280,7 @@ class CARLTrainer:
         # VLM mode: use AutoModelForImageTextToText to activate vision encoder
         if cfg.vlm_mode:
             from transformers import AutoModelForImageTextToText
+
             self._model = AutoModelForImageTextToText.from_pretrained(
                 cfg.base_model,
                 device_map="auto",
@@ -324,22 +330,21 @@ class CARLTrainer:
 
     async def _run_sft(self) -> None:
         """Run SFT training with TRL SFTTrainer."""
-        from datasets import load_dataset
-        from peft import LoraConfig as PeftLoraConfig
-        from trl import SFTConfig, SFTTrainer
+        try:
+            from datasets import load_dataset
+            from peft import LoraConfig as PeftLoraConfig
+            from trl import SFTConfig, SFTTrainer
+        except ImportError as exc:
+            raise ImportError(TRAINING_EXTRA_HINT) from exc
 
         cfg = self.config
         hf_token = self._get_hf_token()
 
-        dataset = load_dataset(
-            cfg.dataset_repo, split=cfg.dataset_split, token=hf_token
-        )
+        dataset = load_dataset(cfg.dataset_repo, split=cfg.dataset_split, token=hf_token)
 
         eval_dataset = None
         if cfg.eval_dataset_repo:
-            eval_dataset = load_dataset(
-                cfg.eval_dataset_repo, split=cfg.eval_split, token=hf_token
-            )
+            eval_dataset = load_dataset(cfg.eval_dataset_repo, split=cfg.eval_split, token=hf_token)
 
         peft_config = PeftLoraConfig(
             r=cfg.lora.r,
@@ -401,22 +406,21 @@ class CARLTrainer:
 
     async def _run_grpo(self) -> None:
         """Run GRPO training with CARL rewards + cascade + callbacks."""
-        from datasets import load_dataset
-        from peft import LoraConfig as PeftLoraConfig
-        from trl import GRPOConfig, GRPOTrainer
+        try:
+            from datasets import load_dataset
+            from peft import LoraConfig as PeftLoraConfig
+            from trl import GRPOConfig, GRPOTrainer
+        except ImportError as exc:
+            raise ImportError(TRAINING_EXTRA_HINT) from exc
 
         cfg = self.config
         hf_token = self._get_hf_token()
 
-        dataset = load_dataset(
-            cfg.dataset_repo, split=cfg.dataset_split, token=hf_token
-        )
+        dataset = load_dataset(cfg.dataset_repo, split=cfg.dataset_split, token=hf_token)
 
         eval_dataset = None
         if cfg.eval_dataset_repo:
-            eval_dataset = load_dataset(
-                cfg.eval_dataset_repo, split=cfg.eval_split, token=hf_token
-            )
+            eval_dataset = load_dataset(cfg.eval_dataset_repo, split=cfg.eval_split, token=hf_token)
 
         # Build reward chain with cascade wrapping
         self._reward_fns = self._build_rewards(self._model, self._tokenizer)
@@ -486,9 +490,7 @@ class CARLTrainer:
     # Reward construction
     # ------------------------------------------------------------------
 
-    def _build_rewards(
-        self, model: Any, tokenizer: Any
-    ) -> list[Any]:
+    def _build_rewards(self, model: Any, tokenizer: Any) -> list[Any]:
         """Build 6 reward functions: 5 task + 1 CARL, all cascade-wrapped.
 
         Two-stage cascade (matches CascadeRewardManager API):
@@ -602,9 +604,7 @@ class CARLTrainer:
         if carl_fn is not None:
             callbacks.append(CoherenceMonitorCallback(carl_fn))
         else:
-            logger.warning(
-                "Could not locate CARL reward function for coherence monitoring"
-            )
+            logger.warning("Could not locate CARL reward function for coherence monitoring")
 
         return callbacks
 
@@ -663,8 +663,7 @@ class CARLTrainer:
 
         if total <= 0:
             raise ValueError(
-                f"Cannot parse timeout: {timeout_str!r}.  "
-                "Use '3h', '90m', '2h30m', or '14400'."
+                f"Cannot parse timeout: {timeout_str!r}.  Use '3h', '90m', '2h30m', or '14400'."
             )
         return total
 
@@ -679,6 +678,7 @@ class CARLTrainer:
 # ---------------------------------------------------------------------------
 # Module-level helpers (no heavy imports)
 # ---------------------------------------------------------------------------
+
 
 def _apply_weight(reward_fn: Any, weight: float) -> Any:
     """Wrap a reward function to multiply outputs by a static weight.

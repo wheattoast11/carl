@@ -18,7 +18,15 @@ import json
 from pathlib import Path
 from typing import Any, Optional
 
-from transformers import TrainerCallback
+try:
+    from transformers import TrainerCallback
+except Exception:
+
+    class TrainerCallback:  # type: ignore[no-redef]
+        """Fallback base when transformers is unavailable."""
+
+        pass
+
 
 from carl_studio.primitives.coherence_trace import CoherenceTrace, select_traces
 from carl_studio.primitives.constants import KAPPA, SIGMA
@@ -137,6 +145,7 @@ class CoherenceTraceCallback(TrainerCallback):
         # Spread metrics (variance within batch — measures diversity)
         if n > 1:
             import numpy as np
+
             logs["trace/phi_spread"] = float(np.std(phi_means))
             logs["trace/carl_spread"] = float(np.std(carl_vals))
 

@@ -19,6 +19,19 @@ def _stub_carl_studio_init():
         if hasattr(mod, "__version__"):
             return  # Already loaded fine
 
+    # The local transformers install is missing compatible huggingface_hub metadata.
+    # Provide a tiny fallback so tests that only need TrainerCallback can import cleanly.
+    try:
+        import transformers  # noqa: F401
+    except Exception:
+        transformers_stub = types.ModuleType("transformers")
+
+        class TrainerCallback:  # type: ignore[too-many-ancestors]
+            pass
+
+        transformers_stub.TrainerCallback = TrainerCallback
+        sys.modules["transformers"] = transformers_stub
+
     # Create stub package
     pkg = types.ModuleType("carl_studio")
     pkg.__path__ = ["src/carl_studio"]
@@ -85,7 +98,10 @@ def _stub_carl_studio_init():
     # Load __init__.py for subpackages that export public API
     # (e.g. carl_studio.compute.get_backend lives in __init__.py)
     _init_modules = {
+        "carl_studio.primitives": "src/carl_studio/primitives/__init__.py",
         "carl_studio.compute": "src/carl_studio/compute/__init__.py",
+        "carl_studio.training": "src/carl_studio/training/__init__.py",
+        "carl_studio.training.rewards": "src/carl_studio/training/rewards/__init__.py",
         "carl_studio.observe": "src/carl_studio/observe/__init__.py",
     }
     for name, path in _init_modules.items():
@@ -97,6 +113,29 @@ def _stub_carl_studio_init():
                     spec.loader.exec_module(existing)
             except Exception:
                 pass
+
+    # Load the real top-level package now that the light submodules are stubbed.
+    # This restores public symbols such as PhaseTransitionGate, KAPPA, and CoherenceProbe
+    # without triggering the heavyweight transformers path.
+    pkg = sys.modules["carl_studio"]
+    try:
+        spec = importlib.util.spec_from_file_location("carl_studio", "src/carl_studio/__init__.py")
+        if spec and spec.loader:
+            pkg.__file__ = "src/carl_studio/__init__.py"
+            pkg.__spec__ = spec
+            spec.loader.exec_module(pkg)
+    except Exception:
+        pass
+
+    for attr in ("observe", "eval", "training", "compute", "primitives", "environments", "data"):
+        mod = sys.modules.get(f"carl_studio.{attr}")
+        if mod is not None:
+            setattr(pkg, attr, mod)
+
+    if "carl_studio.observe" in sys.modules and "carl_studio.observe.data_source" in sys.modules:
+        sys.modules["carl_studio.observe"].data_source = sys.modules[
+            "carl_studio.observe.data_source"
+        ]
 
 
 # Run stub before any test imports

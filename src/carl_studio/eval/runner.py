@@ -19,14 +19,19 @@ import tempfile
 import time
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
+
+
+TRAINING_EXTRA_HINT = "Install training dependencies with: pip install 'carl-studio[training]'"
+HF_EXTRA_HINT = "Install HF Jobs support with: pip install 'carl-studio[hf]'"
 
 
 # ---------------------------------------------------------------------------
 # Config / Report / Gate
 # ---------------------------------------------------------------------------
+
 
 class EvalConfig(BaseModel):
     """Evaluation configuration."""
@@ -37,12 +42,16 @@ class EvalConfig(BaseModel):
         description="HF dataset ID or local path",
     )
     dataset_split: str = Field(default="test", description="Dataset split to load")
-    data_files: str | None = Field(default=None, description="Data files pattern (e.g. 'eval.jsonl')")
+    data_files: str | None = Field(
+        default=None, description="Data files pattern (e.g. 'eval.jsonl')"
+    )
     phase: str = Field(
         default="auto",
         description="Eval phase: '1' (tool-call), '2' (vision), '2prime' (env), 'auto'",
     )
-    threshold: float = Field(default=0.3, ge=0.0, le=1.0, description="Pass threshold for primary metric")
+    threshold: float = Field(
+        default=0.5, ge=0.0, le=1.0, description="Pass threshold for primary metric"
+    )
     max_samples: int | None = Field(default=None, ge=1, description="Cap number of eval samples")
     batch_size: int = Field(default=1, ge=1, description="Inference batch size")
     device: str = Field(default="auto", description="Device: 'auto', 'cpu', 'cuda', 'cuda:0', etc.")
@@ -58,6 +67,19 @@ class EvalConfig(BaseModel):
         default=None,
         description="SFT adapter to merge before GRPO adapter",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def apply_default_threshold(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        if data.get("threshold") is None:
+            phase = str(data.get("phase", "auto"))
+            if phase == "auto":
+                phase = _detect_phase(str(data.get("checkpoint", "")))
+            data["threshold"] = 0.30 if phase in ("2", "2prime") else 0.50
+        return data
 
     @field_validator("phase")
     @classmethod
@@ -89,7 +111,7 @@ class EvalGate:
     # Default thresholds per phase
     PHASE_DEFAULTS: dict[str, float] = {
         "1": 0.5,
-        "2": 0.5,
+        "2": 0.30,
         "2prime": 0.30,
     }
 
@@ -147,7 +169,10 @@ EVAL_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path relative to sandbox root."},
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to sandbox root.",
+                    },
                 },
                 "required": ["path"],
             },
@@ -161,7 +186,10 @@ EVAL_TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "File path relative to sandbox root."},
+                    "path": {
+                        "type": "string",
+                        "description": "File path relative to sandbox root.",
+                    },
                     "content": {"type": "string", "description": "The content to write."},
                 },
                 "required": ["path", "content"],
@@ -202,6 +230,7 @@ EVAL_TOOLS = [
 # ---------------------------------------------------------------------------
 # Eval Sandbox (lightweight, no external deps)
 # ---------------------------------------------------------------------------
+
 
 class EvalSandbox:
     """Lightweight sandbox for eval. Same interface as CodingSandboxEnv."""
@@ -244,7 +273,9 @@ class EvalSandbox:
                     f.write(code)
                 result = subprocess.run(
                     ["python", fpath],
-                    capture_output=True, text=True, timeout=10,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                     cwd=self.workdir,
                 )
                 if result.returncode == 0:
@@ -257,8 +288,11 @@ class EvalSandbox:
             elif name == "run_shell":
                 cmd = args.get("command", "")
                 result = subprocess.run(
-                    cmd, shell=True,
-                    capture_output=True, text=True, timeout=10,
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
                     cwd=self.workdir,
                 )
                 if result.returncode == 0:
@@ -292,11 +326,11 @@ class EvalSandbox:
 
 # Pre-compiled patterns
 _FUNC_PATTERN = re.compile(
-    r'<function=([^>]+)>(.*?)</function>',
+    r"<function=([^>]+)>(.*?)</function>",
     re.DOTALL,
 )
 _PARAM_PATTERN = re.compile(
-    r'<parameter=([^>]+)>(.*?)</parameter>',
+    r"<parameter=([^>]+)>(.*?)</parameter>",
     re.DOTALL,
 )
 
@@ -338,7 +372,7 @@ def parse_tool_calls(text: str) -> list[dict[str, Any]]:
         end = text.find(tag_end, start)
         if end == -1:
             break
-        block = text[start + len(tag_start):end].strip()
+        block = text[start + len(tag_start) : end].strip()
         try:
             data = json.loads(block)
             if "function" in data:
@@ -362,15 +396,15 @@ def parse_tool_calls(text: str) -> list[dict[str, Any]]:
     # --- Format 3: Bare JSON with "name" + "arguments" keys ---
     i = 0
     while i < len(text):
-        if text[i] == '{':
+        if text[i] == "{":
             depth = 0
             for j in range(i, len(text)):
-                if text[j] == '{':
+                if text[j] == "{":
                     depth += 1
-                elif text[j] == '}':
+                elif text[j] == "}":
                     depth -= 1
                 if depth == 0:
-                    candidate = text[i:j + 1]
+                    candidate = text[i : j + 1]
                     try:
                         data = json.loads(candidate)
                         if isinstance(data, dict) and "name" in data:
@@ -393,6 +427,7 @@ def parse_tool_calls(text: str) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # Per-phase metric computation
 # ---------------------------------------------------------------------------
+
 
 def _compute_phase1_metrics(
     completions: list[str],
@@ -418,10 +453,13 @@ def _compute_phase1_metrics(
         chain_lengths.append(int(s.get("chain_length", 1)))
 
     selection_scores = tool_selection_reward(
-        completions, expected_tools=expected_tools,
+        completions,
+        expected_tools=expected_tools,
     )
     chain_scores = chain_completion_reward(
-        completions, expected_tools=expected_tools, chain_length=chain_lengths,
+        completions,
+        expected_tools=expected_tools,
+        chain_length=chain_lengths,
     )
 
     format_validity = statistics.mean(format_scores) if format_scores else 0.0
@@ -487,17 +525,58 @@ def _compute_phase2_metrics(
     }
 
 
+def _compute_phase2prime_metrics(
+    completions: list[str],
+    samples: list[dict[str, Any]],
+) -> dict[str, float]:
+    """Phase 2' metrics: task completion rate and mean CARL score.
+
+    The helper accepts either explicit completion flags (`completed`, `success`,
+    `task_completed`) or falls back to a tool-call heuristic when only model
+    outputs are available.
+    """
+    task_completion_scores: list[float] = []
+    carl_scores: list[float] = []
+
+    for idx, sample in enumerate(samples):
+        completion = completions[idx] if idx < len(completions) else ""
+
+        completed = sample.get("completed", sample.get("success", sample.get("task_completed")))
+        if completed is None:
+            completed = bool(parse_tool_calls(completion))
+
+        task_completion_scores.append(1.0 if bool(completed) else 0.0)
+
+        carl_score = sample.get("carl_score", sample.get("reward_mean", sample.get("score", 0.0)))
+        try:
+            carl_scores.append(float(carl_score))
+        except (TypeError, ValueError):
+            carl_scores.append(0.0)
+
+    task_completion_rate = (
+        statistics.mean(task_completion_scores) if task_completion_scores else 0.0
+    )
+    mean_carl_score = statistics.mean(carl_scores) if carl_scores else 0.0
+
+    return {
+        "task_completion_rate": round(task_completion_rate, 4),
+        "task_completion": round(task_completion_rate, 4),
+        "mean_carl_score": round(mean_carl_score, 4),
+    }
+
+
 # Primary metric per phase
 _PRIMARY_METRIC: dict[str, str] = {
     "1": "chain_completion_rate",
     "2": "click_accuracy",
-    "2prime": "task_completion",
+    "2prime": "task_completion_rate",
 }
 
 
 # ---------------------------------------------------------------------------
 # EvalRunner
 # ---------------------------------------------------------------------------
+
 
 class EvalRunner:
     """Runs evaluation for a checkpoint against a dataset.
@@ -613,12 +692,15 @@ class EvalRunner:
 
                     try:
                         text_prompt = tokenizer.apply_chat_template(
-                            conversation, **chat_kwargs,
+                            conversation,
+                            **chat_kwargs,
                         )
                     except TypeError:
                         # Older tokenizer without tools/enable_thinking support
                         text_prompt = tokenizer.apply_chat_template(
-                            conversation, tokenize=False, add_generation_prompt=True,
+                            conversation,
+                            tokenize=False,
+                            add_generation_prompt=True,
                         )
 
                     inputs = tokenizer(text_prompt, return_tensors="pt").to(model.device)
@@ -631,7 +713,7 @@ class EvalRunner:
                             pad_token_id=tokenizer.pad_token_id,
                         )
 
-                    new_tokens = output_ids[0][inputs["input_ids"].shape[1]:]
+                    new_tokens = output_ids[0][inputs["input_ids"].shape[1] :]
                     total_generated_tokens += len(new_tokens)
 
                     # Decode both raw (preserves special tokens) and clean
@@ -646,21 +728,25 @@ class EvalRunner:
                         break
 
                     has_tool_call = True
-                    conversation.append({
-                        "role": "assistant",
-                        "content": response,
-                        "tool_calls": [
-                            {"function": {"name": tc["name"], "arguments": tc["arguments"]}}
-                            for tc in tool_calls
-                        ],
-                    })
+                    conversation.append(
+                        {
+                            "role": "assistant",
+                            "content": response,
+                            "tool_calls": [
+                                {"function": {"name": tc["name"], "arguments": tc["arguments"]}}
+                                for tc in tool_calls
+                            ],
+                        }
+                    )
 
                     for tc in tool_calls:
                         tool_result = sandbox.execute_tool(tc["name"], tc["arguments"])
-                        conversation.append({
-                            "role": "tool",
-                            "content": tool_result[:2000],
-                        })
+                        conversation.append(
+                            {
+                                "role": "tool",
+                                "content": tool_result[:2000],
+                            }
+                        )
 
                     if sandbox.task_completed:
                         break
@@ -688,9 +774,13 @@ class EvalRunner:
                 status = "PASS" if sandbox.task_completed else ("TOOL" if has_tool_call else "TEXT")
                 logger.info(
                     "[%3d/%d] %4s | calls=%d fail=%d tok=%d | %s",
-                    idx + 1, len(samples), status,
-                    sandbox.tool_calls, sandbox.tool_failures,
-                    total_generated_tokens, user_task[:50],
+                    idx + 1,
+                    len(samples),
+                    status,
+                    sandbox.tool_calls,
+                    sandbox.tool_failures,
+                    total_generated_tokens,
+                    user_task[:50],
                 )
 
         elapsed = time.time() - t0
@@ -700,12 +790,11 @@ class EvalRunner:
         tool_format_compliance = sum(1 for r in results if r["has_tool_call"]) / total
         mean_tool_calls = sum(r["tool_calls"] for r in results) / total
         total_tool_calls = sum(r["tool_calls"] for r in results)
-        failure_rate = (
-            sum(r["tool_failures"] for r in results) / max(total_tool_calls, 1)
-        )
+        failure_rate = sum(r["tool_failures"] for r in results) / max(total_tool_calls, 1)
         mean_tokens = sum(r["tokens"] for r in results) / total
 
         metrics = {
+            "task_completion_rate": round(task_completion, 4),
             "task_completion": round(task_completion, 4),
             "tool_format_compliance": round(tool_format_compliance, 4),
             "mean_tool_calls": round(mean_tool_calls, 2),
@@ -713,12 +802,14 @@ class EvalRunner:
             "mean_tokens": round(mean_tokens, 0),
         }
 
-        primary_metric = "task_completion"
+        primary_metric = "task_completion_rate"
         primary_value = task_completion
 
         logger.info(
             "Phase 2' eval complete: %d samples, %.1fs, task_completion=%.2f%%",
-            total, elapsed, task_completion * 100,
+            total,
+            elapsed,
+            task_completion * 100,
         )
 
         return EvalReport(
@@ -743,12 +834,12 @@ class EvalRunner:
         try:
             import torch
         except ImportError as exc:
-            raise ImportError("PyTorch required: pip install torch") from exc
+            raise ImportError(f"PyTorch required. {TRAINING_EXTRA_HINT}") from exc
 
         try:
             from transformers import AutoModelForImageTextToText, AutoProcessor
         except ImportError as exc:
-            raise ImportError("transformers>=5.3.0 required") from exc
+            raise ImportError(f"transformers>=5.3.0 required. {TRAINING_EXTRA_HINT}") from exc
 
         device = self.config.device
         if device == "auto":
@@ -773,6 +864,7 @@ class EvalRunner:
         if self.config.sft_adapter:
             try:
                 from peft import PeftModel
+
                 logger.info("Merging SFT adapter: %s", self.config.sft_adapter)
                 model = PeftModel.from_pretrained(model, self.config.sft_adapter, token=hf_token)
                 model = model.merge_and_unload()
@@ -784,6 +876,7 @@ class EvalRunner:
         if checkpoint != base_model:
             try:
                 from peft import PeftModel
+
                 logger.info("Merging GRPO adapter: %s", checkpoint)
                 model = PeftModel.from_pretrained(model, checkpoint, token=hf_token)
                 model = model.merge_and_unload()
@@ -797,16 +890,25 @@ class EvalRunner:
         # Load tokenizer from adapter repo (has Qwen 3.5 chat template)
         tokenizer_source = checkpoint
         processor = AutoProcessor.from_pretrained(
-            tokenizer_source, token=hf_token, trust_remote_code=True,
+            tokenizer_source,
+            token=hf_token,
+            trust_remote_code=True,
         )
         tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
 
         # Verify chat template has tool support; fall back to Qwen base
-        if not getattr(tokenizer, "chat_template", None) or "tool_call" not in tokenizer.chat_template:
-            logger.warning("Tokenizer from %s missing tool template, trying Qwen/Qwen3.5-9B", tokenizer_source)
+        if (
+            not getattr(tokenizer, "chat_template", None)
+            or "tool_call" not in tokenizer.chat_template
+        ):
+            logger.warning(
+                "Tokenizer from %s missing tool template, trying Qwen/Qwen3.5-9B", tokenizer_source
+            )
             try:
                 processor = AutoProcessor.from_pretrained(
-                    "Qwen/Qwen3.5-9B", token=hf_token, trust_remote_code=True,
+                    "Qwen/Qwen3.5-9B",
+                    token=hf_token,
+                    trust_remote_code=True,
                 )
                 tokenizer = processor.tokenizer if hasattr(processor, "tokenizer") else processor
             except Exception:
@@ -825,12 +927,12 @@ class EvalRunner:
         try:
             import torch
         except ImportError as exc:
-            raise ImportError("PyTorch required: pip install torch") from exc
+            raise ImportError(f"PyTorch required. {TRAINING_EXTRA_HINT}") from exc
 
         try:
             from transformers import AutoTokenizer
         except ImportError as exc:
-            raise ImportError("transformers required") from exc
+            raise ImportError(f"transformers required. {TRAINING_EXTRA_HINT}") from exc
 
         device = self.config.device
         if device == "auto":
@@ -839,14 +941,18 @@ class EvalRunner:
         if self.phase == "2":
             try:
                 from transformers import AutoModelForImageTextToText
+
                 model = AutoModelForImageTextToText.from_pretrained(
                     self.config.checkpoint,
                     torch_dtype=torch.bfloat16 if device != "cpu" else torch.float32,
                     device_map=device if device.startswith("cuda") else None,
                 )
             except Exception:
-                logger.warning("AutoModelForImageTextToText failed, falling back to AutoModelForCausalLM")
+                logger.warning(
+                    "AutoModelForImageTextToText failed, falling back to AutoModelForCausalLM"
+                )
                 from transformers import AutoModelForCausalLM
+
                 model = AutoModelForCausalLM.from_pretrained(
                     self.config.checkpoint,
                     torch_dtype=torch.bfloat16 if device != "cpu" else torch.float32,
@@ -854,6 +960,7 @@ class EvalRunner:
                 )
         else:
             from transformers import AutoModelForCausalLM
+
             model = AutoModelForCausalLM.from_pretrained(
                 self.config.checkpoint,
                 torch_dtype=torch.bfloat16 if device != "cpu" else torch.float32,
@@ -895,9 +1002,7 @@ class EvalRunner:
         try:
             from datasets import load_dataset
         except ImportError as exc:
-            raise ImportError(
-                "The 'datasets' package is required: pip install datasets"
-            ) from exc
+            raise ImportError(f"The 'datasets' package is required. {TRAINING_EXTRA_HINT}") from exc
 
         hf_token = os.environ.get("HF_TOKEN") or _get_hf_token()
         load_kwargs: dict[str, Any] = {
@@ -935,7 +1040,9 @@ class EvalRunner:
                 if isinstance(prompt, list):
                     if hasattr(tokenizer, "apply_chat_template"):
                         text = tokenizer.apply_chat_template(
-                            prompt, tokenize=False, add_generation_prompt=True,
+                            prompt,
+                            tokenize=False,
+                            add_generation_prompt=True,
                         )
                     else:
                         text = "\n".join(
@@ -945,7 +1052,10 @@ class EvalRunner:
                     text = str(prompt)
 
                 inputs = tokenizer(
-                    text, return_tensors="pt", truncation=True, max_length=2048,
+                    text,
+                    return_tensors="pt",
+                    truncation=True,
+                    max_length=2048,
                 )
                 inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
@@ -957,7 +1067,7 @@ class EvalRunner:
                         pad_token_id=tokenizer.pad_token_id,
                     )
 
-                new_tokens = output_ids[0, inputs["input_ids"].shape[1]:]
+                new_tokens = output_ids[0, inputs["input_ids"].shape[1] :]
                 completion = tokenizer.decode(new_tokens, skip_special_tokens=True)
                 completions.append(completion)
 
@@ -996,6 +1106,7 @@ class EvalRunner:
         """Optionally compute CARL coherence metrics."""
         try:
             import torch
+
             if not torch.cuda.is_available():
                 return None
         except ImportError:
@@ -1017,7 +1128,10 @@ class EvalRunner:
                     continue
                 try:
                     inputs = tokenizer(
-                        text, return_tensors="pt", truncation=True, max_length=512,
+                        text,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=512,
                     )
                     inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
@@ -1058,6 +1172,7 @@ class EvalRunner:
 # ---------------------------------------------------------------------------
 # Remote eval: HF Jobs
 # ---------------------------------------------------------------------------
+
 
 def generate_eval_script(config: EvalConfig) -> str:
     """Generate a self-contained PEP 723 eval script for HF Jobs.
@@ -1438,7 +1553,10 @@ def submit_eval_job(
     Returns:
         HF Job ID string.
     """
-    from huggingface_hub import HfApi, get_token
+    try:
+        from huggingface_hub import HfApi, get_token
+    except ImportError as exc:
+        raise ImportError(HF_EXTRA_HINT) from exc
 
     script = generate_eval_script(config)
 
@@ -1477,7 +1595,10 @@ def poll_eval_results(
     Returns:
         EvalReport if results found, None on timeout/failure.
     """
-    from huggingface_hub import HfApi
+    try:
+        from huggingface_hub import HfApi
+    except ImportError as exc:
+        raise ImportError(HF_EXTRA_HINT) from exc
 
     api = HfApi()
     start = time.time()
@@ -1535,7 +1656,9 @@ def _parse_eval_logs(api: Any, job_id: str) -> EvalReport | None:
 def _build_report_from_json(data: dict[str, Any]) -> EvalReport:
     """Build EvalReport from the JSON output of the eval script."""
     metrics_data = data.get("metrics", {})
-    task_completion = metrics_data.get("task_completion", 0.0)
+    task_completion = metrics_data.get(
+        "task_completion_rate", metrics_data.get("task_completion", 0.0)
+    )
     gate_pass = metrics_data.get("phase2prime_pass", False)
 
     # Remove gate flag from metrics dict
@@ -1546,7 +1669,7 @@ def _build_report_from_json(data: dict[str, Any]) -> EvalReport:
         phase="2prime",
         n_samples=data.get("eval_samples", 0),
         metrics=clean_metrics,
-        primary_metric="task_completion",
+        primary_metric="task_completion_rate",
         primary_value=task_completion,
         threshold=0.30,
         passed=gate_pass,
@@ -1557,10 +1680,12 @@ def _build_report_from_json(data: dict[str, Any]) -> EvalReport:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_hf_token() -> str | None:
     """Get HF token from huggingface_hub credentials (not shell env)."""
     try:
         from huggingface_hub import get_token
+
         return get_token()
     except Exception:
         return None

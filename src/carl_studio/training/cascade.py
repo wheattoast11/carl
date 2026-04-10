@@ -18,7 +18,14 @@ from __future__ import annotations
 import math
 from typing import Any, Callable
 
-from transformers import TrainerCallback
+try:
+    from transformers import TrainerCallback
+except Exception:
+
+    class TrainerCallback:  # type: ignore[no-redef]
+        """Fallback base when transformers is unavailable."""
+
+        pass
 
 
 class CascadeRewardManager:
@@ -98,7 +105,7 @@ class CascadeRewardManager:
 
         # Gate condition: metric >= adaptive threshold for min_above of last window steps
         # AND the threshold itself is nonzero (model is actually succeeding sometimes)
-        tail = self._gate_history[-self._gate_window:]
+        tail = self._gate_history[-self._gate_window :]
         above = sum(1 for v in tail if v >= threshold and v > 0)
 
         if above >= self._gate_min_above and threshold > 0:
@@ -153,9 +160,7 @@ class CascadeCallback(TrainerCallback):
     def __init__(self, cascade_manager: CascadeRewardManager) -> None:
         self.cascade = cascade_manager
 
-    def on_step_begin(
-        self, args: Any, state: Any, control: Any, **kwargs: Any
-    ) -> None:
+    def on_step_begin(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
         self.cascade._step = state.global_step
 
     def on_log(
