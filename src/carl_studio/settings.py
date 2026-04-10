@@ -139,6 +139,10 @@ class CARLSettings(BaseSettings):
     anthropic_api_key: str | None = Field(
         default=None, description="Anthropic API key (for --diagnose)"
     )
+    openrouter_api_key: str | None = Field(default=None, description="OpenRouter API key")
+    openai_api_key: str | None = Field(default=None, description="OpenAI API key")
+    llm_model: str = Field(default="", description="Default LLM model for synthesis")
+    llm_base_url: str = Field(default="", description="Custom OpenAI-compatible base URL")
 
     # -- Defaults --
     default_compute: ComputeTarget = Field(
