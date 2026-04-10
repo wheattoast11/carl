@@ -21,6 +21,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from carl_studio import __version__
+
 logger = logging.getLogger(__name__)
 
 
@@ -1196,7 +1198,7 @@ def generate_eval_script(config: EvalConfig) -> str:
         # /// script
         # requires-python = ">=3.10"
         # dependencies = [
-        #     "carl-studio @ https://huggingface.co/datasets/wheattoast11/zero-rl-tool-calling-data/resolve/main/carl_studio-0.3.0-py3-none-any.whl",
+        #     "carl-studio @ https://huggingface.co/datasets/wheattoast11/zero-rl-tool-calling-data/resolve/main/carl_studio-{__version__}-py3-none-any.whl",
         #     "transformers>=5.3.0",
         #     "peft>=0.18.0",
         #     "accelerate>=0.24.0",

@@ -59,7 +59,7 @@ pyright src/carl_studio/types/ src/carl_studio/tier.py src/carl_studio/settings.
 ## Publishing
 - PyPI: Trusted publishing via `.github/workflows/publish.yml`. Create GitHub release to trigger.
 - HF wheel: Upload to `wheattoast11/zero-rl-tool-calling-data`
-- Version in `pyproject.toml`. Bump before release.
+- Release workflow auto-bumps to the next minor version unless `pyproject.toml` or the release tag already specifies a higher manual version.
 
 ## Gotchas
 - `_safe_path`: Use `startswith(workdir + os.sep)` not bare `startswith(workdir)`

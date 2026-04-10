@@ -38,7 +38,7 @@
 
 - PyPI: Trusted publishing via `.github/workflows/publish.yml`. Create GitHub release → auto-publishes.
 - HF wheel: Upload to `wheattoast11/zero-rl-tool-calling-data` for training script consumption.
-- Version in `pyproject.toml`. Bump before release.
+- Release workflow auto-bumps to the next minor version unless `pyproject.toml` or the release tag already sets a higher manual version.
 
 ## Commands
 

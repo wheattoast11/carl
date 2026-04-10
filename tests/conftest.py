@@ -6,6 +6,15 @@ transformers import. Tests that need settings/tier can run without torch/transfo
 
 import sys
 import types
+from pathlib import Path
+
+
+def _read_repo_version() -> str:
+    init_path = Path("src/carl_studio/__init__.py")
+    for line in init_path.read_text().splitlines():
+        if line.startswith("__version__ = "):
+            return line.split("=", 1)[1].strip().strip('"')
+    raise RuntimeError(f"Could not determine version from {init_path}")
 
 
 def _stub_carl_studio_init():
@@ -35,7 +44,7 @@ def _stub_carl_studio_init():
     # Create stub package
     pkg = types.ModuleType("carl_studio")
     pkg.__path__ = ["src/carl_studio"]
-    pkg.__version__ = "0.3.0"
+    pkg.__version__ = _read_repo_version()
     pkg.__all__ = []
     sys.modules["carl_studio"] = pkg
 

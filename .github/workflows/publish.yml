@@ -7,12 +7,42 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install build
+      - name: Resolve release version
+        id: resolve_version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: python scripts/release_version.py --apply --release-tag "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT"
+      - name: Commit version update
+        if: steps.resolve_version.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.resolve_version.outputs.version }}
+        run: |
+          git add pyproject.toml src/carl_studio/__init__.py
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "chore: bump release version to v$VERSION"
+          git push origin HEAD:${{ github.event.release.target_commitish }}
+      - name: Align release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_TAG: ${{ github.event.release.tag_name }}
+          TARGET_TAG: v${{ steps.resolve_version.outputs.version }}
+        run: |
+          if [ "$SOURCE_TAG" = "$TARGET_TAG" ]; then
+            exit 0
+          fi
+          if ! git rev-parse "$TARGET_TAG" >/dev/null 2>&1; then
+            git tag "$TARGET_TAG"
+          fi
+          git push origin "$TARGET_TAG"
+          gh release edit "$SOURCE_TAG" --tag "$TARGET_TAG"
       - run: python -m build
       - uses: pypa/gh-action-pypi-publish@release/v1
