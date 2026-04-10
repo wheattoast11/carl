@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/carl-pipeline.svg" alt="CARL Pipeline" width="720"/>
+  <img src="assets/carl-hero.gif" alt="CARL: from chaos to crystal" width="720"/>
 </p>
 
 <h1 align="center">CARL</h1>
