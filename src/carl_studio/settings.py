@@ -144,6 +144,10 @@ class CARLSettings(BaseSettings):
     llm_model: str = Field(default="", description="Default LLM model for synthesis")
     llm_base_url: str = Field(default="", description="Custom OpenAI-compatible base URL")
 
+    # Platform (carl.camp)
+    supabase_url: str = Field(default="", description="Supabase project URL")
+    supabase_anon_key: str = Field(default="", description="Supabase anon key (public)")
+
     # -- Defaults --
     default_compute: ComputeTarget = Field(
         default=ComputeTarget.L40SX1, description="Default compute target"
