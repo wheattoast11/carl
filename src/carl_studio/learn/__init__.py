@@ -17,6 +17,7 @@ from carl_studio.learn.qa_gen import QATier, QAPair, QAGenerator
 from carl_studio.learn.quality import QualityResult, QualityGate
 from carl_studio.learn.pipeline import LearnConfig, LearnPipeline
 from carl_studio.learn.synthesize import SynthesizeConfig, SynthesizePipeline, SynthesizeResult
+from carl_studio.learn.planner import LearningPlan, interpret_natural
 
 __all__ = [
     "SourceType",
@@ -32,4 +33,6 @@ __all__ = [
     "SynthesizeConfig",
     "SynthesizePipeline",
     "SynthesizeResult",
+    "LearningPlan",
+    "interpret_natural",
 ]

@@ -30,6 +30,7 @@ class SourceType(str, Enum):
     SKILL = "skill"   # skill://path/to/skill.md
     MCP = "mcp"       # mcp://server-name
     CLAW = "claw"     # claw://dataset-name
+    NATURAL = "natural"  # natural language query
 
 
 class SourceChunk(BaseModel):
@@ -74,8 +75,12 @@ class SourceIngester:
         if source_type == SourceType.TEXT:
             return self._chunk_text(source, origin="<text>")
         elif source_type == SourceType.FILE:
+            if source.endswith((".zip", ".tar.gz", ".tgz")):
+                return self._ingest_archive(source)
             return self._ingest_file(source)
         elif source_type == SourceType.DIRECTORY:
+            if source.startswith(("https://github.com/", "http://github.com/")):
+                return self._ingest_github(source)
             return self._ingest_directory(source)
         elif source_type == SourceType.URL:
             return self._ingest_url(source)
@@ -87,6 +92,11 @@ class SourceIngester:
             return self._ingest_mcp(source)
         elif source_type == SourceType.CLAW:
             return self._ingest_claw(source)
+        elif source_type == SourceType.NATURAL:
+            raise ValueError(
+                "Natural language detected. Use interpret_natural() from "
+                "carl_studio.learn.planner to get a LearningPlan first."
+            )
         else:
             raise ValueError(f"Unknown source type: {source_type!r}")
 
@@ -104,8 +114,16 @@ class SourceIngester:
         if source.startswith("claw://"):
             return SourceType.CLAW
 
+        # GitHub repo (must check before generic URL)
+        if source.startswith(("https://github.com/", "http://github.com/")):
+            return SourceType.DIRECTORY  # will be cloned first
+
         if source.startswith(("http://", "https://")):
             return SourceType.URL
+
+        # Archive files
+        if source.endswith((".zip", ".tar.gz", ".tgz")):
+            return SourceType.FILE  # will be extracted first
 
         path = Path(source)
         if path.is_dir():
@@ -120,6 +138,10 @@ class SourceIngester:
         # Fallback: if it contains newlines or is long, treat as text
         if "\n" in source or len(source) > 200:
             return SourceType.TEXT
+
+        # Natural language: has spaces, long enough to be a sentence
+        if " " in source and len(source) > 10:
+            return SourceType.NATURAL
 
         raise ValueError(
             f"Cannot detect source type for {source!r}. "
@@ -283,6 +305,34 @@ class SourceIngester:
         if not found:
             tools_text += f"\n(No config found for server '{server_name}')\n"
         return [SourceChunk(text=tools_text, source=f"mcp://{server_name}", chunk_id=0)]
+
+    def _ingest_github(self, url: str) -> list[SourceChunk]:
+        """Clone a GitHub repo to temp dir and ingest."""
+        import subprocess
+        import tempfile
+
+        tmpdir = tempfile.mkdtemp(prefix="carl_github_")
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", url, tmpdir],
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise ValueError(
+                f"Failed to clone {url}: {result.stderr.decode('utf-8', errors='replace')}"
+            )
+        return self._ingest_directory(tmpdir)
+
+    def _ingest_archive(self, path: str) -> list[SourceChunk]:
+        """Extract archive and ingest."""
+        import shutil
+        import tempfile
+
+        if not Path(path).is_file():
+            raise FileNotFoundError(f"Archive not found: {path}")
+        tmpdir = tempfile.mkdtemp(prefix="carl_archive_")
+        shutil.unpack_archive(path, tmpdir)
+        return self._ingest_directory(tmpdir)
 
     def _ingest_claw(self, source: str) -> list[SourceChunk]:
         """Ingest OpenClaw dataset. claw://dataset-name

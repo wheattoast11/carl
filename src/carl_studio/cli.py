@@ -2290,6 +2290,38 @@ def learn_cmd(
         c.error("carl_studio.learn module not available")
         raise typer.Exit(1)
 
+    # Natural language detection
+    from carl_studio.learn.ingest import SourceIngester, SourceType
+    try:
+        detected = SourceIngester._detect_type(source)
+    except ValueError:
+        detected = None
+
+    if detected == SourceType.NATURAL:
+        try:
+            from carl_studio.learn.planner import interpret_natural
+            c.header("CARL Learn", "Interpreting...")
+            plan = interpret_natural(source)
+            c.config_block([
+                ("Sources", ", ".join(plan.sources) if plan.sources else "(none)"),
+                ("Kit", plan.kit),
+                ("Action", plan.action),
+                ("Samples", str(plan.count)),
+            ], title="Interpreted Plan")
+            c.info(plan.explanation)
+            if not typer.confirm("Proceed?"):
+                raise typer.Exit(0)
+            # Apply interpreted plan to local vars
+            source = plan.sources[0] if plan.sources else source
+            kit = plan.kit or kit
+            count = plan.count or count
+            if plan.action in ("synthesize", "train"):
+                synthesize = True
+        except RuntimeError as e:
+            c.error(f"No LLM available for interpretation: {e}")
+            c.info("Set ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY")
+            raise typer.Exit(1)
+
     if synthesize:
         from carl_studio.learn.synthesize import SynthesizeConfig, SynthesizePipeline
         synth_config = SynthesizeConfig(source=source, count=count, output=output)
