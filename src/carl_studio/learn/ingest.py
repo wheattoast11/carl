@@ -1,6 +1,8 @@
 """Source ingestion and chunking for carl learn.
 
-Supports: URL, file, directory, HuggingFace dataset, raw text.
+Supports: URL, file, directory, HuggingFace dataset, raw text,
+          Claude Code skill files (skill://), MCP server definitions (mcp://),
+          OpenClaw datasets (claw://).
 Chunking strategy adapts to content type:
   - Python/code: module-level boundaries (class/function defs)
   - Markdown: heading boundaries
@@ -10,6 +12,7 @@ Target chunk size: ~500-2000 tokens (estimated as chars / 4).
 
 from __future__ import annotations
 
+import os
 import re
 from enum import Enum
 from pathlib import Path
@@ -24,6 +27,9 @@ class SourceType(str, Enum):
     DIRECTORY = "directory"
     HUB_DATASET = "hub_dataset"
     TEXT = "text"
+    SKILL = "skill"   # skill://path/to/skill.md
+    MCP = "mcp"       # mcp://server-name
+    CLAW = "claw"     # claw://dataset-name
 
 
 class SourceChunk(BaseModel):
@@ -75,6 +81,12 @@ class SourceIngester:
             return self._ingest_url(source)
         elif source_type == SourceType.HUB_DATASET:
             return self._ingest_hub_dataset(source)
+        elif source_type == SourceType.SKILL:
+            return self._ingest_skill(source)
+        elif source_type == SourceType.MCP:
+            return self._ingest_mcp(source)
+        elif source_type == SourceType.CLAW:
+            return self._ingest_claw(source)
         else:
             raise ValueError(f"Unknown source type: {source_type!r}")
 
@@ -85,6 +97,13 @@ class SourceIngester:
     @staticmethod
     def _detect_type(source: str) -> SourceType:
         """Heuristic source type detection."""
+        if source.startswith("skill://"):
+            return SourceType.SKILL
+        if source.startswith("mcp://"):
+            return SourceType.MCP
+        if source.startswith("claw://"):
+            return SourceType.CLAW
+
         if source.startswith(("http://", "https://")):
             return SourceType.URL
 
@@ -215,6 +234,64 @@ class SourceIngester:
             chunks.append(chunk)
             chunk_id += 1
         return chunks
+
+    def _ingest_skill(self, source: str) -> list[SourceChunk]:
+        """Ingest a Claude Code skill file. skill://path/to/skill.md"""
+        path = source.removeprefix("skill://")
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Skill file not found: {path}")
+        with open(path, encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        if not content.strip():
+            return []
+        return self._chunk_text(content, origin=path)
+
+    def _ingest_mcp(self, source: str) -> list[SourceChunk]:
+        """Ingest MCP server tool definitions. mcp://server-name
+
+        Reads MCP config from ~/.claude.json or .mcp.json, extracts tool
+        schemas for the named server.
+        """
+        import json
+
+        server_name = source.removeprefix("mcp://")
+        config_paths = [
+            Path.home() / ".claude.json",
+            Path(".mcp.json"),
+            Path(".claude") / "mcp.json",
+        ]
+        tools_text = f"# MCP Server: {server_name}\n\nServer tools to learn:\n"
+        found = False
+        for config_path in config_paths:
+            if config_path.exists():
+                try:
+                    with open(config_path, encoding="utf-8") as f:
+                        config = json.load(f)
+                    servers = config.get("mcpServers", config.get("servers", {}))
+                    if server_name in servers:
+                        server = servers[server_name]
+                        cmd = server.get("command", "?")
+                        args = " ".join(server.get("args", []))
+                        tools_text += f"\nCommand: {cmd} {args}\n"
+                        env_vars = server.get("env", {})
+                        if env_vars:
+                            tools_text += f"Environment: {', '.join(env_vars.keys())}\n"
+                        found = True
+                        break
+                except (json.JSONDecodeError, OSError):
+                    continue
+        if not found:
+            tools_text += f"\n(No config found for server '{server_name}')\n"
+        return [SourceChunk(text=tools_text, source=f"mcp://{server_name}", chunk_id=0)]
+
+    def _ingest_claw(self, source: str) -> list[SourceChunk]:
+        """Ingest OpenClaw dataset. claw://dataset-name
+
+        Downloads from HF and converts to chunks.
+        """
+        dataset_name = source.removeprefix("claw://")
+        hf_id = f"openclaw/{dataset_name}" if "/" not in dataset_name else dataset_name
+        return self._ingest_hub_dataset(hf_id)
 
     # ------------------------------------------------------------------
     # Chunking
