@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from carl_studio.data.kits import BUILTIN_KITS
-from carl_studio.llm import LLMProvider
+from carl_studio.llm import LLMProvider, parse_llm_json
 
 __all__ = ["LearningPlan", "interpret_natural"]
 
@@ -31,7 +31,6 @@ NL_SYSTEM = """You interpret user requests for the CARL training CLI.
 CARL can:
 - Gather from: local directories, skill:// files, mcp:// servers, claw:// datasets, hf:// datasets, GitHub URLs
 - Synthesize: generate graded training samples from gathered code
-- Train: run GRPO training with a reward Kit
 
 Available Kits: {kits}
 
@@ -41,7 +40,7 @@ Respond with ONLY this JSON:
 {{
   "sources": ["list of source paths/URIs to gather from"],
   "kit": "kit ID from the list above, or empty string if unclear",
-  "action": "gather or synthesize or train",
+  "action": "gather or synthesize",
   "count": 10,
   "explanation": "one-line explanation of what you'll do"
 }}"""
@@ -76,16 +75,8 @@ def interpret_natural(source: str) -> LearningPlan:
     ], max_tokens=500)
 
     # Parse JSON
-    text = response.strip()
-    if text.startswith("```"):
-        parts = text.split("```")
-        if len(parts) >= 2:
-            text = parts[1]
-            if text.startswith("json"):
-                text = text[4:]
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
+    data = parse_llm_json(response)
+    if data is None:
         return LearningPlan(
             sources=[],
             kit="coding-agent",

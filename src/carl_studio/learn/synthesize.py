@@ -15,7 +15,7 @@ from carl_studio.console import get_console
 from carl_studio.data.templates import ALL_TEMPLATES, ProblemTemplate
 from carl_studio.data.validator import validate_sample
 from carl_studio.learn.ingest import SourceIngester
-from carl_studio.llm import LLMProvider
+from carl_studio.llm import LLMProvider, parse_llm_json
 from carl_studio.tools import ensure_tools
 
 __all__ = ["SynthesizeConfig", "SynthesizePipeline", "SynthesizeResult"]
@@ -74,7 +74,6 @@ class SynthesizePipeline:
         ensure_tools(c)
 
         # Phase 1: Ingest
-        c.header("CARL Learn", "Synthesize Mode")
         c.kv("Source", self.config.source)
         c.kv("Provider", self.llm.provider_name)
         c.kv("Model", self.llm._model)
@@ -120,7 +119,7 @@ class SynthesizePipeline:
                         [{"role": "system", "content": SYNTH_SYSTEM},
                          {"role": "user", "content": prompt}],
                     )
-                    generated = self._parse_json(response)
+                    generated = parse_llm_json(response)
                     if not generated:
                         c.warn(f"{sample_id}: JSON parse failed")
                         continue
@@ -142,7 +141,7 @@ class SynthesizePipeline:
                         fix_response = self.llm.complete(
                             [{"role": "user", "content": self._fix_prompt(generated, vr)}],
                         )
-                        fixed = self._parse_json(fix_response)
+                        fixed = parse_llm_json(fix_response)
                         if fixed:
                             vr2 = validate_sample(fixed)
                             if vr2.valid:
@@ -253,20 +252,6 @@ TRIVIAL BYPASS: {sample.get('trivial_bypass', '')}
 ISSUES: {'; '.join(issues)}
 
 Output COMPLETE fixed JSON (same schema). Verify before outputting. Output ONLY JSON."""
-
-    @staticmethod
-    def _parse_json(text: str) -> dict | None:
-        text = text.strip()
-        if text.startswith("```"):
-            parts = text.split("```")
-            if len(parts) >= 2:
-                text = parts[1]
-                if text.startswith("json"):
-                    text = text[4:]
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            return None
 
     @staticmethod
     def _make_sample(generated: dict, template: ProblemTemplate, sample_id: str) -> dict:

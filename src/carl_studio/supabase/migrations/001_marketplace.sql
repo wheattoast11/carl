@@ -96,6 +96,12 @@ create policy "owner_read_kits" on marketplace.kits for select using (auth.uid()
 create policy "owner_insert_kits" on marketplace.kits for insert with check (auth.uid() = owner_id);
 create policy "owner_update_kits" on marketplace.kits for update using (auth.uid() = owner_id);
 
+-- Owner can delete own rows
+create policy "owner_delete_models" on marketplace.models for delete using (auth.uid() = owner_id);
+create policy "owner_delete_adapters" on marketplace.adapters for delete using (auth.uid() = owner_id);
+create policy "owner_delete_recipes" on marketplace.recipes for delete using (auth.uid() = owner_id);
+create policy "owner_delete_kits" on marketplace.kits for delete using (auth.uid() = owner_id);
+
 -- updated_at trigger
 create or replace function marketplace.set_updated_at()
 returns trigger as $$

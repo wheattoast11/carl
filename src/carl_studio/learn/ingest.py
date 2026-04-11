@@ -308,20 +308,28 @@ class SourceIngester:
 
     def _ingest_github(self, url: str) -> list[SourceChunk]:
         """Clone a GitHub repo to temp dir and ingest."""
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        if parsed.scheme != "https" or parsed.netloc not in ("github.com", "www.github.com"):
+            raise ValueError(f"Only https://github.com URLs supported: {url}")
+        import shutil
         import subprocess
         import tempfile
 
         tmpdir = tempfile.mkdtemp(prefix="carl_github_")
-        result = subprocess.run(
-            ["git", "clone", "--depth", "1", url, tmpdir],
-            capture_output=True,
-            timeout=60,
-        )
-        if result.returncode != 0:
-            raise ValueError(
-                f"Failed to clone {url}: {result.stderr.decode('utf-8', errors='replace')}"
+        try:
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", "--", url, tmpdir],
+                capture_output=True,
+                timeout=60,
             )
-        return self._ingest_directory(tmpdir)
+            if result.returncode != 0:
+                raise ValueError(
+                    f"Failed to clone {url}: {result.stderr.decode('utf-8', errors='replace')}"
+                )
+            return self._ingest_directory(tmpdir)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _ingest_archive(self, path: str) -> list[SourceChunk]:
         """Extract archive and ingest."""
@@ -331,8 +339,11 @@ class SourceIngester:
         if not Path(path).is_file():
             raise FileNotFoundError(f"Archive not found: {path}")
         tmpdir = tempfile.mkdtemp(prefix="carl_archive_")
-        shutil.unpack_archive(path, tmpdir)
-        return self._ingest_directory(tmpdir)
+        try:
+            shutil.unpack_archive(path, tmpdir)
+            return self._ingest_directory(tmpdir)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     def _ingest_claw(self, source: str) -> list[SourceChunk]:
         """Ingest OpenClaw dataset. claw://dataset-name

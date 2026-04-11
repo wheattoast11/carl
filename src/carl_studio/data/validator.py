@@ -9,6 +9,12 @@ from pydantic import BaseModel
 
 __all__ = ["parse_score", "validate_sample", "ValidationResult"]
 
+_SAFE_ENV = {
+    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+    "HOME": "/tmp",
+    "PYTHONDONTWRITEBYTECODE": "1",
+}
+
 _SCORE_RE = re.compile(r"SCORE:(\d+)/(\d+)")
 
 
@@ -34,7 +40,9 @@ def _run_in_sandbox(files: dict[str, str], test_file: str = "test_solution.py") 
     workdir = tempfile.mkdtemp(prefix="carl_validate_")
     try:
         for fname, content in files.items():
-            fpath = os.path.join(workdir, fname)
+            fpath = os.path.realpath(os.path.join(workdir, fname))
+            if not fpath.startswith(workdir + os.sep) and fpath != workdir:
+                continue  # skip path traversal attempts
             os.makedirs(os.path.dirname(fpath), exist_ok=True)
             with open(fpath, "w") as f:
                 f.write(content)
@@ -44,11 +52,14 @@ def _run_in_sandbox(files: dict[str, str], test_file: str = "test_solution.py") 
             text=True,
             timeout=15,
             cwd=workdir,
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            env=_SAFE_ENV,
+            start_new_session=True,
         )
         score = parse_score(result.stdout + result.stderr)
         return score if score is not None else 0.0
-    except (subprocess.TimeoutExpired, Exception):
+    except subprocess.TimeoutExpired:
+        return 0.0
+    except OSError:
         return 0.0
     finally:
         shutil.rmtree(workdir, ignore_errors=True)

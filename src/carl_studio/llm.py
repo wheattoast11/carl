@@ -14,7 +14,7 @@ import json
 import os
 import urllib.request
 
-__all__ = ["LLMProvider"]
+__all__ = ["LLMProvider", "parse_llm_json"]
 
 
 def _probe_local(port: int, timeout: float = 0.5) -> bool:
@@ -123,3 +123,19 @@ class LLMProvider:
 
         resp = self._client.messages.create(**params)
         return "".join(b.text for b in resp.content if hasattr(b, "text"))
+
+
+def parse_llm_json(text: str) -> dict | None:
+    """Parse JSON from LLM response, stripping markdown fences."""
+    import json
+    text = text.strip()
+    if text.startswith("```"):
+        parts = text.split("```")
+        if len(parts) >= 2:
+            text = parts[1].strip()
+            if text.startswith("json"):
+                text = text[4:].strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return None

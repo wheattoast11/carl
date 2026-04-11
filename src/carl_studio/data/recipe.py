@@ -48,10 +48,11 @@ class Recipe:
 
     @property
     def hub_id(self) -> str:
-        ns = self.hub_namespace or "local"
+        ns = self.hub_namespace or ""
         slug = self.name.lower().replace(" ", "-").replace("_", "-")
         base_tag = self.base.split("/")[-1].lower().replace("-", "")[:10]
-        return f"{ns}/carl-{slug}-{base_tag}"
+        model_id = f"il-terminals-carl-{base_tag}-{slug}"
+        return f"{ns}/{model_id}" if ns else model_id
 
 
 def load_recipe(path: str | Path) -> Recipe:
