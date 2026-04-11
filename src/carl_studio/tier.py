@@ -1,19 +1,22 @@
 """CARL freemium tier system.
 
-Three tiers: FREE, PRO, ENTERPRISE.
+Two tiers: FREE and PAID.
 
 Tier philosophy:
-  FREE  — Everything a researcher needs: observe, train, eval, BYOK compute.
-          The full CARL loop works without paying. This is how we win adoption.
-  PRO   — Autonomous integrations: Claude-powered diagnosis, auto-gated
-          send-it pipeline, live TUI dashboards, managed eval scheduling.
-          These are the features that make CARL a superagent.
-  ENTERPRISE — Multi-tenant orchestration, MCP server for agent integration,
-               custom environments, RBAC, audit trail, SLA guarantees.
+  FREE  — Full CARL loop: observe, train, eval, bench, align, learn, push,
+          bundle. BYOK compute. SQLite persistence. All public CARL rewards.
+          Gate on autonomy, not capability. Users train for free.
+  PAID  — The discovery engine: autonomous pipeline (--send-it), Claude-powered
+          diagnosis (--diagnose), live TUI (--live), auto-gating, scheduled runs,
+          resonance rewards, experiment management, carl.camp dashboard, cloud
+          sync, MCP server, multi-tenant/RBAC.
 
-Auto-elevation: if a user has the right credentials, they get the capabilities
-without hitting a paywall. Having ANTHROPIC_API_KEY implies Pro (enables
-Claude-powered features). CARL_ENTERPRISE=1 + credentials → Enterprise.
+Subscription check priority:
+  1. SQLite auth cache (~/.carl/carl.db) — sub-ms, offline-safe
+  2. Supabase RPC (carl.camp) — ~100ms, if cache expired
+  3. Auto-elevation from env vars — ANTHROPIC_API_KEY implies PAID
+  4. 48h grace period if network down
+  5. Default to FREE
 """
 
 from __future__ import annotations
@@ -31,8 +34,11 @@ class Tier(str, Enum):
     """CARL pricing tier."""
 
     FREE = "free"
-    PRO = "pro"
-    ENTERPRISE = "enterprise"
+    PAID = "paid"
+
+    # Backwards compatibility aliases
+    PRO = "paid"
+    ENTERPRISE = "paid"
 
     def __ge__(self, other: object) -> bool:
         if not isinstance(other, Tier):
@@ -57,8 +63,7 @@ class Tier(str, Enum):
 
 _TIER_RANK: dict[Tier, int] = {
     Tier.FREE: 0,
-    Tier.PRO: 1,
-    Tier.ENTERPRISE: 2,
+    Tier.PAID: 1,
 }
 
 
@@ -100,32 +105,32 @@ FEATURE_TIERS: dict[str, Tier] = {
     "checkpoint": Tier.FREE,
     "compute": Tier.FREE,
     # ---------------------------------------------------------------
-    # PRO — Autonomous superagent features. Claude-powered diagnosis,
-    # auto-gated pipelines, live dashboards, managed orchestration.
-    # These are what make CARL more than a training script.
+    # PAID ($29/mo) — Autonomy + Discovery + Resonance + Platform.
+    # Everything that runs without human in the loop.
     # ---------------------------------------------------------------
-    "observe.live": Tier.PRO,           # Real-time Textual TUI dashboard
-    "observe.diagnose": Tier.PRO,       # Claude-powered crystal analysis
-    "train.send_it": Tier.PRO,          # Autonomous SFT→eval→GRPO→eval→push pipeline
-    "train.auto_gate": Tier.PRO,        # Automatic eval gating between stages
-    "train.auto_cascade": Tier.PRO,     # Autonomous cascade stage transitions
-    "train.scheduled": Tier.PRO,        # Scheduled recurring training runs
-    "bench.cti_report": Tier.PRO,       # Full CTI (CARL Trainability Index) report
-    "bench.probes": Tier.PRO,           # Advanced probes (pressure, adaptation)
-    "observe.claude_stream": Tier.PRO,  # Streaming Claude observations during training
-    "eval.auto_schedule": Tier.PRO,     # Automatic eval scheduling on checkpoints
-    # ---------------------------------------------------------------
-    # ENTERPRISE — Multi-tenant, agent integration, custom envs, SLA.
-    # ---------------------------------------------------------------
-    "mcp": Tier.ENTERPRISE,
-    "mcp.serve": Tier.ENTERPRISE,
-    "environments.custom": Tier.ENTERPRISE,
-    "compute.multi_backend": Tier.ENTERPRISE,
-    "orchestration": Tier.ENTERPRISE,
-    "orchestration.multi_run": Tier.ENTERPRISE,
-    "train.pipeline.multi": Tier.ENTERPRISE,  # Multi-model pipeline orchestration
-    "rbac": Tier.ENTERPRISE,
-    "audit_trail": Tier.ENTERPRISE,
+    "observe.live": Tier.PAID,           # Real-time Textual TUI dashboard
+    "observe.diagnose": Tier.PAID,       # Claude-powered crystal analysis
+    "train.send_it": Tier.PAID,          # Autonomous SFT→eval→GRPO→eval→push pipeline
+    "train.auto_gate": Tier.PAID,        # Automatic eval gating between stages
+    "train.auto_cascade": Tier.PAID,     # Autonomous cascade stage transitions
+    "train.scheduled": Tier.PAID,        # Scheduled recurring training runs
+    "bench.cti_report": Tier.PAID,       # Full CTI (CARL Trainability Index) report
+    "bench.probes": Tier.PAID,           # Advanced probes (pressure, adaptation)
+    "observe.claude_stream": Tier.PAID,  # Streaming Claude observations during training
+    "eval.auto_schedule": Tier.PAID,     # Automatic eval scheduling on checkpoints
+    "mcp": Tier.PAID,
+    "mcp.serve": Tier.PAID,
+    "environments.custom": Tier.PAID,
+    "compute.multi_backend": Tier.PAID,
+    "orchestration": Tier.PAID,
+    "orchestration.multi_run": Tier.PAID,
+    "train.pipeline.multi": Tier.PAID,   # Multi-model pipeline orchestration
+    "rbac": Tier.PAID,
+    "audit_trail": Tier.PAID,
+    "experiment": Tier.PAID,             # Discovery engine
+    "experiment.auto_judge": Tier.PAID,  # Automated experiment judgment
+    "sync.cloud": Tier.PAID,             # carl.camp cloud sync
+    "dashboard": Tier.PAID,              # carl.camp web dashboard
 }
 
 
@@ -148,29 +153,31 @@ def tier_allows(tier: Tier, feature: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def detect_effective_tier(configured_tier: Tier) -> Tier:
-    """Elevate tier based on available credentials.
+    """Elevate tier based on subscription status or credentials.
 
-    Rules:
-    - ANTHROPIC_API_KEY present -> at least PRO
-    - HF_TOKEN present -> at least PRO (needed for training)
-    - Both + CARL_ENTERPRISE=1 -> ENTERPRISE
+    Priority:
+    1. Supabase subscription (cached in SQLite, checked via carl.camp)
+    2. Auto-elevation from env vars (ANTHROPIC_API_KEY → PAID)
+    3. Configured tier from settings
 
     Never downgrades the configured tier.
     """
     effective = configured_tier
 
+    # Check Supabase subscription via local cache
+    try:
+        from carl_studio.db import LocalDB
+        db = LocalDB()
+        cached_tier = db.get_auth("tier")
+        if cached_tier == "paid":
+            return Tier.PAID
+    except Exception:
+        pass
+
+    # Auto-elevate if user has Claude API key (enables --diagnose etc.)
     has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    has_hf = bool(_detect_hf_token())
-    has_enterprise_flag = os.environ.get("CARL_ENTERPRISE", "").lower() in ("1", "true", "yes")
-
-    # Auto-elevate to PRO if user has training-capable credentials
-    if has_anthropic or has_hf:
-        if effective < Tier.PRO:
-            effective = Tier.PRO
-
-    # Enterprise requires explicit opt-in plus credentials
-    if has_enterprise_flag and has_anthropic and has_hf:
-        effective = Tier.ENTERPRISE
+    if has_anthropic and effective < Tier.PAID:
+        effective = Tier.PAID
 
     return effective
 
@@ -192,8 +199,7 @@ def _detect_hf_token() -> str | None:
 # ---------------------------------------------------------------------------
 
 _UPGRADE_URLS: dict[Tier, str] = {
-    Tier.PRO: "https://terminals.tech/pricing",
-    Tier.ENTERPRISE: "https://terminals.tech/enterprise",
+    Tier.PAID: "https://carl.camp/pricing",
 }
 
 
