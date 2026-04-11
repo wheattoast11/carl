@@ -2279,6 +2279,8 @@ def learn_cmd(
     config: str = typer.Option("carl.yaml", "--config", "-c", help="Project config"),
     synthesize: bool = typer.Option(False, "--synthesize", "-s", help="Synthesize graded RL training samples from codebase"),
     count: int = typer.Option(10, "--count", help="Target number of valid samples (synthesize mode)"),
+    kit: str = typer.Option("", "--kit", "-k", help="Kit ID (coding-agent, tool-specialist, reasoning, mcp-agent)"),
+    recipe: str = typer.Option("", "--recipe", "-r", help="Recipe YAML file for multi-course training"),
 ) -> None:
     """Ingest new knowledge from source material into a model."""
     c = get_console()
@@ -2291,8 +2293,25 @@ def learn_cmd(
     if synthesize:
         from carl_studio.learn.synthesize import SynthesizeConfig, SynthesizePipeline
         synth_config = SynthesizeConfig(source=source, count=count, output=output)
-        SynthesizePipeline(synth_config, c).run()
+        c.header("CARL Learn", "Synthesize Mode")
+        result = SynthesizePipeline(synth_config, c).run()
         c.blank()
+        if kit:
+            c.info(f"Kit '{kit}' selected — use with: carl train --kit {kit} --dataset {result.output_path}")
+        raise typer.Exit(0)
+
+    if recipe:
+        from carl_studio.data.recipe import load_recipe
+        r = load_recipe(recipe)
+        c.header("CARL Learn", f"Recipe: {r.name}")
+        c.config_block([
+            ("Base", r.base),
+            ("Courses", str(len(r.courses))),
+            ("Source", r.source or source),
+        ])
+        for i, course in enumerate(r.courses):
+            c.kv(f"Course {i + 1}", f"kit={course.kit}, steps={course.steps}")
+        c.info("Recipe loaded. Run: carl train --recipe " + recipe)
         raise typer.Exit(0)
 
     # Resolve model from project if not specified
@@ -2315,6 +2334,11 @@ def learn_cmd(
     c.blank()
     c.header("CARL Learn -- Knowledge Ingestion")
     c.config_block([("Source", source), ("Depth", depth)])
+
+    if kit:
+        from carl_studio.data.kits import KitRegistry
+        k = KitRegistry().get(kit)
+        c.kv("Kit", f"{k.name} — {k.description}")
 
     pipeline = LearnPipeline(learn_config)
     result = pipeline.run()
