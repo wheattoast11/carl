@@ -9,5 +9,9 @@ Provides:
 These require torch and (for LoRA) peft at runtime.
 """
 from carl_studio.ttt.slot import SLOTOptimizer, SLOTResult, LoRAMicroUpdate
+from carl_studio.ttt.grpo_integration import GRPOReflectionCallback, TTTStepResult
 
-__all__ = ["SLOTOptimizer", "SLOTResult", "LoRAMicroUpdate"]
+__all__ = [
+    "SLOTOptimizer", "SLOTResult", "LoRAMicroUpdate",
+    "GRPOReflectionCallback", "TTTStepResult",
+]

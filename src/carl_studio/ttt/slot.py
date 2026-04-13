@@ -49,12 +49,27 @@ class SLOTOptimizer:
             from terminals_runtime.ttt import SLOTOptimizerImpl
             self._impl = SLOTOptimizerImpl(model, d_model, **kwargs)
         except ImportError:
-            _require_runtime("SLOTOptimizer")
+            # Fallback: admin unlock -> private repo
+            try:
+                from carl_studio.admin import is_admin, load_private
+                if is_admin():
+                    mod = load_private("slot")
+                    self._impl = mod.SLOTOptimizerImpl(model, d_model, **kwargs)
+                else:
+                    _require_runtime("SLOTOptimizer")
+            except ImportError:
+                _require_runtime("SLOTOptimizer")
 
     def optimize(self, processor: Any, screenshot: Any, instruction: str,
                  target_text: str, system_prompt: str, **kwargs: Any) -> SLOTResult:
         return self._impl.optimize(processor, screenshot, instruction,
                                    target_text, system_prompt, **kwargs)
+
+    def optimize_text(self, tokenizer: Any, instruction: str,
+                      target_text: str, system_prompt: str) -> SLOTResult:
+        """Text-only SLOT for coding sandbox / non-VLM environments."""
+        return self._impl.optimize_text(tokenizer, instruction,
+                                        target_text, system_prompt)
 
     def predict_with_delta(self, processor: Any, screenshot: Any,
                            instruction: str, system_prompt: str,
@@ -77,7 +92,16 @@ class LoRAMicroUpdate:
             from terminals_runtime.ttt import LoRAMicroUpdateImpl
             self._impl = LoRAMicroUpdateImpl(model, **kwargs)
         except ImportError:
-            _require_runtime("LoRAMicroUpdate")
+            # Fallback: admin unlock -> private repo
+            try:
+                from carl_studio.admin import is_admin, load_private
+                if is_admin():
+                    mod = load_private("lora_micro")
+                    self._impl = mod.LoRAMicroUpdateImpl(model, **kwargs)
+                else:
+                    _require_runtime("LoRAMicroUpdate")
+            except ImportError:
+                _require_runtime("LoRAMicroUpdate")
 
     def update(self, inputs: dict, target_ids: Any,
                total_seq_len: int, target_len: int) -> float:

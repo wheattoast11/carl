@@ -188,6 +188,8 @@ def make_carl_reward(
                     step=_step_counter[0],
                     sample_idx=idx,
                 )
+                # Store token IDs for TTT micro-updates (dynamic attr, not in dataclass)
+                trace._token_ids_for_ttt = token_ids_np.tolist()  # type: ignore[attr-defined]
                 batch_traces.append(trace)
 
                 score, components = carl.score_from_trace(trace)
