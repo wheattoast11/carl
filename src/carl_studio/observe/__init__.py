@@ -9,5 +9,12 @@ The TUI requires ``carl-studio[tui]`` (textual + textual-plotext).
 
 from . import data_source
 from .data_source import FileSource, ObserveFrame, TraceFileSource, TrackioSource
+from .sparkline import sparkline, phase_char, status_line
+from .crystal_panel import CrystalPanel
+from .crystal_viz import crystal_structure
 
-__all__ = ["FileSource", "ObserveFrame", "TraceFileSource", "TrackioSource"]
+__all__ = [
+    "FileSource", "ObserveFrame", "TraceFileSource", "TrackioSource",
+    "sparkline", "phase_char", "status_line",
+    "CrystalPanel", "crystal_structure",
+]
