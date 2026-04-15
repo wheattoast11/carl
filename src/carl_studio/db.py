@@ -11,19 +11,21 @@ Usage:
     db.get_unsynced('runs')           # Get entities pending push
     db.mark_synced(run_id, remote_id) # Mark as synced after push
 """
+
 from __future__ import annotations
 
 import hashlib
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Generator
 from uuid import uuid4
 
 CARL_DIR = Path.home() / ".carl"
 DB_PATH = CARL_DIR / "carl.db"
+_RUN_JSON_COLUMNS: frozenset[str] = frozenset({"config", "result"})
 
 # SQLite schema — executed on first connect
 _SCHEMA = """
@@ -95,8 +97,14 @@ CREATE INDEX IF NOT EXISTS idx_sync_pending ON sync_queue (status) WHERE status 
 
 def content_hash(entity: dict, exclude: set[str] | None = None) -> str:
     """Deterministic content-addressable hash for sync comparison."""
-    exclude = exclude or {"version", "content_hash", "created_at", "updated_at",
-                          "synced", "remote_id"}
+    exclude = exclude or {
+        "version",
+        "content_hash",
+        "created_at",
+        "updated_at",
+        "synced",
+        "remote_id",
+    }
     canonical = {k: v for k, v in sorted(entity.items()) if k not in exclude}
     blob = json.dumps(canonical, sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
@@ -104,6 +112,30 @@ def content_hash(entity: dict, exclude: set[str] | None = None) -> str:
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _encode_run_value(key: str, value: object) -> object:
+    """Serialize structured run fields for SQLite storage."""
+    if key in _RUN_JSON_COLUMNS and value is not None and not isinstance(value, str):
+        return json.dumps(value)
+    if key == "synced":
+        return int(bool(value))
+    return value
+
+
+def _decode_run_row(row: dict) -> dict:
+    """Decode structured run fields after reading from SQLite."""
+    decoded = dict(row)
+    for key in _RUN_JSON_COLUMNS:
+        value = decoded.get(key)
+        if isinstance(value, str):
+            try:
+                decoded[key] = json.loads(value)
+            except (json.JSONDecodeError, TypeError):
+                pass
+    if "synced" in decoded:
+        decoded["synced"] = bool(decoded["synced"])
+    return decoded
 
 
 class LocalDB:
@@ -139,9 +171,7 @@ class LocalDB:
 
     def get_config(self, key: str, default: str | None = None) -> str | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT value FROM config WHERE key = ?", (key,)
-            ).fetchone()
+            row = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
             return row["value"] if row else default
 
     def set_config(self, key: str, value: str) -> None:
@@ -167,9 +197,11 @@ class LocalDB:
             return row["value"]
 
     def set_auth(self, key: str, value: str, ttl_hours: int = 24) -> None:
-        expires = datetime.now(timezone.utc).replace(
-            hour=datetime.now(timezone.utc).hour + ttl_hours
-        ).strftime("%Y-%m-%dT%H:%M:%SZ") if ttl_hours > 0 else None
+        expires = None
+        if ttl_hours > 0:
+            expires = (datetime.now(timezone.utc) + timedelta(hours=ttl_hours)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
 
         with self._connect() as conn:
             conn.execute(
@@ -194,18 +226,20 @@ class LocalDB:
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO runs (id, model_id, mode, status, hardware, config,
-                   result, started_at, completed_at, version, content_hash)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   result, started_at, completed_at, synced, remote_id, version, content_hash)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     run_id,
                     run["model_id"],
                     run["mode"],
                     run.get("status", "pending"),
                     run.get("hardware"),
-                    json.dumps(run.get("config", {})),
-                    json.dumps(run.get("result")) if run.get("result") else None,
+                    _encode_run_value("config", run.get("config", {})),
+                    _encode_run_value("result", run.get("result")),
                     run.get("started_at"),
                     run.get("completed_at"),
+                    _encode_run_value("synced", run.get("synced", 0)),
+                    run.get("remote_id"),
                     run.get("version", 1),
                     run["content_hash"],
                 ),
@@ -215,20 +249,26 @@ class LocalDB:
 
     def update_run(self, run_id: str, updates: dict) -> None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM runs WHERE id = ?", (run_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
             if not row:
                 return
 
             current = dict(row)
+            current = _decode_run_row(current)
             current.update(updates)
             current["version"] = current.get("version", 1) + 1
             current["content_hash"] = content_hash(current)
 
-            set_clauses = ", ".join(f"{k} = ?" for k in updates)
+            serialized_updates = {
+                key: _encode_run_value(key, value) for key, value in updates.items()
+            }
+
+            set_clauses = ", ".join(f"{k} = ?" for k in serialized_updates)
             set_clauses += ", version = ?, content_hash = ?"
-            values = list(updates.values()) + [current["version"], current["content_hash"]]
+            values = list(serialized_updates.values()) + [
+                current["version"],
+                current["content_hash"],
+            ]
 
             conn.execute(
                 f"UPDATE runs SET {set_clauses} WHERE id = ?",
@@ -238,10 +278,8 @@ class LocalDB:
 
     def get_run(self, run_id: str) -> dict | None:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM runs WHERE id = ?", (run_id,)
-            ).fetchone()
-            return dict(row) if row else None
+            row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+            return _decode_run_row(dict(row)) if row else None
 
     def list_runs(self, limit: int = 20, status: str | None = None) -> list[dict]:
         with self._connect() as conn:
@@ -255,7 +293,7 @@ class LocalDB:
                     "SELECT * FROM runs ORDER BY created_at DESC LIMIT ?",
                     (limit,),
                 ).fetchall()
-            return [dict(r) for r in rows]
+            return [_decode_run_row(dict(r)) for r in rows]
 
     # ─── Metrics ─────────────────────────────────────────────
 
@@ -315,10 +353,17 @@ class LocalDB:
 
     # ─── Sync ────────────────────────────────────────────────
 
+    _ALLOWED_SYNC_TYPES: frozenset[str] = frozenset({"runs"})
+
     def get_unsynced(self, entity_type: str) -> list[dict]:
+        if entity_type not in self._ALLOWED_SYNC_TYPES:
+            raise ValueError(
+                f"Unknown sync entity type: {entity_type!r}. "
+                f"Allowed: {sorted(self._ALLOWED_SYNC_TYPES)}"
+            )
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT * FROM {entity_type} WHERE synced = 0",
+                f"SELECT * FROM {entity_type} WHERE synced = 0",  # noqa: S608 — whitelisted above
             ).fetchall()
             return [dict(r) for r in rows]
 
@@ -330,8 +375,7 @@ class LocalDB:
             )
             conn.commit()
 
-    def enqueue_sync(self, operation: str, entity_type: str,
-                     entity_id: str, payload: dict) -> None:
+    def enqueue_sync(self, operation: str, entity_type: str, entity_id: str, payload: dict) -> None:
         with self._connect() as conn:
             conn.execute(
                 """INSERT INTO sync_queue (operation, entity_type, entity_id, payload)
@@ -349,8 +393,7 @@ class LocalDB:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def update_sync_status(self, sync_id: int, status: str,
-                           error: str | None = None) -> None:
+    def update_sync_status(self, sync_id: int, status: str, error: str | None = None) -> None:
         with self._connect() as conn:
             if error:
                 conn.execute(

@@ -1,8 +1,5 @@
 """Tests for carl_studio.settings and carl_studio.tier."""
 
-import os
-from pathlib import Path
-
 import pytest
 import yaml
 
@@ -19,15 +16,10 @@ from carl_studio.tier import (
     tier_message,
 )
 from carl_studio.settings import (
-    CARL_HOME,
-    GLOBAL_CONFIG,
     CARLSettings,
-    ObserveDefaults,
     Preset,
-    SETTABLE_FIELDS,
     _mask,
     _serialize_enums,
-    reset_settings,
     set_field,
 )
 from carl_studio.types.config import ComputeTarget
@@ -37,12 +29,13 @@ from carl_studio.types.config import ComputeTarget
 # Tier ordering
 # ---------------------------------------------------------------------------
 
+
 class TestTierOrdering:
     def test_free_lt_pro(self):
         assert Tier.FREE < Tier.PRO
 
     def test_pro_lt_enterprise(self):
-        assert Tier.PRO < Tier.ENTERPRISE
+        assert Tier.PRO == Tier.ENTERPRISE == Tier.PAID
 
     def test_enterprise_ge_pro(self):
         assert Tier.ENTERPRISE >= Tier.PRO
@@ -57,6 +50,7 @@ class TestTierOrdering:
 # ---------------------------------------------------------------------------
 # Feature registry
 # ---------------------------------------------------------------------------
+
 
 class TestFeatureTiers:
     def test_observe_is_free(self):
@@ -88,6 +82,7 @@ class TestFeatureTiers:
 # ---------------------------------------------------------------------------
 # Auto-elevation
 # ---------------------------------------------------------------------------
+
 
 class TestAutoElevation:
     def test_no_credentials_stays_free(self, monkeypatch):
@@ -130,28 +125,32 @@ class TestAutoElevation:
 # Tier message
 # ---------------------------------------------------------------------------
 
+
 class TestTierMessage:
     def test_allowed_returns_none(self, monkeypatch):
         monkeypatch.setattr(
-            tier_mod, "check_tier",
+            tier_mod,
+            "check_tier",
             lambda f: (True, Tier.PRO, Tier.FREE),
         )
         assert tier_message("observe") is None
 
     def test_denied_returns_message(self, monkeypatch):
         monkeypatch.setattr(
-            tier_mod, "check_tier",
+            tier_mod,
+            "check_tier",
             lambda f: (False, Tier.FREE, Tier.PRO),
         )
         msg = tier_message("train")
         assert msg is not None
-        assert "CARL Pro" in msg
-        assert "terminals.tech" in msg
+        assert "CARL Paid" in msg
+        assert "carl.camp/pricing" in msg
 
 
 # ---------------------------------------------------------------------------
 # Settings model
 # ---------------------------------------------------------------------------
+
 
 class TestSettings:
     def test_defaults(self):
@@ -192,6 +191,7 @@ class TestSettings:
 # Preset application
 # ---------------------------------------------------------------------------
 
+
 class TestPresets:
     def test_research_preset_sets_debug(self):
         s = CARLSettings(preset=Preset.RESEARCH)
@@ -218,6 +218,7 @@ class TestPresets:
 # YAML persistence
 # ---------------------------------------------------------------------------
 
+
 class TestYAMLPersistence:
     def test_save_and_load(self, tmp_path):
         config_path = tmp_path / "config.yaml"
@@ -233,7 +234,7 @@ class TestYAMLPersistence:
         with open(config_path) as f:
             data = yaml.safe_load(f)
 
-        assert data["tier"] == "pro"
+        assert data["tier"] == "paid"
         assert data["default_model"] == "test/model"
         assert data["log_level"] == "debug"
 
@@ -259,7 +260,7 @@ class TestYAMLPersistence:
             yaml.dump(data, f)
 
         s = CARLSettings.from_yaml(config_path)
-        assert s.tier == Tier.PRO
+        assert s.tier == Tier.PAID
         assert s.default_model == "my/model"
         assert s.log_level == "warning"
 
@@ -275,11 +276,12 @@ class TestYAMLPersistence:
 # set_field
 # ---------------------------------------------------------------------------
 
+
 class TestSetField:
     def test_set_tier(self):
         s = CARLSettings()
         s = set_field(s, "tier", "pro")
-        assert s.tier == Tier.PRO
+        assert s.tier == Tier.PAID
 
     def test_set_log_level(self):
         s = CARLSettings()
@@ -321,6 +323,7 @@ class TestSetField:
 # Masking
 # ---------------------------------------------------------------------------
 
+
 class TestMasking:
     def test_mask_none(self):
         assert _mask(None) == "(not set)"
@@ -342,11 +345,12 @@ class TestMasking:
 # Enum serialization
 # ---------------------------------------------------------------------------
 
+
 class TestEnumSerialization:
     def test_serialize_flat(self):
         data = {"tier": Tier.PRO, "name": "test"}
         _serialize_enums(data)
-        assert data["tier"] == "pro"
+        assert data["tier"] == "paid"
         assert data["name"] == "test"
 
     def test_serialize_nested(self):
@@ -359,11 +363,16 @@ class TestEnumSerialization:
 # Tier gate decorator
 # ---------------------------------------------------------------------------
 
+
 class TestTierGateDecorator:
     def test_gate_blocks_insufficient_tier(self, monkeypatch):
-        fake_settings_cls = type("FakeSettings", (), {
-            "load": staticmethod(lambda: type("S", (), {"tier": Tier.FREE})()),
-        })
+        fake_settings_cls = type(
+            "FakeSettings",
+            (),
+            {
+                "load": staticmethod(lambda: type("S", (), {"tier": Tier.FREE})()),
+            },
+        )
         monkeypatch.setattr(settings_mod, "CARLSettings", fake_settings_cls)
         monkeypatch.setattr(tier_mod, "detect_effective_tier", lambda t: t)
 
@@ -375,9 +384,13 @@ class TestTierGateDecorator:
             my_func()
 
     def test_gate_allows_sufficient_tier(self, monkeypatch):
-        fake_settings_cls = type("FakeSettings", (), {
-            "load": staticmethod(lambda: type("S", (), {"tier": Tier.PRO})()),
-        })
+        fake_settings_cls = type(
+            "FakeSettings",
+            (),
+            {
+                "load": staticmethod(lambda: type("S", (), {"tier": Tier.PRO})()),
+            },
+        )
         monkeypatch.setattr(settings_mod, "CARLSettings", fake_settings_cls)
         monkeypatch.setattr(tier_mod, "detect_effective_tier", lambda t: t)
 
@@ -402,21 +415,23 @@ class TestTierGateDecorator:
 # TierGateError
 # ---------------------------------------------------------------------------
 
+
 class TestTierGateError:
     def test_message_contains_tier_names(self):
         err = TierGateError("train", Tier.PRO, Tier.FREE)
-        assert "Pro" in str(err)
+        assert "Paid" in str(err)
         assert "Free" in str(err)
         assert "train" in str(err)
 
     def test_message_contains_upgrade_url(self):
         err = TierGateError("mcp", Tier.ENTERPRISE, Tier.PRO)
-        assert "terminals.tech" in str(err)
+        assert "carl.camp/pricing" in str(err)
 
 
 # ---------------------------------------------------------------------------
 # Settings tier_allows method
 # ---------------------------------------------------------------------------
+
 
 class TestSettingsTierAllows:
     def test_free_allows_observe(self, monkeypatch):

@@ -14,10 +14,6 @@ All tests are self-contained: no GPU, no network, no API keys.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -85,9 +81,11 @@ class TestObserveJourney:
 
         log_file = tmp_path / "train.jsonl"
         log_file.write_text(
-            json.dumps({"step": 1, "phi": 0.1}) + "\n"
+            json.dumps({"step": 1, "phi": 0.1})
+            + "\n"
             + "NOT VALID JSON\n"
-            + json.dumps({"step": 2, "phi": 0.2}) + "\n"
+            + json.dumps({"step": 2, "phi": 0.2})
+            + "\n"
         )
 
         source = FileSource(str(log_file))
@@ -113,13 +111,16 @@ class TestObserveJourney:
 
         log_file = tmp_path / "train.jsonl"
         log_file.write_text(
-            json.dumps({
-                "step": 5,
-                "reward_task": 0.8,
-                "reward_format": 1.0,
-                "reward_carl": 0.6,
-                "not_a_reward": 42,
-            }) + "\n"
+            json.dumps(
+                {
+                    "step": 5,
+                    "reward_task": 0.8,
+                    "reward_format": 1.0,
+                    "reward_carl": 0.6,
+                    "not_a_reward": 42,
+                }
+            )
+            + "\n"
         )
 
         source = FileSource(str(log_file))
@@ -170,7 +171,7 @@ class TestConfigJourney:
 
     def test_yaml_roundtrip(self, tmp_path):
         """Settings survive save -> load YAML cycle."""
-        from carl_studio.settings import CARLSettings, Preset
+        from carl_studio.settings import CARLSettings
         from carl_studio.tier import Tier
 
         config_path = tmp_path / "config.yaml"
@@ -234,7 +235,7 @@ class TestConfigJourney:
 
 
 class TestTierJourney:
-    """Verify FREE/PRO/ENTERPRISE gating for the full feature matrix."""
+    """Verify FREE/PAID gating for the full feature matrix."""
 
     def test_free_allows_core_features(self, monkeypatch):
         """FREE tier allows observe, train, eval -- the core CARL loop."""
@@ -249,12 +250,11 @@ class TestTierJourney:
             assert tier_allows(Tier.FREE, feature), f"FREE should allow {feature}"
 
     def test_pro_gates_diagnose(self, monkeypatch):
-        """observe.diagnose requires PRO tier."""
-        import carl_studio.tier as tier_mod
+        """observe.diagnose is available on FREE and PAID tiers."""
         from carl_studio.tier import Tier, tier_allows
 
-        assert not tier_allows(Tier.FREE, "observe.diagnose")
-        assert tier_allows(Tier.PRO, "observe.diagnose")
+        assert tier_allows(Tier.FREE, "observe.diagnose")
+        assert tier_allows(Tier.PAID, "observe.diagnose")
 
     def test_pro_gates_send_it(self, monkeypatch):
         """train.send_it requires PRO tier."""
@@ -284,7 +284,7 @@ class TestTierJourney:
         assert detect_effective_tier(Tier.FREE) == Tier.PRO
 
     def test_enterprise_needs_both_keys_and_flag(self, monkeypatch):
-        """ENTERPRISE requires ANTHROPIC_API_KEY + HF_TOKEN + CARL_ENTERPRISE=1."""
+        """Credential-based elevation resolves to PAID in the FREE/PAID model."""
         import carl_studio.tier as tier_mod
         from carl_studio.tier import Tier, detect_effective_tier
 
@@ -292,7 +292,7 @@ class TestTierJourney:
         monkeypatch.setenv("CARL_ENTERPRISE", "1")
         monkeypatch.setattr(tier_mod, "_detect_hf_token", lambda: "hf_test")
 
-        assert detect_effective_tier(Tier.FREE) == Tier.ENTERPRISE
+        assert detect_effective_tier(Tier.FREE) == Tier.PAID
 
     def test_tier_gate_decorator_blocks(self, monkeypatch):
         """@tier_gate(Tier.PRO) blocks a FREE user."""
@@ -300,9 +300,13 @@ class TestTierJourney:
         import carl_studio.tier as tier_mod
         from carl_studio.tier import Tier, TierGateError, tier_gate
 
-        fake_settings = type("FakeSettings", (), {
-            "load": staticmethod(lambda: type("S", (), {"tier": Tier.FREE})()),
-        })
+        fake_settings = type(
+            "FakeSettings",
+            (),
+            {
+                "load": staticmethod(lambda: type("S", (), {"tier": Tier.FREE})()),
+            },
+        )
         monkeypatch.setattr(settings_mod, "CARLSettings", fake_settings)
         monkeypatch.setattr(tier_mod, "detect_effective_tier", lambda t: t)
 
@@ -319,9 +323,13 @@ class TestTierJourney:
         import carl_studio.tier as tier_mod
         from carl_studio.tier import Tier, tier_gate
 
-        fake_settings = type("FakeSettings", (), {
-            "load": staticmethod(lambda: type("S", (), {"tier": Tier.PRO})()),
-        })
+        fake_settings = type(
+            "FakeSettings",
+            (),
+            {
+                "load": staticmethod(lambda: type("S", (), {"tier": Tier.PRO})()),
+            },
+        )
         monkeypatch.setattr(settings_mod, "CARLSettings", fake_settings)
         monkeypatch.setattr(tier_mod, "detect_effective_tier", lambda t: t)
 
@@ -342,12 +350,11 @@ class TestTierJourney:
         assert detect_effective_tier(Tier.PRO) == Tier.PRO
 
     def test_enterprise_gates_mcp(self):
-        """MCP features require ENTERPRISE."""
+        """MCP features require PAID."""
         from carl_studio.tier import Tier, tier_allows
 
         assert not tier_allows(Tier.FREE, "mcp")
-        assert not tier_allows(Tier.PRO, "mcp")
-        assert tier_allows(Tier.ENTERPRISE, "mcp")
+        assert tier_allows(Tier.PAID, "mcp")
 
 
 # =========================================================================
@@ -399,9 +406,13 @@ class TestEvalJourney:
 
         gate = EvalGate(threshold=0.5, phase="1")
         report = EvalReport(
-            checkpoint="test", phase="1", n_samples=10,
-            primary_metric="acc", primary_value=0.75,
-            threshold=0.5, passed=True,
+            checkpoint="test",
+            phase="1",
+            n_samples=10,
+            primary_metric="acc",
+            primary_value=0.75,
+            threshold=0.5,
+            passed=True,
         )
         assert gate.check(report) is True
 
@@ -411,9 +422,13 @@ class TestEvalJourney:
 
         gate = EvalGate(threshold=0.5, phase="1")
         report = EvalReport(
-            checkpoint="test", phase="1", n_samples=10,
-            primary_metric="acc", primary_value=0.3,
-            threshold=0.5, passed=False,
+            checkpoint="test",
+            phase="1",
+            n_samples=10,
+            primary_metric="acc",
+            primary_value=0.3,
+            threshold=0.5,
+            passed=False,
         )
         assert gate.check(report) is False
 
@@ -454,11 +469,7 @@ class TestEvalJourney:
         """parse_tool_calls handles JSON-in-tags format."""
         from carl_studio.eval.runner import parse_tool_calls
 
-        text = (
-            '<tool_call>'
-            '{"name": "execute_code", "arguments": {"code": "print(1)"}}'
-            '</tool_call>'
-        )
+        text = '<tool_call>{"name": "execute_code", "arguments": {"code": "print(1)"}}</tool_call>'
         calls = parse_tool_calls(text)
         assert len(calls) == 1
         assert calls[0]["name"] == "execute_code"
@@ -697,13 +708,13 @@ class TestNamingJourney:
         assert Preset.CUSTOM.value == "custom"
 
     def test_tier_enum_ordering(self):
-        """Tier ordering: FREE < PRO < ENTERPRISE."""
+        """Tier ordering: FREE < PAID; aliases map to PAID."""
         from carl_studio.tier import Tier
 
-        assert Tier.FREE < Tier.PRO
-        assert Tier.PRO < Tier.ENTERPRISE
-        assert Tier.ENTERPRISE >= Tier.PRO
-        assert not Tier.FREE > Tier.PRO
+        assert Tier.FREE < Tier.PAID
+        assert Tier.PRO == Tier.PAID
+        assert Tier.ENTERPRISE == Tier.PAID
+        assert not Tier.FREE > Tier.PAID
 
 
 # =========================================================================
@@ -722,10 +733,18 @@ class TestCrossJourney:
         # Simulate a training run producing metrics
         log_file = tmp_path / "train.jsonl"
         log_file.write_text(
-            "\n".join(json.dumps({
-                "step": i, "phi": 0.1 * i, "loss": 3.0 - 0.2 * i,
-                "reward_mean": 0.1 * i,
-            }) for i in range(1, 11)) + "\n"
+            "\n".join(
+                json.dumps(
+                    {
+                        "step": i,
+                        "phi": 0.1 * i,
+                        "loss": 3.0 - 0.2 * i,
+                        "reward_mean": 0.1 * i,
+                    }
+                )
+                for i in range(1, 11)
+            )
+            + "\n"
         )
 
         source = FileSource(str(log_file))
@@ -736,10 +755,14 @@ class TestCrossJourney:
 
         # Create eval report based on "model output"
         report = EvalReport(
-            checkpoint="test/model", phase="1", n_samples=50,
+            checkpoint="test/model",
+            phase="1",
+            n_samples=50,
             metrics={"format_accuracy": 0.92},
-            primary_metric="format_accuracy", primary_value=0.92,
-            threshold=0.5, passed=True,
+            primary_metric="format_accuracy",
+            primary_value=0.92,
+            threshold=0.5,
+            passed=True,
         )
 
         gate = EvalGate(threshold=0.5, phase="1")
@@ -773,7 +796,9 @@ class TestCrossJourney:
 
         # Build eval report from sandbox result
         report = EvalReport(
-            checkpoint="test/model", phase="2prime", n_samples=1,
+            checkpoint="test/model",
+            phase="2prime",
+            n_samples=1,
             metrics={
                 "task_completion": env.reward,
                 "tool_calls": env.turn_count,

@@ -9,7 +9,7 @@ Credential and provider setup lives in [docs/auth.md](auth.md).
 ```
 Layer 4  MCP Server       9 tools for AI agent consumption
          ──────────────────────────────────────────────────
-Layer 3  CLI              carl observe | train | eval | project | config | status | logs
+Layer 3  CLI              carl start | doctor | project | train | run | observe | eval | infer
          ──────────────────────────────────────────────────
 Layer 2  Training         CARLTrainer, CascadeRewardManager, environments
          ──────────────────────────────────────────────────
@@ -58,18 +58,26 @@ Three papers, independently reproducible:
 
 **Core:**
 ```
-carl observe --url URL --run RUN          See crystal metrics on a Trackio run
-carl observe --file PATH                  See crystal metrics from a local JSONL log
+carl start                                Guided local-first bootstrap summary
+carl doctor                               Readiness checks + blockers
 carl project init                         Create carl.yaml interactively
+carl project show                         Display project defaults
 carl train [--config carl.yaml]           Train with CARL rewards
+carl run list                             List locally tracked runs
+carl run show <run-id>                    Inspect local run metadata
+carl run status <run-id|job-id>           Remote status (resolves local IDs)
+carl run logs <run-id|job-id>             Remote logs (resolves local IDs)
+carl run stop <run-id|job-id>             Cancel remote job from local run ID
+carl observe --url URL --run RUN          See coherence metrics on a Trackio run
+carl observe --file PATH                  See coherence metrics from a local JSONL log
 carl eval [--adapter HUB_ID]              Pass/fail checkpoint gate
-carl config [show|set|init|preset]        Manage settings
-carl status <id>                          Job status
-carl logs <id>                            Job logs
-carl stop <id>                            Cancel job
-carl push                                 Push checkpoint to Hub
-carl bundle                               Generate self-contained script
-carl compute                              List GPU flavors
+carl infer                                Run local inference helper
+```
+
+**Namespaces:**
+```
+carl camp ...                             Account/sync/credits/marketplace surfaces
+carl lab ...                              Experimental and advanced/internal workflows
 ```
 
 **Install notes:**
@@ -95,7 +103,7 @@ RunPod backend            RUNPOD_API_KEY
 carl observe --live                       Real-time TUI dashboard
 carl observe --diagnose                   Claude-powered analysis
 carl train --send-it                      Full SFT->gate->GRPO->eval->push pipeline
-carl mcp                                  Start MCP server (9 tools)
+carl lab mcp                              Start MCP server (9 tools)
 ```
 
 ## Compute Backends
@@ -163,7 +171,7 @@ carl eval --adapter username/my-model --phase phase2prime
 ```bash
 carl config init            # Interactive setup
 carl config preset research # Apply research preset (verbose, all metrics)
-carl config set tier pro    # Set tier
+carl config set tier paid   # Set tier (free/paid)
 carl config show            # Verify detected credentials (masked by default)
 ```
 

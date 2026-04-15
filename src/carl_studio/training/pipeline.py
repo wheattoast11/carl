@@ -83,7 +83,9 @@ class SendItPipeline:
         self._sft_job_id: str | None = None
         self._grpo_job_id: str | None = None
 
-    def _emit(self, stage: PipelineStage, message: str, progress: float = 0.0, **detail: Any) -> None:
+    def _emit(
+        self, stage: PipelineStage, message: str, progress: float = 0.0, **detail: Any
+    ) -> None:
         event = PipelineEvent(stage=stage, message=message, progress=progress, detail=detail)
         self._on_event(event)
 
@@ -100,13 +102,19 @@ class SendItPipeline:
 
         if c.method == TrainingMethod.GRPO:
             # Full pipeline: SFT → gate → GRPO
-            stages.append(("sft", f"SFT training on {c.compute_target.value} ({c.max_steps} steps)"))
-            stages.append(("sft_gate", "Eval gate: mean_token_accuracy >= 0.99 (PhaseTransitionGate)"))
+            stages.append(
+                ("sft", f"SFT training on {c.compute_target.value} ({c.max_steps} steps)")
+            )
+            stages.append(
+                ("sft_gate", "Eval gate: mean_token_accuracy >= 0.99 (PhaseTransitionGate)")
+            )
             stages.append(("grpo", f"GRPO training on {c.compute_target.value}"))
             stages.append(("grpo_gate", "Final eval gate"))
         else:
             # Single method
-            stages.append((c.method.value, f"{c.method.value.upper()} training on {c.compute_target.value}"))
+            stages.append(
+                (c.method.value, f"{c.method.value.upper()} training on {c.compute_target.value}")
+            )
             stages.append(("eval_gate", "Final eval gate"))
 
         stages.append(("push", f"Push to Hub: {c.output_repo or '(auto)'}"))
@@ -280,8 +288,17 @@ class SendItPipeline:
                 issues.append("torch not installed (required for local training)")
         else:
             # Remote mode — check for HF token
-            if not os.environ.get("HF_TOKEN"):
-                issues.append("HF_TOKEN environment variable not set")
+            token = os.environ.get("HF_TOKEN")
+            if not token:
+                try:
+                    from huggingface_hub import get_token
+
+                    token = get_token()
+                except Exception:
+                    token = None
+
+            if not token:
+                issues.append("HF auth not detected (set HF_TOKEN or run `hf auth login`)")
 
         return issues
 
@@ -323,12 +340,16 @@ class SendItPipeline:
 
             logger.info(
                 "Eval gate: %s=%.3f (threshold=%.2f) -> %s",
-                report.primary_metric, report.primary_value,
-                report.threshold, "PASS" if report.passed else "FAIL",
+                report.primary_metric,
+                report.primary_value,
+                report.threshold,
+                "PASS" if report.passed else "FAIL",
             )
             return gate.check(report)
         except ImportError:
-            logger.warning("EvalRunner not available (install carl-studio[training]). Falling back to completion check.")
+            logger.warning(
+                "EvalRunner not available (install carl-studio[training]). Falling back to completion check."
+            )
             return run.phase == RunPhase.COMPLETE
         except Exception as e:
             logger.warning("Eval gate failed: %s. Falling back to completion check.", e)
@@ -343,6 +364,7 @@ class SendItPipeline:
 
         try:
             from carl_studio.hub.models import push_with_metadata
+
             await push_with_metadata(
                 model_path=output_repo,  # For remote jobs, model is already on Hub
                 repo_id=output_repo,

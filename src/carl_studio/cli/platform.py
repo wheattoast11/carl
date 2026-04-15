@@ -1,0 +1,497 @@
+"""Platform-facing config, auth, and sync command groups."""
+
+from __future__ import annotations
+
+import typer
+
+from carl_studio.console import get_console
+
+from .apps import app
+
+# ---------------------------------------------------------------------------
+# carl config — settings management
+# ---------------------------------------------------------------------------
+
+config_app = typer.Typer(
+    name="config", help="User settings and tier management", no_args_is_help=True
+)
+app.add_typer(config_app)
+
+
+@config_app.command(name="show")
+def config_show(
+    unmask: bool = typer.Option(False, "--unmask", help="Show full credential values"),
+) -> None:
+    """Display current settings (credentials masked by default)."""
+    from carl_studio.settings import CARLSettings, GLOBAL_CONFIG
+    from carl_studio.tier import FEATURE_TIERS, Tier
+
+    c = get_console()
+    settings = CARLSettings.load()
+    effective = settings.get_effective_tier()
+    display = settings.display_dict(mask_secrets=not unmask)
+
+    c.blank()
+    c.header("CARL Settings")
+
+    # Tier info with auto-elevation indicator
+    tier_label = settings.tier.value.title()
+    if effective != settings.tier:
+        tier_label += f" -> {effective.value.title()} (auto-elevated)"
+    c.kv("Tier", tier_label, key_width=20)
+    c.kv("Preset", display["preset"], key_width=20)
+    c.blank()
+
+    # Core settings
+    pairs = [
+        ("default_model", display["default_model"]),
+        ("default_compute", display["default_compute"]),
+        ("hub_namespace", display["hub_namespace"]),
+        ("naming_prefix", display["naming_prefix"]),
+        ("log_level", display["log_level"]),
+        ("trackio_url", display["trackio_url"]),
+    ]
+    c.config_block(pairs, title="Defaults")
+
+    # Credentials
+    cred_pairs = [
+        ("hf_token", display["hf_token"]),
+        ("anthropic_api_key", display["anthropic_api_key"]),
+    ]
+    c.config_block(cred_pairs, title="Credentials")
+
+    # Observe defaults
+    obs_pairs = [
+        ("entropy", display["observe.entropy"]),
+        ("phi", display["observe.phi"]),
+        ("sparkline", display["observe.sparkline"]),
+        ("poll_interval", display["observe.poll_interval"]),
+        ("source", display["observe.source"]),
+    ]
+    c.config_block(obs_pairs, title="Observe Defaults")
+
+    # Config file locations
+    c.blank()
+    c.info(f"Global config: {GLOBAL_CONFIG}")
+    local = settings.model_config.get("env_prefix", "CARL_")
+    c.info(f"Env prefix: {local}")
+
+    # Feature access
+    c.blank()
+    gated_features = sorted(
+        ((f, t) for f, t in FEATURE_TIERS.items() if t > Tier.FREE),
+        key=lambda x: (x[1].value, x[0]),
+    )
+    if gated_features:
+        table = c.make_table("Feature", "Required Tier", "Access", title="Gated Features")
+        for feat, required in gated_features:
+            allowed = effective >= required
+            icon = c.theme.icons.ok if allowed else c.theme.icons.fail
+            table.add_row(feat, required.value.title(), icon)
+        c.print(table)
+
+    c.blank()
+
+
+@config_app.command(name="set")
+def config_set(
+    key: str = typer.Argument(..., help="Setting key (e.g. tier, default_model, log_level)"),
+    value: str = typer.Argument(..., help="Value to set"),
+) -> None:
+    """Set a configuration value. Saves to ~/.carl/config.yaml."""
+    from carl_studio.settings import CARLSettings, set_field
+
+    c = get_console()
+    settings = CARLSettings.load()
+
+    try:
+        settings = set_field(settings, key, value)
+    except ValueError as exc:
+        c.error(str(exc))
+        raise typer.Exit(1)
+
+    path = settings.save()
+    c.ok(f"{key} = {value}")
+    c.info(f"Saved to {path}")
+
+
+@config_app.command(name="reset")
+def config_reset(
+    force: bool = typer.Option(False, "--force", "-f", help="Skip confirmation"),
+) -> None:
+    """Reset all settings to defaults."""
+    from carl_studio.settings import reset_settings, GLOBAL_CONFIG
+
+    c = get_console()
+    if not force:
+        if not GLOBAL_CONFIG.is_file():
+            c.info("No config file to reset.")
+            raise typer.Exit(0)
+        if not typer.confirm("  Reset all settings to defaults?", default=False):
+            raise typer.Exit(0)
+
+    reset_settings()
+    c.ok("Settings reset to defaults.")
+    c.info(f"Removed {GLOBAL_CONFIG}")
+
+
+@config_app.command(name="init")
+def config_init(
+    preset: str = typer.Option(
+        "", "--preset", "-p", help="Start with a preset: research, production, quick"
+    ),
+    interactive: bool = typer.Option(
+        True, "--interactive/--no-interactive", help="Interactive setup"
+    ),
+) -> None:
+    """Create ~/.carl/config.yaml with optional interactive prompts."""
+    from carl_studio.settings import CARLSettings, GLOBAL_CONFIG, Preset
+    from carl_studio.tier import Tier
+
+    c = get_console()
+
+    if GLOBAL_CONFIG.is_file() and interactive:
+        c.info(f"Config already exists at {GLOBAL_CONFIG}")
+        if not typer.confirm("  Overwrite?", default=False):
+            raise typer.Exit(0)
+
+    settings = CARLSettings()
+
+    if preset:
+        try:
+            settings.preset = Preset(preset.lower())
+        except ValueError:
+            c.error(f"Unknown preset '{preset}'. Use: research, production, quick")
+            raise typer.Exit(1)
+
+    if interactive:
+        c.blank()
+        c.header("CARL Config Setup")
+        c.blank()
+
+        # Preset
+        c.print("  Configuration preset:")
+        c.print("  [camp.primary][1][/] Research   -- verbose observe, debug logging, all metrics")
+        c.print("  [camp.primary][2][/] Production -- minimal logging, auto-push, eval gating")
+        c.print("  [camp.primary][3][/] Quick      -- fast defaults, L4 compute, 20 steps max")
+        c.print("  [camp.primary][4][/] Custom     -- configure everything manually")
+        preset_choice = typer.prompt("  Preset", default="4")
+        preset_map = {
+            "1": Preset.RESEARCH,
+            "2": Preset.PRODUCTION,
+            "3": Preset.QUICK,
+            "4": Preset.CUSTOM,
+            "research": Preset.RESEARCH,
+            "production": Preset.PRODUCTION,
+            "quick": Preset.QUICK,
+            "custom": Preset.CUSTOM,
+        }
+        settings.preset = preset_map.get(preset_choice.strip().lower(), Preset.CUSTOM)
+
+        # Model
+        c.blank()
+        settings.default_model = typer.prompt(
+            "  Default base model",
+            default=settings.default_model,
+        )
+
+        # Hub namespace
+        detected_ns = settings.hub_namespace
+        if detected_ns:
+            c.info(f"Detected HF namespace: {detected_ns}")
+        settings.hub_namespace = typer.prompt(
+            "  Hub namespace",
+            default=detected_ns or "wheattoast11",
+        )
+
+        # Naming prefix
+        settings.naming_prefix = typer.prompt(
+            "  Naming prefix (for runs/repos)",
+            default=settings.naming_prefix,
+        )
+
+        # Trackio
+        c.blank()
+        trackio = typer.prompt("  Trackio dashboard URL (blank to skip)", default="")
+        if trackio:
+            settings.trackio_url = trackio
+
+        # Tier preference comes last so the workbench stays local-first.
+        c.blank()
+        c.print("  Preferred tier for upgrade prompts:")
+        c.print(
+            "  [camp.primary][1][/] Free -- Local-first workbench, BYOK compute, manual control"
+        )
+        c.print(
+            "  [camp.accent][2][/]  Paid -- Sync, autonomy, marketplace, fleet, and platform surfaces"
+        )
+        c.print("  [camp.muted]    You can stay free and upgrade later with carl camp upgrade[/]")
+        tier_choice = typer.prompt("  Tier", default="1")
+        tier_map = {
+            "1": Tier.FREE,
+            "2": Tier.PAID,
+            "free": Tier.FREE,
+            "paid": Tier.PAID,
+        }
+        settings.tier = tier_map.get(tier_choice.strip().lower(), Tier.FREE)
+
+    # Apply preset after interactive to merge
+    settings = settings.model_validate(settings.model_dump())
+
+    path = settings.save()
+    c.blank()
+    c.ok(f"Config saved to {path}")
+
+    # Show summary
+    display = settings.display_dict()
+    pairs = [(k, v) for k, v in display.items() if k not in ("hf_token", "anthropic_api_key")]
+    c.config_block(pairs, title="Your Settings")
+    c.blank()
+    c.info("Credentials are auto-detected from exported environment variables and HF hub auth.")
+    c.info(".env files are not auto-loaded; source them before running `carl` if you use one.")
+    c.info("Run 'carl config show' to see your full configuration.")
+    c.blank()
+
+
+@config_app.command(name="path")
+def config_path() -> None:
+    """Show config file locations."""
+    from carl_studio.settings import GLOBAL_CONFIG, CARL_HOME, _find_local_config
+
+    c = get_console()
+    c.blank()
+    c.kv("Home", str(CARL_HOME), key_width=14)
+    c.kv("Global config", str(GLOBAL_CONFIG), key_width=14)
+    c.kv("Global exists", "yes" if GLOBAL_CONFIG.is_file() else "no", key_width=14)
+
+    local = _find_local_config()
+    if local:
+        c.kv("Local config", str(local), key_width=14)
+    else:
+        c.kv("Local config", "(none found)", key_width=14)
+    c.blank()
+
+
+@config_app.command(name="preset")
+def config_preset(
+    name: str = typer.Argument(..., help="Preset name: research, production, quick"),
+) -> None:
+    """Apply a configuration preset."""
+    from carl_studio.settings import CARLSettings, Preset
+
+    c = get_console()
+    try:
+        preset = Preset(name.lower())
+    except ValueError:
+        c.error(f"Unknown preset '{name}'. Use: research, production, quick")
+        raise typer.Exit(1)
+
+    if preset == Preset.CUSTOM:
+        c.error("'custom' is not a preset. Use 'carl config set' to customize.")
+        raise typer.Exit(1)
+
+    settings = CARLSettings.load()
+    settings.preset = preset
+    settings = settings.model_validate(settings.model_dump())  # Re-trigger preset application
+    path = settings.save()
+
+    c.ok(f"Applied preset: {name}")
+    display = settings.display_dict()
+    c.config_block(
+        [
+            (k, v)
+            for k, v in display.items()
+            if k
+            in (
+                "default_compute",
+                "log_level",
+                "observe.entropy",
+                "observe.phi",
+                "observe.sparkline",
+                "observe.poll_interval",
+            )
+        ],
+        title=f"Preset: {name}",
+    )
+    c.info(f"Saved to {path}")
+    c.blank()
+
+
+# ---------------------------------------------------------------------------
+# carl login — authenticate with carl.camp
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="login", hidden=True)
+def login(
+    upgrade: bool = typer.Option(False, "--upgrade", help="Open upgrade checkout after login"),
+) -> None:
+    """Authenticate with carl.camp. Opens browser for login."""
+    import webbrowser
+    import http.server
+    import urllib.parse
+    import threading
+
+    c = get_console()
+    c.blank()
+    c.header("CARL Login")
+
+    from carl_studio.db import LocalDB
+
+    db = LocalDB()
+
+    # Check if already logged in
+    existing_jwt = db.get_auth("jwt")
+    if existing_jwt and not upgrade:
+        c.ok("Already authenticated.")
+        c.info("Run 'carl login --upgrade' to open the upgrade page.")
+        c.blank()
+        return
+
+    received_token: dict[str, str] = {}
+    server_ready = threading.Event()
+
+    class CallbackHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            parsed = urllib.parse.urlparse(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+
+            if "access_token" in params:
+                received_token["jwt"] = params["access_token"][0]
+                if "refresh_token" in params:
+                    received_token["refresh"] = params["refresh_token"][0]
+
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.end_headers()
+                self.wfile.write(b"""<html><body style="background:#0A0F0A;color:#E8E8D8;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+                <div style="text-align:center"><h2 style="color:#FF6B35">Welcome to Camp CARL</h2><p>You can close this tab.</p></div>
+                </body></html>""")
+            else:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Missing token")
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass  # Suppress HTTP logs
+
+    # Start local callback server
+    server = http.server.HTTPServer(("127.0.0.1", 0), CallbackHandler)
+    port = server.server_address[1]
+    callback_url = f"http://127.0.0.1:{port}"
+
+    def serve() -> None:
+        server_ready.set()
+        server.handle_request()  # Handle one request then stop
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    server_ready.wait()
+
+    # Open browser
+    camp_url = "https://carl.camp"
+    login_url = f"{camp_url}/auth/login?callback={urllib.parse.quote(callback_url)}"
+
+    if upgrade:
+        login_url += "&upgrade=true"
+
+    c.info(f"Opening browser: {login_url}")
+    webbrowser.open(login_url)
+    c.info("Waiting for authentication...")
+
+    # Wait for callback (timeout 120s)
+    thread.join(timeout=120)
+    server.server_close()
+
+    if received_token.get("jwt"):
+        db.set_auth("jwt", received_token["jwt"], ttl_hours=24)
+        db.set_config("supabase_url", "https://ywtyyszktjfrzogwnjyo.supabase.co")
+
+        c.ok("Authenticated successfully!")
+        c.info("Your session is cached locally for 24 hours.")
+        c.blank()
+    else:
+        c.error("Authentication timed out or failed.")
+        c.info("Try again: carl login")
+        c.blank()
+        raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# carl sync — push/pull data to carl.camp
+# ---------------------------------------------------------------------------
+
+sync_app = typer.Typer(name="sync", help="Sync data with carl.camp")
+app.add_typer(sync_app, hidden=True)
+
+
+@sync_app.command(name="push")
+def sync_push_cmd(
+    types: str = typer.Option(
+        "runs", "--types", "-t", help="Entity types to push (comma-separated)"
+    ),
+) -> None:
+    """Push local data to carl.camp."""
+    c = get_console()
+    from carl_studio.tier import check_tier, tier_message
+
+    allowed, _, _ = check_tier("sync.cloud")
+    if not allowed:
+        c.warn(tier_message("sync.cloud") or "Cloud sync requires CARL Paid.")
+        c.info("Upgrade: carl login --upgrade  or  https://carl.camp/pricing")
+        raise typer.Exit(1)
+    c.blank()
+    c.header("CARL Sync", "Push")
+
+    from carl_studio.sync import push, SyncError
+
+    entity_types = [t.strip() for t in types.split(",")]
+
+    try:
+        results = push(entity_types=entity_types)
+        for etype, count in results.items():
+            if count > 0:
+                c.ok(f"{etype}: {count} synced")
+            else:
+                c.info(f"{etype}: nothing to push")
+    except SyncError as e:
+        c.error(str(e))
+        raise typer.Exit(1)
+
+    c.blank()
+
+
+@sync_app.command(name="pull")
+def sync_pull_cmd(
+    since: str = typer.Option("", "--since", "-s", help="Pull updates since ISO timestamp"),
+    types: str = typer.Option("", "--types", "-t", help="Entity types to pull (comma-separated)"),
+) -> None:
+    """Pull updates from carl.camp."""
+    c = get_console()
+    from carl_studio.tier import check_tier, tier_message
+
+    allowed, _, _ = check_tier("sync.cloud")
+    if not allowed:
+        c.warn(tier_message("sync.cloud") or "Cloud sync requires CARL Paid.")
+        c.info("Upgrade: carl login --upgrade  or  https://carl.camp/pricing")
+        raise typer.Exit(1)
+    c.blank()
+    c.header("CARL Sync", "Pull")
+
+    from carl_studio.sync import pull, SyncError
+
+    entity_types = [t.strip() for t in types.split(",")] if types else None
+
+    try:
+        results = pull(since=since or None, entity_types=entity_types)
+        for etype, count in results.items():
+            if count > 0:
+                c.ok(f"{etype}: {count} pulled")
+            else:
+                c.info(f"{etype}: up to date")
+    except SyncError as e:
+        c.error(str(e))
+        raise typer.Exit(1)
+
+    c.blank()
+

@@ -1,77 +1,106 @@
-# CARL Studio — carl-studio
+# CARL Studio project memory
 
-**CARL** (Coherence-Aware Reinforcement Learning) — MIT-licensed SDK and CLI.
-**PyPI:** `pip install carl-studio` | **Repo:** [wheattoast11/carl](https://github.com/wheattoast11/carl) | **Author:** Tej Desai / Intuition Labs LLC
+Project-specific memory for agents working in this repository.
+Keep this file short, current, and grounded in code truth.
 
-## Architecture
+## What this repo is
 
-4 layers: primitives → types → training → CLI/MCP
+- `carl-studio` is an MIT-licensed Python package and CLI for
+  **Coherence-Aware Reinforcement Learning**.
+- Python requirement: `>=3.11`.
+- `pyproject.toml` is the source of truth for packaging, dependencies, Ruff, and Pyright.
+- `README.md` is for users. `AGENTS.md` is the agent execution guide.
 
-| Layer | Location | Purpose |
-|-------|----------|---------|
-| Primitives | `primitives/` | Phi, CoherenceProbe, CoherenceTrace, FrameBuffer |
-| Types | `types/` | TrainingConfig, EvalConfig, TrainingRun (Pydantic v2) |
-| Training | `training/` | CARLTrainer, CascadeRewardManager, rewards, callbacks |
-| CLI | `cli.py` | `carl observe/train/eval/status/logs/config/...` (Typer + Rich) |
-
-## IP Boundary — CRITICAL
-
-| What | Where | License |
-|------|-------|---------|
-| Conservation law, Phi, rewards, CLI | **This repo** | MIT |
-| SLOT, resonance LR, Kuramoto, observer methodology | `terminals-runtime` | BUSL-1.1 |
-
-**NEVER put proprietary algorithms in this repo.** Use stubs that `try: from terminals_runtime...` with graceful fallback. The following files are stubs:
-- `ttt/slot.py` — delegates to `terminals_runtime.ttt`
-- `training/lr_resonance.py` — delegates to `terminals_runtime.training`
-- `primitives/frame_buffer.py` `_synchronization_index()` — delegates to `terminals_runtime.primitives`
-- `primitives/coherence_observer.py` `_load_observer_prompt()` — delegates to `terminals_runtime.observe`
-
-## Tier Model
-
-- **FREE:** observe, train, eval, bench, align, learn, push, bundle, BYOK compute
-- **PRO:** `--live` TUI, `--diagnose`, `--send-it`, auto-gating, scheduled runs
-- **ENTERPRISE:** MCP server, custom environments, orchestration, RBAC
-- Gate on **autonomy**, not capability. `tier.py` + `settings.py` enforce this.
-
-## Publishing
-
-- PyPI: Trusted publishing via `.github/workflows/publish.yml`. Create GitHub release → auto-publishes.
-- HF wheel: Upload to `wheattoast11/zero-rl-tool-calling-data` for training script consumption.
-- Release workflow auto-bumps to the next minor version unless `pyproject.toml` or the release tag already sets a higher manual version.
-
-## Commands
+## Core commands
 
 ```bash
-pip install -e ".[all]"       # Dev install with all extras
-python -m pytest tests/       # Run tests (71+ tests, no GPU needed)
-carl observe --url <trackio>  # One-shot crystal metrics
-carl train --dry-run           # Preview training config
-carl eval --adapter <hub-id>   # Run eval
-carl config show               # Display settings
+pip install -e ".[dev]"
+pip install -e ".[all]"
+pytest tests/ -q --tb=short
+pytest tests/test_release_version.py::test_manual_release_tag_wins_when_higher -q --tb=short
+ruff check path/to/changed_file.py
+pyright src/carl_studio/<changed_module>.py
+python -m build
 ```
 
-## Gotchas
+Run pytest from the repo root. `tests/conftest.py` depends on repo-relative paths.
 
-- **CARL = Coherence-Aware, NOT Crystal-Aligned.** If you see "Crystal-Aligned" anywhere, fix it.
-- **pyproject.toml:** `dependencies` must be under `[project]`, NOT under `[project.urls]`. Hatchling silently misparses otherwise.
-- **`_safe_path`:** Always use `startswith(workdir + os.sep)`, never bare `startswith(workdir)`.
-- **Pyright strict mode:** Enabled. TRL/transformers dynamic imports show false positives — these are runtime-correct.
-- **`empty_cache()` in eval loops:** Once per sample, not per turn.
-- **Settings:** `CARLSettings.load()` reads YAML on every call. Cache if called repeatedly.
-- **HF token:** Use `huggingface_hub.get_token()` first, `os.environ` fallback. Token lives in HF credentials, not shell env.
+## Architecture snapshot
 
-## Key Files
+- `src/carl_studio/__init__.py` keeps top-level imports light and lazy-loads heavy modules.
+- `src/carl_studio/primitives/` — coherence math, traces, probes, observers.
+- `src/carl_studio/types/config.py` — Pydantic training config surface.
+- `src/carl_studio/training/` — trainer, pipeline, rewards, cascade.
+- `src/carl_studio/eval/runner.py` — eval runner and sandbox.
+- `src/carl_studio/compute/` — backend registry and compute backends.
+- `src/carl_studio/cli/` — modular Typer CLI package entrypoint.
+- `src/carl_studio/mcp/server.py` — FastMCP server.
+- `src/carl_studio/db.py` — local SQLite state under `~/.carl`.
+- `src/carl_studio/settings.py` — layered config from env, `~/.carl/config.yaml`, and `carl.yaml`.
+- `src/carl_studio/admin.py` — hardware-gated access to the private runtime.
+- `skills/`, `a2a/`, `credits/`, `marketplace.py`, and `curriculum.py` are live code paths.
 
-| File | Purpose |
-|------|---------|
-| `cli.py` | 15+ Typer commands |
-| `settings.py` | CARLSettings (Pydantic BaseSettings, layered YAML) |
-| `tier.py` | Freemium tier system (FREE/PRO/ENTERPRISE) |
-| `primitives/coherence_trace.py` | Per-token Phi/entropy/delta_phi arrays |
-| `training/cascade.py` | Adaptive cascade gating (self-calibrating) |
-| `training/rewards/composite.py` | CARLReward factory (0.5 coherence + 0.3 cloud + 0.2 discontinuity) |
-| `compute/hf_jobs.py` | HF Jobs backend (provision, execute, status, logs, stop) |
-| `eval/runner.py` | Phase 1 + Phase 2' eval with 3-format tool call parser |
-| `observe/app.py` | Textual TUI dashboard |
-| `environments/builtins/` | CodeSandboxEnv, SQLSandboxEnv |
+## Product and licensing boundaries
+
+- CARL means **Coherence-Aware Reinforcement Learning**. Do not rename it.
+- Public API language should prefer **coherence** terms.
+- Internal math can still use Phi, kappa, sigma, entropy, and discontinuity.
+- Active tier model in code is **FREE / PAID**.
+- `PRO` and `ENTERPRISE` are compatibility aliases, not separate active tiers.
+- Gate **autonomy**, not the core training/eval capability.
+- Proprietary algorithms belong in `terminals-runtime` or the private admin runtime,
+  not in this repo.
+
+## Dependency policy
+
+- Keep `import carl_studio` light. Do not make torch/transformers/anthropic/textual/mcp
+  mandatory at import time for lightweight modules.
+- Use lazy imports for optional dependencies.
+- Emit clear install hints when an optional dependency is missing.
+- Prefer `huggingface_hub.get_token()` before falling back to `HF_TOKEN` when touching
+  backend auth flows.
+- Do not add implicit `.env` loading.
+
+## Code conventions
+
+- `from __future__ import annotations` at the top of each Python file.
+- Import order: stdlib, third-party, local.
+- Modern type syntax: `list[str]`, `dict[str, Any]`, `str | None`.
+- Pydantic v2 models for configs and structured data.
+- `default_factory` for mutable defaults.
+- Constants stay module-level; physics constants live in `primitives/constants.py`.
+- Prefer `Path` over string path manipulation.
+- For sandboxed paths, require:
+  `resolved == workdir or resolved.startswith(workdir + os.sep)`.
+
+## Error handling and CLI behavior
+
+- Library code raises explicit exceptions.
+- Preserve `raise ... from exc` when wrapping failures.
+- CLI code should use `CampConsole` and `typer.Exit`, not ad-hoc `print` + return codes.
+- Never log or persist secrets.
+- Keep network clients dependency-light unless there is a compelling reason otherwise.
+
+## Validation policy
+
+- Docs-only change -> no tests unless commands/examples changed.
+- Settings/tier/config change -> targeted tests + targeted Pyright.
+- CLI change -> targeted tests + targeted Ruff.
+- Packaging/release change -> `tests/test_release_version.py` + `python -m build`.
+- Avoid turning unrelated lint/type debt into drive-by cleanup unless asked.
+
+## Current repo truths
+
+- There are no Cursor rules or Copilot instruction files in this repo.
+- There is no `Makefile`, `tox.ini`, `pytest.ini`, `ruff.toml`, or `.editorconfig`.
+- Publish workflow lives in `.github/workflows/publish.yml` and uses `python -m build`.
+- `python -m build` works.
+- Single pytest node IDs work from the repo root.
+- Repo-wide Ruff and Pyright currently have pre-existing noise; validate touched files first.
+
+## Keep an eye on
+
+- Preserve optional dependency boundaries.
+- Preserve import-time lightness.
+- Keep docs current and minimal.
+- If docs disagree with code, fix the docs or explicitly note the mismatch.

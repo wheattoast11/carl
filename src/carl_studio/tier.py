@@ -6,15 +6,14 @@ Tier philosophy:
   FREE  — Full CARL loop: observe, train, eval, bench, align, learn, push,
           bundle. BYOK compute. SQLite persistence. All public CARL rewards.
           Gate on autonomy, not capability. Users train for free.
-  PAID  — The discovery engine: autonomous pipeline (--send-it), Claude-powered
-          diagnosis (--diagnose), live TUI (--live), auto-gating, scheduled runs,
-          resonance rewards, experiment management, carl.camp dashboard, cloud
-          sync, MCP server, multi-tenant/RBAC.
+  PAID  — The discovery engine: autonomous pipeline (--send-it), auto-gating,
+          scheduled runs, resonance rewards, experiment management, carl.camp
+          dashboard, cloud sync, MCP server, multi-tenant/RBAC.
 
 Subscription check priority:
   1. SQLite auth cache (~/.carl/carl.db) — sub-ms, offline-safe
   2. Supabase RPC (carl.camp) — ~100ms, if cache expired
-  3. Auto-elevation from env vars — ANTHROPIC_API_KEY implies PAID
+  3. Auto-elevation from local credentials — ANTHROPIC_API_KEY or HF auth implies PAID
   4. 48h grace period if network down
   5. Default to FREE
 """
@@ -82,6 +81,8 @@ FEATURE_TIERS: dict[str, Tier] = {
     # ---------------------------------------------------------------
     "observe": Tier.FREE,
     "observe.basic": Tier.FREE,
+    "observe.live": Tier.FREE,  # Real-time Textual TUI dashboard
+    "observe.diagnose": Tier.FREE,  # BYOK Claude-powered crystal analysis
     "eval": Tier.FREE,
     "eval.phase1": Tier.FREE,
     "eval.phase2": Tier.FREE,
@@ -108,29 +109,28 @@ FEATURE_TIERS: dict[str, Tier] = {
     # PAID ($29/mo) — Autonomy + Discovery + Resonance + Platform.
     # Everything that runs without human in the loop.
     # ---------------------------------------------------------------
-    "observe.live": Tier.PAID,           # Real-time Textual TUI dashboard
-    "observe.diagnose": Tier.PAID,       # Claude-powered crystal analysis
-    "train.send_it": Tier.PAID,          # Autonomous SFT→eval→GRPO→eval→push pipeline
-    "train.auto_gate": Tier.PAID,        # Automatic eval gating between stages
-    "train.auto_cascade": Tier.PAID,     # Autonomous cascade stage transitions
-    "train.scheduled": Tier.PAID,        # Scheduled recurring training runs
-    "bench.cti_report": Tier.PAID,       # Full CTI (CARL Trainability Index) report
-    "bench.probes": Tier.PAID,           # Advanced probes (pressure, adaptation)
+    "train.send_it": Tier.PAID,  # Autonomous SFT→eval→GRPO→eval→push pipeline
+    "train.auto_gate": Tier.PAID,  # Automatic eval gating between stages
+    "train.auto_cascade": Tier.PAID,  # Autonomous cascade stage transitions
+    "train.scheduled": Tier.PAID,  # Scheduled recurring training runs
+    "bench.cti_report": Tier.PAID,  # Full CTI (CARL Trainability Index) report
+    "bench.probes": Tier.PAID,  # Advanced probes (pressure, adaptation)
     "observe.claude_stream": Tier.PAID,  # Streaming Claude observations during training
-    "eval.auto_schedule": Tier.PAID,     # Automatic eval scheduling on checkpoints
+    "eval.auto_schedule": Tier.PAID,  # Automatic eval scheduling on checkpoints
     "mcp": Tier.PAID,
     "mcp.serve": Tier.PAID,
     "environments.custom": Tier.PAID,
     "compute.multi_backend": Tier.PAID,
     "orchestration": Tier.PAID,
     "orchestration.multi_run": Tier.PAID,
-    "train.pipeline.multi": Tier.PAID,   # Multi-model pipeline orchestration
+    "train.pipeline.multi": Tier.PAID,  # Multi-model pipeline orchestration
     "rbac": Tier.PAID,
     "audit_trail": Tier.PAID,
-    "experiment": Tier.PAID,             # Discovery engine
+    "experiment": Tier.PAID,  # Discovery engine
     "experiment.auto_judge": Tier.PAID,  # Automated experiment judgment
-    "sync.cloud": Tier.PAID,             # carl.camp cloud sync
-    "dashboard": Tier.PAID,              # carl.camp web dashboard
+    "sync.cloud": Tier.PAID,  # carl.camp cloud sync
+    "dashboard": Tier.PAID,  # carl.camp web dashboard
+    "marketplace.publish": Tier.PAID,  # Publish to carl.camp marketplace
 }
 
 
@@ -152,6 +152,7 @@ def tier_allows(tier: Tier, feature: str) -> bool:
 # Auto-elevation: infer tier from available credentials
 # ---------------------------------------------------------------------------
 
+
 def detect_effective_tier(configured_tier: Tier) -> Tier:
     """Elevate tier based on subscription status or credentials.
 
@@ -167,6 +168,7 @@ def detect_effective_tier(configured_tier: Tier) -> Tier:
     # Check Supabase subscription via local cache
     try:
         from carl_studio.db import LocalDB
+
         db = LocalDB()
         cached_tier = db.get_auth("tier")
         if cached_tier == "paid":
@@ -174,9 +176,10 @@ def detect_effective_tier(configured_tier: Tier) -> Tier:
     except Exception:
         pass
 
-    # Auto-elevate if user has Claude API key (enables --diagnose etc.)
+    # Auto-elevate if user has local credentials for advanced workflows.
     has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    if has_anthropic and effective < Tier.PAID:
+    has_hf = bool(_detect_hf_token())
+    if (has_anthropic or has_hf) and effective < Tier.PAID:
         effective = Tier.PAID
 
     return effective
@@ -189,6 +192,7 @@ def _detect_hf_token() -> str | None:
         return token
     try:
         from huggingface_hub import get_token
+
         return get_token()
     except Exception:
         return None
@@ -280,7 +284,4 @@ def tier_message(feature: str) -> str | None:
     if allowed:
         return None
     url = _UPGRADE_URLS.get(required, "https://terminals.tech/pricing")
-    return (
-        f"This feature requires CARL {required.value.title()}. "
-        f"Upgrade at {url}"
-    )
+    return f"This feature requires CARL {required.value.title()}. Upgrade at {url}"

@@ -24,9 +24,9 @@ set +a
 | `carl observe --url ... --run ...` against a public Trackio Space | nothing |
 | `carl observe --live ...` | no key required for public Spaces; install `carl-studio[tui]` |
 | `carl observe --diagnose ...` | `ANTHROPIC_API_KEY` or `--api-key` |
-| `carl chat` | `ANTHROPIC_API_KEY` or `--api-key` |
+| `carl lab chat` | `ANTHROPIC_API_KEY` or `--api-key` |
 | `carl train`, `carl eval` on Hub models/datasets | `HF_TOKEN` or prior Hugging Face login |
-| `carl status`, `carl logs`, `carl stop`, `carl push` | `HF_TOKEN` or prior Hugging Face login |
+| `carl run status`, `carl run logs`, `carl run stop`, `carl push` | `HF_TOKEN` or prior Hugging Face login |
 | RunPod backend | `RUNPOD_API_KEY` and usually `HF_TOKEN` |
 
 ## Provider Notes
@@ -61,7 +61,7 @@ Or pass a key directly:
 
 ```bash
 carl observe --file logs/train.jsonl --diagnose --api-key sk-ant-xxx
-carl chat --api-key sk-ant-xxx
+carl lab chat --api-key sk-ant-xxx
 ```
 
 ### RunPod

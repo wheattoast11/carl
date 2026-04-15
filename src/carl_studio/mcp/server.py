@@ -1,9 +1,61 @@
 """CARL Studio MCP Server -- exposes training tools for AI agents."""
 from __future__ import annotations
 
+import json
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("carl-studio")
+
+# ---------------------------------------------------------------------------
+# Session state — module-level, persists for the MCP server process lifetime
+# ---------------------------------------------------------------------------
+
+_session: dict[str, str] = {"jwt": "", "tier": "free", "user_id": ""}
+
+# ---------------------------------------------------------------------------
+# Skills availability — graceful degradation if optional deps missing
+# ---------------------------------------------------------------------------
+
+try:
+    from carl_studio.skills.runner import SkillRunner, SkillRegistry
+    from carl_studio.skills.builtins import BUILTIN_SKILLS
+    _skills_available = True
+except ImportError:
+    _skills_available = False
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _require_tier(feature: str) -> bool:
+    """Return True if current session tier allows the feature."""
+    from carl_studio.tier import Tier, tier_allows
+    t = Tier(_session.get("tier", "free"))
+    return tier_allows(t, feature)
+
+
+def _tier_error(feature: str) -> str:
+    """Return standard JSON error for tier gate failures."""
+    return json.dumps({
+        "error": f"Feature '{feature}' requires CARL Paid tier.",
+        "current_tier": _session.get("tier", "free"),
+        "upgrade": "https://carl.camp/pricing",
+        "hint": "Call authenticate(jwt) first, or upgrade at carl.camp",
+    })
+
+
+def _build_skill_runner() -> "SkillRunner":
+    """Build a SkillRunner with all builtins registered."""
+    runner = SkillRunner()  # type: ignore[possibly-undefined]
+    for skill in BUILTIN_SKILLS:  # type: ignore[possibly-undefined]
+        runner.register(skill)
+    return runner
+
+
+# ---------------------------------------------------------------------------
+# Original 8 tools — unchanged
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -11,7 +63,6 @@ async def start_training(config_yaml: str) -> str:
     """Start a CARL training run from a YAML config string.
     Returns JSON with run_id and initial status.
     """
-    import json
     import yaml
     from carl_studio.types.config import TrainingConfig
     from carl_studio.training.trainer import CARLTrainer
@@ -35,7 +86,6 @@ async def get_run_status(run_id: str, backend: str = "hf_jobs") -> str:
     """Get current status of a training run.
     Returns JSON with phase, status.
     """
-    import json
     from carl_studio.compute import get_backend
 
     b = get_backend(backend)
@@ -46,7 +96,6 @@ async def get_run_status(run_id: str, backend: str = "hf_jobs") -> str:
 @mcp.tool()
 async def get_logs(run_id: str, backend: str = "hf_jobs", tail: int = 30) -> str:
     """Get recent log lines from a training run."""
-    import json
     from carl_studio.compute import get_backend
 
     b = get_backend(backend)
@@ -60,7 +109,6 @@ async def observe_now(run_id: str) -> str:
     Requires ANTHROPIC_API_KEY in environment.
     Returns JSON with status, diagnosis, signals, recommendations.
     """
-    import json
     from carl_studio.primitives import CoherenceObserver
 
     observer = CoherenceObserver()
@@ -74,7 +122,6 @@ async def get_coherence_metrics(logits_summary: str) -> str:
     Input: JSON with vocab_size, n_tokens.
     Returns JSON with KAPPA, SIGMA, T_STAR for the given embedding dimension.
     """
-    import json
     from carl_studio.primitives.constants import KAPPA, SIGMA, T_STAR
 
     data = json.loads(logits_summary)
@@ -91,7 +138,6 @@ async def get_coherence_metrics(logits_summary: str) -> str:
 @mcp.tool()
 async def stop_training(run_id: str, backend: str = "hf_jobs") -> str:
     """Cancel a running training job."""
-    import json
     from carl_studio.compute import get_backend
 
     b = get_backend(backend)
@@ -102,8 +148,6 @@ async def stop_training(run_id: str, backend: str = "hf_jobs") -> str:
 @mcp.tool()
 async def list_backends() -> str:
     """List available compute backends and their status."""
-    import json
-
     backends = [
         {"name": "hf_jobs", "type": "managed", "description": "HuggingFace Jobs (PEP 723 UV scripts)"},
         {"name": "runpod", "type": "pods", "description": "RunPod GPU pods"},
@@ -120,7 +164,6 @@ async def validate_config(config_yaml: str) -> str:
     """Validate a CARL training config without starting training.
     Returns JSON with valid=true/false and any validation errors.
     """
-    import json
     import yaml
     from carl_studio.types.config import TrainingConfig
 
@@ -151,3 +194,339 @@ async def generate_bundle(config_yaml: str) -> str:
     bundler = Bundler()
     script = bundler.generate(config)
     return script
+
+
+# ---------------------------------------------------------------------------
+# New Tool 1: authenticate
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def authenticate(jwt: str) -> str:
+    """Authenticate this MCP session with a carl.camp JWT.
+
+    Call this first before using PAID features.
+    Returns: JSON with {tier, user_id, features_available: []}.
+    """
+    global _session
+    import base64
+    import json as json_mod
+
+    if not jwt or not isinstance(jwt, str):
+        return json.dumps({"error": "jwt must be a non-empty string", "authenticated": False})
+
+    try:
+        parts = jwt.split(".")
+        if len(parts) != 3:
+            return json.dumps({"error": "Invalid JWT format — expected 3 dot-separated segments", "authenticated": False})
+
+        # Pad to valid base64 length
+        payload_b64 = parts[1]
+        padding = 4 - (len(payload_b64) % 4)
+        if padding != 4:
+            payload_b64 += "=" * padding
+
+        payload = json_mod.loads(base64.urlsafe_b64decode(payload_b64))
+
+        user_id = str(payload.get("sub", ""))
+        app_meta = payload.get("app_metadata", {}) or {}
+        user_meta = payload.get("user_metadata", {}) or {}
+        tier_raw = app_meta.get("tier") or user_meta.get("tier") or "free"
+        # Normalize aliases to canonical values
+        tier = "paid" if tier_raw in ("paid", "pro", "enterprise") else "free"
+
+        _session["jwt"] = jwt
+        _session["tier"] = tier
+        _session["user_id"] = user_id
+
+        from carl_studio.tier import Tier, FEATURE_TIERS, tier_allows
+        t = Tier(tier)
+        features = [f for f, _req in FEATURE_TIERS.items() if tier_allows(t, f)]
+
+        return json.dumps({
+            "tier": tier,
+            "user_id": user_id,
+            "features_available": features,
+            "authenticated": True,
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "authenticated": False})
+
+
+# ---------------------------------------------------------------------------
+# New Tool 2: get_tier_status
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_tier_status() -> str:
+    """Get current session tier and which features are accessible.
+
+    Returns: JSON with {tier, authenticated, features: {name: allowed}}.
+    Shows 'free' if not authenticated — no JWT required.
+    """
+    from carl_studio.tier import Tier, FEATURE_TIERS, tier_allows
+
+    tier = _session.get("tier", "free")
+    authenticated = bool(_session.get("jwt", ""))
+    t = Tier(tier)
+    features = {f: tier_allows(t, f) for f in FEATURE_TIERS}
+
+    return json.dumps({
+        "tier": tier,
+        "authenticated": authenticated,
+        "user_id": _session.get("user_id", ""),
+        "features": features,
+    })
+
+
+# ---------------------------------------------------------------------------
+# New Tool 3: get_project_state
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_project_state(config_path: str = "carl.yaml") -> str:
+    """Get full project state: config, last run, last eval, pending sync count.
+
+    Reads carl.yaml from the current directory (or config_path).
+    Returns: JSON with {project, last_run, last_eval, pending_sync}.
+    No tier required.
+    """
+    from pathlib import Path
+
+    project_data: dict = {}
+    try:
+        from carl_studio.project import load_project
+        project = load_project(Path(config_path))
+        project_data = project.model_dump()
+    except FileNotFoundError:
+        project_data = {"error": f"Config file not found: {config_path}"}
+    except Exception as e:
+        project_data = {"error": str(e)}
+
+    last_run: dict | None = None
+    last_eval: dict | None = None
+    pending_sync_count: int = 0
+    try:
+        from carl_studio.db import LocalDB
+        db = LocalDB()
+        runs = db.list_runs(limit=1)
+        last_run = runs[0] if runs else None
+        # Eval is stored as a run with mode="eval"
+        eval_runs = db.list_runs(limit=1, status=None)
+        for r in eval_runs:
+            if r.get("mode") == "eval":
+                last_eval = r
+                break
+        pending = db.get_pending_sync()
+        pending_sync_count = len(pending)
+        db.close()
+    except Exception as e:
+        last_run = {"error": str(e)}
+
+    return json.dumps({
+        "project": project_data,
+        "last_run": last_run,
+        "last_eval": last_eval,
+        "pending_sync": pending_sync_count,
+    }, default=str)
+
+
+# ---------------------------------------------------------------------------
+# New Tool 4: run_skill
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def run_skill(skill_name: str, inputs_json: str = "{}") -> str:
+    """Run a CARL skill by name and return the result.
+
+    Available skills: observer, grader, trainer, synthesizer, deployer.
+    inputs_json: JSON string of keyword arguments for the skill.
+
+    Requires PAID tier for grader (full eval) and trainer (job submission).
+    Returns: JSON SkillResult.
+    """
+    if not _skills_available:
+        return json.dumps({"error": "Skills not installed. pip install carl-studio[skills]"})
+
+    try:
+        inputs = json.loads(inputs_json) if inputs_json else {}
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid inputs_json: {e}"})
+
+    runner = _build_skill_runner()
+    skill = runner.get(skill_name)
+    if skill is None:
+        runner.close()
+        available = [s.name for s in runner.list_skills()]
+        return json.dumps({
+            "error": f"Skill '{skill_name}' not found.",
+            "available": available,
+        })
+
+    # Tier gate for paid skills
+    requires_tier = getattr(skill, "requires_tier", "free")
+    if requires_tier == "paid" and not _require_tier("experiment"):
+        runner.close()
+        return _tier_error(f"skill:{skill_name}")
+
+    try:
+        result = runner.run(skill_name, **inputs)
+        runner.close()
+        return result.model_dump_json()
+    except Exception as e:
+        runner.close()
+        return json.dumps({"error": str(e), "skill_name": skill_name, "success": False})
+
+
+# ---------------------------------------------------------------------------
+# New Tool 5: list_skills
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def list_skills() -> str:
+    """List all available CARL skills with their descriptions and tier requirements.
+
+    Returns: JSON with {skills: [{name, badge, description, requires_tier}]}.
+    """
+    if not _skills_available:
+        return json.dumps({"error": "Skills not installed. pip install carl-studio[skills]"})
+
+    runner = _build_skill_runner()
+    skills_list = [
+        {
+            "name": s.name,
+            "badge": s.badge,
+            "description": s.description,
+            "requires_tier": s.requires_tier,
+        }
+        for s in runner.list_skills()
+    ]
+    runner.close()
+    return json.dumps({"skills": skills_list})
+
+
+# ---------------------------------------------------------------------------
+# New Tool 6: get_agent_card
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_agent_card() -> str:
+    """Get the CARL Agent Card — capability manifest for A2A integration.
+
+    Returns: JSON CARLAgentCard describing this agent's capabilities,
+    skills, tier, and endpoint.
+    """
+    from carl_studio.a2a.agent_card import CARLAgentCard
+    card = CARLAgentCard.current()
+    return card.to_json()
+
+
+# ---------------------------------------------------------------------------
+# New Tool 7: dispatch_a2a_task
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def dispatch_a2a_task(
+    skill_name: str,
+    inputs_json: str = "{}",
+    sender: str = "external",
+) -> str:
+    """Dispatch an A2A task to the CARL agent's local bus.
+
+    The task will be executed when 'carl agent run' is called locally.
+    Requires PAID tier.
+    Returns: JSON with {task_id, status: "pending"}.
+    """
+    if not _require_tier("orchestration"):
+        return _tier_error("orchestration")
+
+    try:
+        inputs = json.loads(inputs_json) if inputs_json else {}
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid inputs_json: {e}"})
+
+    try:
+        from carl_studio.a2a.bus import LocalBus
+        from carl_studio.a2a.task import A2ATask
+        import uuid
+
+        task = A2ATask(
+            id=str(uuid.uuid4()),
+            skill=skill_name,
+            inputs=inputs,
+            sender=sender,
+            receiver="carl-studio",
+        )
+        bus = LocalBus()
+        task_id = bus.post(task)
+        bus.close()
+
+        return json.dumps({
+            "task_id": task_id,
+            "status": "pending",
+            "skill": skill_name,
+            "sender": sender,
+        })
+    except Exception as e:
+        return json.dumps({"error": str(e), "task_id": None, "status": "failed"})
+
+
+# ---------------------------------------------------------------------------
+# New Tool 8: sync_data
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def sync_data(direction: str = "push", entity_types: str = "runs") -> str:
+    """Sync local data with carl.camp. direction: push | pull.
+
+    Requires PAID tier and carl login (JWT in session or local DB).
+    Returns: JSON with sync results.
+    """
+    if not _require_tier("sync.cloud"):
+        return _tier_error("sync.cloud")
+
+    if direction not in ("push", "pull"):
+        return json.dumps({"error": f"Invalid direction '{direction}'. Use 'push' or 'pull'."})
+
+    # Parse entity_types — comma-separated or single
+    types_list = [t.strip() for t in entity_types.split(",") if t.strip()] or ["runs"]
+
+    # Inject the session JWT into LocalDB auth cache if present
+    jwt = _session.get("jwt", "")
+    if jwt:
+        try:
+            from carl_studio.db import LocalDB
+            db = LocalDB()
+            db.set_auth("jwt", jwt, ttl_hours=24)
+            db.close()
+        except Exception:
+            pass  # Best-effort — sync.py will read from DB directly
+
+    try:
+        from carl_studio.sync import push, pull
+
+        if direction == "push":
+            results = push(entity_types=types_list)
+        else:
+            results = pull()
+
+        return json.dumps({
+            "direction": direction,
+            "entity_types": types_list,
+            "results": results,
+            "status": "ok",
+        })
+    except Exception as e:
+        return json.dumps({
+            "direction": direction,
+            "entity_types": types_list,
+            "error": str(e),
+            "status": "failed",
+        })

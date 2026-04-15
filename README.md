@@ -80,12 +80,18 @@ Quick setup:
 ```bash
 hf auth login
 export ANTHROPIC_API_KEY=sk-ant-xxx   # only for --diagnose / chat
-carl config show
+carl start
 ```
 
 Full auth details: [`docs/auth.md`](docs/auth.md)
 
 ## Use
+
+Start each new machine or repo with a quick readiness check:
+
+```bash
+carl start
+```
 
 **See inside a Trackio run** (no GPU required, base install):
 ```bash
@@ -98,6 +104,7 @@ If the dashboard contains multiple projects, add `--project your-project`.
 ```bash
 carl project init
 carl train --config carl.yaml
+carl run list
 ```
 
 Or run directly from the CLI:
@@ -144,7 +151,8 @@ carl eval --adapter your-username/your-model
 | Live observe | `carl observe --live ...` | `pip install 'carl-studio[tui]'` |
 | Claude diagnosis | `carl observe --diagnose ...` | `pip install 'carl-studio[observe]'` |
 | Local train/eval | `carl train`, `carl eval` | `pip install 'carl-studio[training]'` |
-| HF job management / publish | `carl status`, `carl logs`, `carl stop`, `carl push` | `pip install 'carl-studio[hf]'` |
+| HF job management / publish | `carl run status`, `carl run logs`, `carl run stop`, `carl push` | `pip install 'carl-studio[hf]'` |
+| Camp account + marketplace | `carl camp login`, `carl camp credits`, `carl camp marketplace` | platform features (optional) |
 
 Managed tiers build on top of these open workflows; extras control local capabilities, not research access.
 

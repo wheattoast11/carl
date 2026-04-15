@@ -163,6 +163,13 @@ class CARLSettings(BaseSettings):
     # -- Observe defaults --
     observe_defaults: ObserveDefaults = Field(default_factory=ObserveDefaults)
 
+    @field_validator("tier", mode="before")
+    @classmethod
+    def normalize_tier_alias(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            return _parse_tier_value(v)
+        return v
+
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
@@ -362,6 +369,20 @@ def _serialize_enums(data: dict[str, Any]) -> None:
             _serialize_enums(val)
 
 
+def _parse_tier_value(value: str) -> Tier:
+    """Accept legacy tier names while storing the active FREE/PAID model."""
+    normalized = value.strip().lower()
+    aliases = {
+        "free": Tier.FREE,
+        "paid": Tier.PAID,
+        "pro": Tier.PAID,
+        "enterprise": Tier.PAID,
+    }
+    if normalized not in aliases:
+        raise ValueError(f"Invalid tier '{value}'. Must be: free or paid")
+    return aliases[normalized]
+
+
 # ---------------------------------------------------------------------------
 # Settable fields (for carl config set)
 # ---------------------------------------------------------------------------
@@ -401,9 +422,9 @@ def set_field(settings: CARLSettings, key: str, value: str) -> CARLSettings:
     parsed: Any
     if key == "tier":
         try:
-            parsed = Tier(value.lower())
+            parsed = _parse_tier_value(value)
         except ValueError:
-            raise ValueError(f"Invalid tier '{value}'. Must be: free, pro, enterprise")
+            raise ValueError(f"Invalid tier '{value}'. Must be: free or paid")
     elif key == "preset":
         try:
             parsed = Preset(value.lower())
