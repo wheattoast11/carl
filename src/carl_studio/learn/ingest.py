@@ -12,13 +12,17 @@ Target chunk size: ~500-2000 tokens (estimated as chars / 4).
 
 from __future__ import annotations
 
+import csv
+import logging
 import os
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 class SourceType(str, Enum):
@@ -39,6 +43,8 @@ class SourceChunk(BaseModel):
     text: str
     source: str = Field(description="Origin path, URL, or identifier")
     chunk_id: int
+    modality: str = "text"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 # Token estimate: ~4 chars per token
@@ -47,7 +53,14 @@ _TARGET_CHUNK_CHARS = 3000
 _MAX_CHUNK_CHARS = 8000
 
 # File extensions to ingest from directories
-_INGESTABLE_EXTS = {".py", ".md", ".txt", ".json", ".rst", ".yaml", ".yml", ".toml"}
+_TEXT_EXTS = {".py", ".md", ".txt", ".json", ".rst", ".yaml", ".yml", ".toml"}
+_PDF_EXTS = {".pdf"}
+_TABULAR_EXTS = {".csv", ".tsv"}
+_OFFICE_EXTS = {".docx", ".xlsx", ".pptx"}
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"}
+_AUDIO_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"}
+_VIDEO_EXTS = {".mp4", ".webm", ".mov", ".mkv", ".avi"}
+_INGESTABLE_EXTS = _TEXT_EXTS | _PDF_EXTS | _TABULAR_EXTS | _OFFICE_EXTS | _IMAGE_EXTS | _AUDIO_EXTS | _VIDEO_EXTS
 
 
 class SourceIngester:
@@ -153,14 +166,32 @@ class SourceIngester:
     # ------------------------------------------------------------------
 
     def _ingest_file(self, path: str) -> list[SourceChunk]:
-        """Read a single file and chunk it."""
+        """Read a single file and chunk it, dispatching by extension."""
         p = Path(path)
         if not p.is_file():
             raise FileNotFoundError(f"File not found: {path}")
+        return self._dispatch_file(p)
+
+    def _dispatch_file(self, p: Path, start_id: int = 0) -> list[SourceChunk]:
+        """Route a file to the right handler based on extension."""
+        ext = p.suffix.lower()
+        if ext in _PDF_EXTS:
+            return self._ingest_pdf(str(p), start_id)
+        if ext in _TABULAR_EXTS:
+            return self._ingest_tabular(str(p), start_id)
+        if ext in _OFFICE_EXTS:
+            return self._ingest_office(str(p), start_id)
+        if ext in _IMAGE_EXTS:
+            return self._ingest_image(str(p), start_id)
+        if ext in _AUDIO_EXTS:
+            return self._ingest_audio(str(p), start_id)
+        if ext in _VIDEO_EXTS:
+            return self._ingest_video(str(p), start_id)
+        # Default: text
         text = p.read_text(encoding="utf-8", errors="replace")
         if not text.strip():
             return []
-        return self._chunk_text(text, origin=str(p))
+        return self._chunk_text(text, origin=str(p), start_id=start_id)
 
     def _ingest_directory(self, path: str) -> list[SourceChunk]:
         """Glob ingestable files from a directory, chunk each."""
@@ -170,22 +201,23 @@ class SourceIngester:
 
         chunks: list[SourceChunk] = []
         files = sorted(
-            f for f in p.rglob("*") if f.is_file() and f.suffix in _INGESTABLE_EXTS
+            f for f in p.rglob("*") if f.is_file() and f.suffix.lower() in _INGESTABLE_EXTS
         )
         if not files:
             raise ValueError(
                 f"No ingestable files found in {path}. "
-                f"Supported extensions: {_INGESTABLE_EXTS}"
+                f"Supported extensions: {sorted(_INGESTABLE_EXTS)}"
             )
 
         chunk_id = 0
         for f in files:
-            text = f.read_text(encoding="utf-8", errors="replace")
-            if not text.strip():
+            try:
+                file_chunks = self._dispatch_file(f, start_id=chunk_id)
+                chunks.extend(file_chunks)
+                chunk_id += len(file_chunks)
+            except Exception as exc:
+                logger.warning("Skipping %s: %s", f, exc)
                 continue
-            file_chunks = self._chunk_text(text, origin=str(f), start_id=chunk_id)
-            chunks.extend(file_chunks)
-            chunk_id += len(file_chunks)
         return chunks
 
     def _ingest_url(self, url: str) -> list[SourceChunk]:
@@ -305,6 +337,199 @@ class SourceIngester:
         if not found:
             tools_text += f"\n(No config found for server '{server_name}')\n"
         return [SourceChunk(text=tools_text, source=f"mcp://{server_name}", chunk_id=0)]
+
+    # ------------------------------------------------------------------
+    # Multimodal handlers (graceful degradation — skip if deps missing)
+    # ------------------------------------------------------------------
+
+    def _ingest_pdf(self, path: str, start_id: int = 0) -> list[SourceChunk]:
+        """Extract text from PDF. Tries pymupdf, then pypdf, then skip."""
+        text = ""
+        try:
+            import pymupdf  # noqa: F811
+
+            doc = pymupdf.open(path)
+            text = "\n\n".join(page.get_text() for page in doc)
+            doc.close()
+        except ImportError:
+            try:
+                from pypdf import PdfReader
+
+                reader = PdfReader(path)
+                text = "\n\n".join(
+                    page.extract_text() or "" for page in reader.pages
+                )
+            except ImportError:
+                logger.warning(
+                    "Skipping PDF %s: install pymupdf or pypdf  "
+                    "(pip install pymupdf  or  pip install pypdf)", path,
+                )
+                return []
+        if not text.strip():
+            return []
+        chunks = self._chunk_text(text, origin=path, start_id=start_id)
+        for c in chunks:
+            c.modality = "document"
+        return chunks
+
+    def _ingest_tabular(self, path: str, start_id: int = 0) -> list[SourceChunk]:
+        """CSV/TSV → markdown table representation. Stdlib only."""
+        p = Path(path)
+        delimiter = "\t" if p.suffix == ".tsv" else ","
+        text_parts: list[str] = []
+        with open(p, newline="", encoding="utf-8", errors="replace") as f:
+            reader = csv.reader(f, delimiter=delimiter)
+            rows = list(reader)
+        if not rows:
+            return []
+        header = rows[0]
+        text_parts.append("| " + " | ".join(header) + " |")
+        text_parts.append("| " + " | ".join("---" for _ in header) + " |")
+        for row in rows[1:]:
+            text_parts.append("| " + " | ".join(row) + " |")
+        text = "\n".join(text_parts)
+        chunks = self._chunk_text(text, origin=path, start_id=start_id)
+        for c in chunks:
+            c.modality = "tabular"
+        return chunks
+
+    def _ingest_office(self, path: str, start_id: int = 0) -> list[SourceChunk]:
+        """Extract text from .docx/.xlsx/.pptx. Graceful if deps missing."""
+        p = Path(path)
+        ext = p.suffix.lower()
+        text = ""
+        if ext == ".docx":
+            try:
+                from docx import Document  # type: ignore[import-untyped]
+
+                doc = Document(path)
+                text = "\n\n".join(para.text for para in doc.paragraphs if para.text.strip())
+            except ImportError:
+                logger.warning("Skipping %s: pip install python-docx", path)
+                return []
+        elif ext == ".xlsx":
+            try:
+                from openpyxl import load_workbook  # type: ignore[import-untyped]
+
+                wb = load_workbook(path, read_only=True, data_only=True)
+                parts: list[str] = []
+                for ws in wb.worksheets:
+                    for row in ws.iter_rows(values_only=True):
+                        vals = [str(c) if c is not None else "" for c in row]
+                        if any(vals):
+                            parts.append(" | ".join(vals))
+                text = "\n".join(parts)
+                wb.close()
+            except ImportError:
+                logger.warning("Skipping %s: pip install openpyxl", path)
+                return []
+        elif ext == ".pptx":
+            try:
+                from pptx import Presentation  # type: ignore[import-untyped]
+
+                prs = Presentation(path)
+                parts_p: list[str] = []
+                for slide in prs.slides:
+                    for shape in slide.shapes:
+                        if shape.has_text_frame:
+                            parts_p.append(shape.text_frame.text)
+                text = "\n\n".join(parts_p)
+            except ImportError:
+                logger.warning("Skipping %s: pip install python-pptx", path)
+                return []
+        if not text.strip():
+            return []
+        chunks = self._chunk_text(text, origin=path, start_id=start_id)
+        for c in chunks:
+            c.modality = "document"
+        return chunks
+
+    def _ingest_image(self, path: str, start_id: int = 0) -> list[SourceChunk]:
+        """OCR an image file. Tries pytesseract, then skip."""
+        try:
+            import pytesseract  # type: ignore[import-untyped]
+            from PIL import Image  # type: ignore[import-untyped]
+
+            img = Image.open(path)
+            text = pytesseract.image_to_string(img)
+            img.close()
+        except ImportError:
+            logger.warning(
+                "Skipping image %s: pip install pytesseract Pillow  "
+                "(also requires tesseract-ocr system package)", path,
+            )
+            return []
+        except Exception as exc:
+            logger.warning("OCR failed for %s: %s", path, exc)
+            return []
+        if not text.strip():
+            return []
+        return [SourceChunk(
+            text=text.strip(), source=path, chunk_id=start_id,
+            modality="image", metadata={"extraction": "ocr"},
+        )]
+
+    def _ingest_audio(self, path: str, start_id: int = 0) -> list[SourceChunk]:
+        """Transcribe audio file. Tries whisper, then skip."""
+        try:
+            import whisper  # type: ignore[import-untyped]
+
+            model = whisper.load_model("base")
+            result = model.transcribe(path)
+            text = result.get("text", "")
+        except ImportError:
+            logger.warning(
+                "Skipping audio %s: pip install openai-whisper", path,
+            )
+            return []
+        except Exception as exc:
+            logger.warning("Transcription failed for %s: %s", path, exc)
+            return []
+        if not text.strip():
+            return []
+        chunks = self._chunk_text(text.strip(), origin=path, start_id=start_id)
+        for c in chunks:
+            c.modality = "audio"
+            c.metadata = {"extraction": "whisper"}
+        return chunks
+
+    def _ingest_video(self, path: str, start_id: int = 0) -> list[SourceChunk]:
+        """Extract audio track from video via ffmpeg, then transcribe."""
+        import shutil
+        import subprocess
+        import tempfile
+
+        if not shutil.which("ffmpeg"):
+            logger.warning(
+                "Skipping video %s: ffmpeg not found in PATH", path,
+            )
+            return []
+        tmpdir = tempfile.mkdtemp(prefix="carl_video_")
+        audio_path = Path(tmpdir) / "audio.wav"
+        try:
+            result = subprocess.run(
+                ["ffmpeg", "-i", path, "-vn", "-acodec", "pcm_s16le",
+                 "-ar", "16000", "-ac", "1", str(audio_path)],
+                capture_output=True, timeout=120,
+            )
+            if result.returncode != 0 or not audio_path.is_file():
+                logger.warning("ffmpeg audio extraction failed for %s", path)
+                return []
+            chunks = self._ingest_audio(str(audio_path), start_id=start_id)
+            for c in chunks:
+                c.source = path
+                c.modality = "video"
+                c.metadata = {"extraction": "ffmpeg+whisper"}
+            return chunks
+        except Exception as exc:
+            logger.warning("Video processing failed for %s: %s", path, exc)
+            return []
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    # ------------------------------------------------------------------
+    # Remote sources
+    # ------------------------------------------------------------------
 
     def _ingest_github(self, url: str) -> list[SourceChunk]:
         """Clone a GitHub repo to temp dir and ingest."""

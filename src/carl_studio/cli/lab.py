@@ -447,6 +447,9 @@ def learn_cmd(
     recipe: str = typer.Option(
         "", "--recipe", "-r", help="Recipe YAML file for multi-course training"
     ),
+    frame: str = typer.Option(
+        "", "--frame", help="WorkFrame: 'current' for active frame, or path to frame YAML"
+    ),
 ) -> None:
     """Ingest new knowledge from source material into a model."""
     c = get_console()
@@ -551,8 +554,21 @@ def learn_cmd(
         k = KitRegistry().get(kit)
         c.kv("Kit", f"{k.name} — {k.description}")
 
+    # Resolve WorkFrame if specified
+    frame_prefix = ""
+    if frame:
+        from carl_studio.frame import WorkFrame
+
+        if frame == "current":
+            wf = WorkFrame.from_project(config)
+        else:
+            wf = WorkFrame.load(frame)
+        if wf.active:
+            frame_prefix = wf.attention_query()
+            c.kv("Frame", f"{wf.domain}/{wf.function}/{wf.role}")
+
     pipeline = LearnPipeline(learn_config)
-    result = pipeline.run()
+    result = pipeline.run(context_prefix=frame_prefix)
 
     table = c.make_table("Key", "Value", title="Results")
     for k, v in result.items():

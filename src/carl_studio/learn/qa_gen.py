@@ -41,7 +41,10 @@ class QAGenerator:
     """Generates QA pairs from source chunks using templates, not LLM calls."""
 
     def generate(
-        self, chunks: list[SourceChunk], pairs_per_chunk: int = 15
+        self,
+        chunks: list[SourceChunk],
+        pairs_per_chunk: int = 15,
+        context_prefix: str = "",
     ) -> list[QAPair]:
         """Generate QA pairs across all 3 tiers for each chunk.
 
@@ -49,6 +52,9 @@ class QAGenerator:
             chunks: Source chunks to generate from.
             pairs_per_chunk: Target number of pairs per chunk. Actual count
                 may be lower if the chunk lacks extractable content.
+            context_prefix: Optional domain context (e.g. from WorkFrame.attention_query())
+                prepended to each chunk's text for entity/definition extraction,
+                biasing extraction toward the frame's vocabulary.
 
         Returns:
             Flat list of QAPair across all chunks and tiers.
@@ -67,8 +73,11 @@ class QAGenerator:
             n_application = max(1, round(pairs_per_chunk * _TIER_RATIOS[QATier.APPLICATION]))
 
             # Extract entities and definitions from the chunk
-            definitions = self._extract_definitions(chunk.text)
-            entities = self._extract_entities(chunk.text)
+            # When a frame context_prefix is active, prepend it to bias extraction
+            # toward the frame's domain vocabulary and entities.
+            enriched = f"{context_prefix}\n\n{chunk.text}" if context_prefix else chunk.text
+            definitions = self._extract_definitions(enriched)
+            entities = self._extract_entities(enriched)
             code_blocks = self._extract_code_blocks(chunk.text)
 
             pairs: list[QAPair] = []

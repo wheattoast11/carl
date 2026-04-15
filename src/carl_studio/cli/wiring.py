@@ -169,3 +169,14 @@ try:
     lab_app.add_typer(carlito_app, name="carlito")
 except ImportError:
     pass
+
+
+# ---------------------------------------------------------------------------
+# Wire frame sub-app
+# ---------------------------------------------------------------------------
+try:
+    from .frame import frame_app
+
+    app.add_typer(frame_app, name="frame")
+except ImportError:
+    pass

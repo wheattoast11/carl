@@ -67,8 +67,12 @@ class LearnPipeline:
         self._generator = QAGenerator()
         self._gate = QualityGate(threshold=config.quality_threshold)
 
-    def run(self) -> dict[str, Any]:
+    def run(self, context_prefix: str = "") -> dict[str, Any]:
         """Execute the full pipeline.
+
+        Args:
+            context_prefix: Optional domain context (e.g. from WorkFrame.attention_query())
+                that biases QA extraction toward the frame's vocabulary.
 
         Returns:
             dict with keys:
@@ -97,7 +101,9 @@ class LearnPipeline:
         # 2. Generate QA pairs
         pairs_per_chunk = self.config._pairs_per_chunk()
         logger.info("Generating QA pairs (%d per chunk)", pairs_per_chunk)
-        pairs = self._generator.generate(chunks, pairs_per_chunk=pairs_per_chunk)
+        pairs = self._generator.generate(
+            chunks, pairs_per_chunk=pairs_per_chunk, context_prefix=context_prefix,
+        )
         logger.info("Generated %d QA pairs", len(pairs))
 
         # 3. Quality gate
