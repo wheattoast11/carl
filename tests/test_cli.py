@@ -16,6 +16,7 @@ import carl_studio.db as db_mod
 import carl_studio.settings as settings_mod
 import carl_studio.theme as theme_mod
 import carl_studio.tier as tier_mod
+from carl_studio.camp import CampProfile, CampSession
 from carl_studio.cli import app
 from carl_studio.settings import CARLSettings
 from carl_studio.types.config import ComputeTarget
@@ -288,6 +289,7 @@ def test_camp_and_lab_help_expose_grouped_aliases():
     camp_result = runner.invoke(app, ["camp", "--help"])
     assert camp_result.exit_code == 0
     assert "login" in camp_result.output
+    assert "logout" in camp_result.output
     assert "sync" in camp_result.output
     assert "marketplace" in camp_result.output
 
@@ -296,6 +298,55 @@ def test_camp_and_lab_help_expose_grouped_aliases():
     assert "bench" in lab_result.output
     assert "golf" in lab_result.output
     assert "admin" in lab_result.output
+
+
+def test_login_refreshes_cached_account_profile(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(db_mod, "CARL_DIR", tmp_path)
+    monkeypatch.setattr(db_mod, "DB_PATH", tmp_path / "carl.db")
+
+    from carl_studio.db import LocalDB
+
+    LocalDB().set_auth("jwt", "jwt-tok", ttl_hours=24)
+
+    def fake_resolve_camp_profile(*, refresh: bool, db):
+        assert refresh is True
+        return (
+            CampSession(
+                jwt="jwt-tok", supabase_url="https://example.supabase.co", cached_tier="paid"
+            ),
+            CampProfile(tier="paid", status="active", plan="monthly"),
+            "remote",
+        )
+
+    monkeypatch.setattr("carl_studio.cli.platform.resolve_camp_profile", fake_resolve_camp_profile)
+
+    result = runner.invoke(app, ["login"])
+
+    assert result.exit_code == 0
+    assert "Already authenticated" in result.output
+    assert "Plan: monthly" in result.output
+    assert "carl camp account" in result.output
+
+
+def test_logout_clears_cached_camp_session(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(db_mod, "CARL_DIR", tmp_path)
+    monkeypatch.setattr(db_mod, "DB_PATH", tmp_path / "carl.db")
+
+    from carl_studio.db import LocalDB
+
+    db = LocalDB()
+    db.set_auth("jwt", "jwt-tok", ttl_hours=24)
+    db.set_auth("tier", "paid", ttl_hours=48)
+    db.set_config("supabase_url", "https://example.supabase.co")
+    db.set_config("camp_profile", '{"tier":"paid"}')
+
+    result = runner.invoke(app, ["logout"])
+
+    assert result.exit_code == 0
+    assert "Local camp session cleared" in result.output
+    assert db.get_auth("jwt") is None
+    assert db.get_auth("tier") is None
+    assert db.get_config("supabase_url") == ""
 
 
 def test_observe_live_uses_settings_trackio_url_and_poll(monkeypatch):

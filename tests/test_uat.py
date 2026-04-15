@@ -263,34 +263,26 @@ class TestTierJourney:
         assert not tier_allows(Tier.FREE, "train.send_it")
         assert tier_allows(Tier.PRO, "train.send_it")
 
-    def test_anthropic_key_elevates_to_pro(self, monkeypatch):
-        """Having ANTHROPIC_API_KEY auto-elevates FREE to PRO."""
+    def test_provider_keys_do_not_upgrade_paid_platform(self, monkeypatch):
+        """Provider auth unlocks providers, not managed paid platform surfaces."""
         import carl_studio.tier as tier_mod
         from carl_studio.tier import Tier, detect_effective_tier
 
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-123")
-        monkeypatch.setattr(tier_mod, "_detect_hf_token", lambda: None)
-
-        assert detect_effective_tier(Tier.FREE) == Tier.PRO
-
-    def test_hf_token_elevates_to_pro(self, monkeypatch):
-        """Having HF_TOKEN auto-elevates FREE to PRO."""
-        import carl_studio.tier as tier_mod
-        from carl_studio.tier import Tier, detect_effective_tier
-
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.setattr(tier_mod, "_detect_hf_token", lambda: "hf_test_token")
 
-        assert detect_effective_tier(Tier.FREE) == Tier.PRO
+        assert detect_effective_tier(Tier.FREE) == Tier.FREE
 
-    def test_enterprise_needs_both_keys_and_flag(self, monkeypatch):
-        """Credential-based elevation resolves to PAID in the FREE/PAID model."""
-        import carl_studio.tier as tier_mod
+    def test_cached_paid_session_elevates_free(self, monkeypatch):
+        """A cached camp subscription upgrades the effective tier to PAID."""
+        import carl_studio.db as db_mod
         from carl_studio.tier import Tier, detect_effective_tier
 
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-        monkeypatch.setenv("CARL_ENTERPRISE", "1")
-        monkeypatch.setattr(tier_mod, "_detect_hf_token", lambda: "hf_test")
+        class FakeDB:
+            def get_auth(self, key: str):
+                return "paid" if key == "tier" else None
+
+        monkeypatch.setattr(db_mod, "LocalDB", FakeDB)
 
         assert detect_effective_tier(Tier.FREE) == Tier.PAID
 

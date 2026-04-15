@@ -13,6 +13,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from carl_studio.camp import CampError, CampProfile, fetch_camp_profile
+
 
 class CreditError(Exception):
     """Raised when credit operations fail."""
@@ -48,38 +50,23 @@ class CreditBalance(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def credit_balance_from_profile(profile: CampProfile) -> CreditBalance:
+    """Project a shared camp profile onto the credits balance view."""
+    return CreditBalance(
+        total=profile.credits_total,
+        remaining=profile.credits_remaining,
+        used=profile.credits_used,
+        included_monthly=profile.credits_monthly_included,
+    )
+
+
 def get_credit_balance(jwt: str, supabase_url: str) -> CreditBalance:
-    """Fetch credit balance from carl.camp Edge Function (check-tier).
-
-    Reads from the same check-tier Edge Function that billing uses,
-    parsing credit fields from the response.
-
-    Raises CreditError on any network or API failure.
-    """
-    url = f"{supabase_url}/functions/v1/check-tier"
-    headers: dict[str, str] = {
-        "Authorization": f"Bearer {jwt}",
-        "Content-Type": "application/json",
-    }
-    req = urllib.request.Request(url, headers=headers, method="GET")
+    """Fetch credit balance from the shared camp profile contract."""
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data: dict[str, Any] = json.loads(resp.read())
-            return CreditBalance(
-                total=data.get("credits_total", 0),
-                remaining=data.get("credits_remaining", 0),
-                used=data.get("credits_used", 0),
-                included_monthly=data.get("credits_monthly_included", 0),
-            )
-    except urllib.error.HTTPError as e:
-        body = e.read().decode(errors="replace") if e.fp else str(e)
-        raise CreditError(f"Credits API error ({e.code}): {body}") from e
-    except urllib.error.URLError as e:
-        raise CreditError(f"Network error: {e.reason}") from e
-    except CreditError:
-        raise
-    except Exception as e:
-        raise CreditError(f"Unexpected error: {e}") from e
+        profile = fetch_camp_profile(jwt, supabase_url)
+        return credit_balance_from_profile(profile)
+    except CampError as exc:
+        raise CreditError(str(exc)) from exc
 
 
 def deduct_credits(
@@ -103,11 +90,13 @@ def deduct_credits(
         "Authorization": f"Bearer {jwt}",
         "Content-Type": "application/json",
     }
-    body = json.dumps({
-        "amount": amount,
-        "job_id": job_id,
-        "reason": reason,
-    }).encode()
+    body = json.dumps(
+        {
+            "amount": amount,
+            "job_id": job_id,
+            "reason": reason,
+        }
+    ).encode()
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
@@ -145,11 +134,13 @@ def refund_credits(
         "Authorization": f"Bearer {jwt}",
         "Content-Type": "application/json",
     }
-    body = json.dumps({
-        "amount": amount,
-        "job_id": job_id,
-        "reason": reason,
-    }).encode()
+    body = json.dumps(
+        {
+            "amount": amount,
+            "job_id": job_id,
+            "reason": reason,
+        }
+    ).encode()
     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:

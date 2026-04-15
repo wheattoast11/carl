@@ -12,10 +12,9 @@ Tier philosophy:
 
 Subscription check priority:
   1. SQLite auth cache (~/.carl/carl.db) — sub-ms, offline-safe
-  2. Supabase RPC (carl.camp) — ~100ms, if cache expired
-  3. Auto-elevation from local credentials — ANTHROPIC_API_KEY or HF auth implies PAID
-  4. 48h grace period if network down
-  5. Default to FREE
+  2. Fresh carl.camp subscription truth, when explicitly refreshed by the user
+  3. Configured preference from settings
+  4. Default to FREE
 """
 
 from __future__ import annotations
@@ -149,40 +148,30 @@ def tier_allows(tier: Tier, feature: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Auto-elevation: infer tier from available credentials
+# Effective tier: subscription truth beats local preference
 # ---------------------------------------------------------------------------
 
 
 def detect_effective_tier(configured_tier: Tier) -> Tier:
-    """Elevate tier based on subscription status or credentials.
+    """Resolve the current tier from cached subscription truth and local preference.
 
-    Priority:
-    1. Supabase subscription (cached in SQLite, checked via carl.camp)
-    2. Auto-elevation from env vars (ANTHROPIC_API_KEY → PAID)
-    3. Configured tier from settings
+    Local provider credentials unlock provider integrations, not managed CARL Paid
+    platform surfaces. Paid access comes from a cached or freshly refreshed
+    carl.camp account state.
 
-    Never downgrades the configured tier.
+    Never downgrades an explicitly configured paid tier.
     """
-    effective = configured_tier
-
-    # Check Supabase subscription via local cache
     try:
         from carl_studio.db import LocalDB
 
         db = LocalDB()
         cached_tier = db.get_auth("tier")
-        if cached_tier == "paid":
+        if cached_tier == Tier.PAID.value:
             return Tier.PAID
     except Exception:
         pass
 
-    # Auto-elevate if user has local credentials for advanced workflows.
-    has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
-    has_hf = bool(_detect_hf_token())
-    if (has_anthropic or has_hf) and effective < Tier.PAID:
-        effective = Tier.PAID
-
-    return effective
+    return configured_tier
 
 
 def _detect_hf_token() -> str | None:

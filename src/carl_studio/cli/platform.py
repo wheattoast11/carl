@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import typer
 
+from carl_studio.camp import (
+    DEFAULT_CARL_CAMP_BASE,
+    DEFAULT_CARL_CAMP_SUPABASE_URL,
+    CampError,
+    resolve_camp_profile,
+)
 from carl_studio.console import get_console
 
 from .apps import app
@@ -347,6 +353,15 @@ def login(
     existing_jwt = db.get_auth("jwt")
     if existing_jwt and not upgrade:
         c.ok("Already authenticated.")
+        try:
+            _, profile, source = resolve_camp_profile(refresh=True, db=db)
+            if profile is not None:
+                c.info(f"Account: {profile.tier.title()} ({profile.status}) via {source}")
+                if profile.plan:
+                    c.info(f"Plan: {profile.plan}")
+        except CampError:
+            c.info("Could not refresh managed account profile right now.")
+        c.info("Run 'carl camp account' to inspect the latest managed state.")
         c.info("Run 'carl camp upgrade' to open the upgrade page.")
         c.blank()
         return
@@ -392,8 +407,7 @@ def login(
     server_ready.wait()
 
     # Open browser
-    camp_url = "https://carl.camp"
-    login_url = f"{camp_url}/auth/login?callback={urllib.parse.quote(callback_url)}"
+    login_url = f"{DEFAULT_CARL_CAMP_BASE}/auth/login?callback={urllib.parse.quote(callback_url)}"
 
     if upgrade:
         login_url += "&upgrade=true"
@@ -408,16 +422,57 @@ def login(
 
     if received_token.get("jwt"):
         db.set_auth("jwt", received_token["jwt"], ttl_hours=24)
-        db.set_config("supabase_url", "https://ywtyyszktjfrzogwnjyo.supabase.co")
+        db.set_config("supabase_url", DEFAULT_CARL_CAMP_SUPABASE_URL)
 
         c.ok("Authenticated successfully!")
         c.info("Your session is cached locally for 24 hours.")
+        try:
+            _session, profile, source = resolve_camp_profile(refresh=True, db=db)
+            if profile is not None:
+                c.info(f"Account: {profile.tier.title()} ({profile.status}) via {source}")
+                if profile.plan:
+                    c.info(f"Plan: {profile.plan}")
+                c.info("Inspect account: carl camp account")
+        except CampError:
+            c.info("Inspect account later with: carl camp account")
         c.blank()
     else:
         c.error("Authentication timed out or failed.")
         c.info("Try again: carl camp login")
         c.blank()
         raise typer.Exit(1)
+
+
+# ---------------------------------------------------------------------------
+# carl logout — clear cached carl.camp session
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="logout", hidden=True)
+def logout(
+    ctx: typer.Context = typer.Option(None, hidden=True),
+) -> None:
+    """Clear the cached carl.camp session and return to local-first FREE mode."""
+    from carl_studio.db import LocalDB
+
+    c = get_console()
+    _warn_legacy_command_alias(c, ctx, "carl camp logout")
+    db = LocalDB()
+
+    had_session = bool(db.get_auth("jwt") or db.get_auth("tier") or db.get_config("camp_profile"))
+    if not had_session:
+        c.info("No local camp session cached.")
+        raise typer.Exit(0)
+
+    db.clear_auth()
+    db.set_config("supabase_url", "")
+    db.set_config("camp_profile", "")
+    db.set_config("camp_profile_cached_at", "")
+
+    c.ok("Local camp session cleared.")
+    c.info("You are back in local-first FREE mode.")
+    c.info("Re-attach managed platform features later with: carl camp login")
+    c.blank()
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ import json
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 from carl_studio.db import LocalDB
 
@@ -35,10 +35,13 @@ def _supabase_request(
     method: str = "POST",
     body: dict | None = None,
     params: dict | None = None,
+    *,
+    jwt_override: str | None = None,
+    url_override: str | None = None,
 ) -> dict:
     """Make authenticated request to Supabase Edge Function."""
-    jwt = db.get_auth("jwt")
-    supabase_url = db.get_config("supabase_url")
+    jwt = jwt_override or db.get_auth("jwt")
+    supabase_url = url_override or db.get_config("supabase_url")
 
     if not jwt or not supabase_url:
         raise SyncError("Not authenticated. Run: carl camp login")
@@ -73,6 +76,7 @@ def _supabase_request(
 def push(
     entity_types: list[str] | None = None,
     db: LocalDB | None = None,
+    session: Any | None = None,
 ) -> dict[str, int]:
     """Push unsynced local entities to Supabase.
 
@@ -84,6 +88,8 @@ def push(
     Returns: {entity_type: count_synced}
     """
     db = db or LocalDB()
+    jwt_ov = getattr(session, "jwt", None) if session else None
+    url_ov = getattr(session, "supabase_url", None) if session else None
     entity_types = entity_types or ["runs"]
     results: dict[str, int] = {}
 
@@ -114,6 +120,8 @@ def push(
                     "entity_type": etype,
                     "entities": entities,
                 },
+                jwt_override=jwt_ov,
+                url_override=url_ov,
             )
 
             synced_ids = response.get("ids", [])
@@ -138,6 +146,7 @@ def pull(
     since: str | None = None,
     entity_types: list[str] | None = None,
     db: LocalDB | None = None,
+    session: Any | None = None,
 ) -> dict[str, int]:
     """Pull updates from Supabase to local SQLite.
 
@@ -149,13 +158,18 @@ def pull(
     Returns: {entity_type: count_pulled}
     """
     db = db or LocalDB()
+    jwt_ov = getattr(session, "jwt", None) if session else None
+    url_ov = getattr(session, "supabase_url", None) if session else None
     since = since or db.get_config("last_pull_at") or "1970-01-01T00:00:00Z"
 
     params: dict[str, str] = {"since": since}
     if entity_types:
         params["types"] = ",".join(entity_types)
 
-    response = _supabase_request(db, "sync-pull", method="GET", params=params)
+    response = _supabase_request(
+        db, "sync-pull", method="GET", params=params,
+        jwt_override=jwt_ov, url_override=url_ov,
+    )
 
     results: dict[str, int] = {}
     entities = response.get("entities", {})

@@ -300,15 +300,16 @@ def _render_command_inventory(c: CampConsole, command_tree: dict[str, list[str]]
 def _camp_connection() -> dict[str, Any]:
     """Return the current carl.camp session state without raising."""
     try:
-        from carl_studio.db import LocalDB
+        from carl_studio.camp import load_camp_session
 
-        db = LocalDB()
+        session = load_camp_session()
         return {
-            "connected": bool(db.get_auth("jwt")),
-            "supabase_configured": bool(db.get_config("supabase_url")),
+            "connected": session.authenticated,
+            "supabase_configured": session.configured,
+            "cached_tier": session.cached_tier or "",
         }
     except Exception:
-        return {"connected": False, "supabase_configured": False}
+        return {"connected": False, "supabase_configured": False, "cached_tier": ""}
 
 
 def _build_readiness_summary(summary: dict[str, Any]) -> dict[str, Any]:
@@ -423,6 +424,11 @@ def _recommended_next_steps(summary: dict[str, Any]) -> list[str]:
 
     if not summary["auth"]["hf_ready"]:
         steps.append("hf auth login  # for remote jobs, gated models, and push")
+
+    if not summary["camp"]["connected"]:
+        steps.append("carl camp account  # optional managed platform status")
+    else:
+        steps.append("carl camp account")
 
     if defaults["trackio_url"]:
         steps.append("carl observe --run your-run")

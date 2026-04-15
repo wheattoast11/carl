@@ -1,4 +1,4 @@
-"""Tests for carl_studio.infer_cli and carl_studio.curriculum_cli."""
+"""Tests for carl_studio.cli.infer and carl_studio.cli.curriculum."""
 from __future__ import annotations
 
 import sys
@@ -19,8 +19,8 @@ _test_app = typer.Typer()
 
 def _register_test_app() -> typer.Typer:
     """Register infer and curriculum commands on a test app."""
-    from carl_studio.infer_cli import infer_cmd
-    from carl_studio.curriculum_cli import curriculum_app
+    from carl_studio.cli.infer import infer_cmd
+    from carl_studio.cli.curriculum import curriculum_app
 
     _test_app.command("infer")(infer_cmd)
     _test_app.add_typer(curriculum_app, name="curriculum")
@@ -39,7 +39,7 @@ runner = CliRunner()
 class TestInferCmd:
     def test_no_model_shows_error(self) -> None:
         """Running infer with no model and no carl.yaml should error."""
-        with patch("carl_studio.infer_cli._resolve_model_adapter", return_value=("", "")):
+        with patch("carl_studio.cli.infer._resolve_model_adapter", return_value=("", "")):
             result = runner.invoke(_app, ["infer", "--model", ""])
             # Should fail because no model could be resolved
             # (default_model may resolve from settings, so we patch the resolver)
@@ -52,7 +52,7 @@ class TestInferCmd:
 
     def test_ttt_slot_without_admin_shows_message(self) -> None:
         """TTT SLOT without admin or terminals-runtime should show guidance."""
-        from carl_studio.infer_cli import _check_ttt_availability
+        from carl_studio.cli.infer import _check_ttt_availability
 
         # Tier gate passes (PAID), but admin is False and terminals_runtime absent
         with patch("carl_studio.tier.check_tier", return_value=(True, MagicMock(), MagicMock())), \
@@ -63,14 +63,14 @@ class TestInferCmd:
             assert "terminals-runtime" in msg or "admin" in msg
 
     def test_ttt_none_always_available(self) -> None:
-        from carl_studio.infer_cli import _check_ttt_availability
+        from carl_studio.cli.infer import _check_ttt_availability
 
         available, msg = _check_ttt_availability("none")
         assert available is True
         assert msg == ""
 
     def test_resolve_model_adapter_from_args(self) -> None:
-        from carl_studio.infer_cli import _resolve_model_adapter
+        from carl_studio.cli.infer import _resolve_model_adapter
 
         model, adapter = _resolve_model_adapter("test/model", "test/adapter")
         assert model == "test/model"
@@ -93,7 +93,7 @@ class TestCurriculumCLI:
     def test_curriculum_show_no_tracks(self, tmp_path: Path) -> None:
         """Show with empty DB should indicate no carlitos enrolled."""
         db = tmp_path / "test.db"
-        with patch("carl_studio.curriculum_cli._get_store", return_value=CurriculumStore(db_path=db)):
+        with patch("carl_studio.cli.curriculum._get_store", return_value=CurriculumStore(db_path=db)):
             result = runner.invoke(_app, ["curriculum", "show"])
             assert result.exit_code == 0
             assert "No carlitos enrolled" in result.output
@@ -101,7 +101,7 @@ class TestCurriculumCLI:
     def test_curriculum_enroll(self, tmp_path: Path) -> None:
         db = tmp_path / "test.db"
         store = CurriculumStore(db_path=db)
-        with patch("carl_studio.curriculum_cli._get_store", return_value=store):
+        with patch("carl_studio.cli.curriculum._get_store", return_value=store):
             result = runner.invoke(_app, ["curriculum", "enroll", "test-model"])
             assert result.exit_code == 0
             assert "Enrolled" in result.output
@@ -116,7 +116,7 @@ class TestCurriculumCLI:
         store = CurriculumStore(db_path=db)
         store.save(CurriculumTrack(model_id="test-model"))
 
-        with patch("carl_studio.curriculum_cli._get_store", return_value=store):
+        with patch("carl_studio.cli.curriculum._get_store", return_value=store):
             result = runner.invoke(
                 _app, ["curriculum", "advance", "test-model", "drilling", "--event", "training_started"]
             )
@@ -132,7 +132,7 @@ class TestCurriculumCLI:
         store = CurriculumStore(db_path=db)
         store.save(CurriculumTrack(model_id="test-model"))
 
-        with patch("carl_studio.curriculum_cli._get_store", return_value=store):
+        with patch("carl_studio.cli.curriculum._get_store", return_value=store):
             result = runner.invoke(
                 _app, ["curriculum", "advance", "test-model", "graduated"]
             )
@@ -143,7 +143,7 @@ class TestCurriculumCLI:
         db = tmp_path / "test.db"
         store = CurriculumStore(db_path=db)
 
-        with patch("carl_studio.curriculum_cli._get_store", return_value=store):
+        with patch("carl_studio.cli.curriculum._get_store", return_value=store):
             result = runner.invoke(
                 _app, ["curriculum", "advance", "ghost", "drilling"]
             )
@@ -154,7 +154,7 @@ class TestCurriculumCLI:
         db = tmp_path / "test.db"
         store = CurriculumStore(db_path=db)
 
-        with patch("carl_studio.curriculum_cli._get_store", return_value=store):
+        with patch("carl_studio.cli.curriculum._get_store", return_value=store):
             result = runner.invoke(_app, ["curriculum", "list"])
             assert result.exit_code == 0
             assert "No carlitos enrolled" in result.output
@@ -165,7 +165,7 @@ class TestCurriculumCLI:
         store.save(CurriculumTrack(model_id="model-a"))
         store.save(CurriculumTrack(model_id="model-b"))
 
-        with patch("carl_studio.curriculum_cli._get_store", return_value=store):
+        with patch("carl_studio.cli.curriculum._get_store", return_value=store):
             result = runner.invoke(_app, ["curriculum", "list"])
             assert result.exit_code == 0
             assert "model-a" in result.output
@@ -178,7 +178,7 @@ class TestCurriculumCLI:
         track = track.advance(CurriculumPhase.DRILLING, event="started")
         store.save(track)
 
-        with patch("carl_studio.curriculum_cli._get_store", return_value=store):
+        with patch("carl_studio.cli.curriculum._get_store", return_value=store):
             result = runner.invoke(_app, ["curriculum", "show", "specific-model"])
             assert result.exit_code == 0
             assert "specific-model" in result.output
@@ -189,7 +189,7 @@ class TestCurriculumCLI:
         store = CurriculumStore(db_path=db)
         store.save(CurriculumTrack(model_id="test-model"))
 
-        with patch("carl_studio.curriculum_cli._get_store", return_value=store):
+        with patch("carl_studio.cli.curriculum._get_store", return_value=store):
             result = runner.invoke(
                 _app, ["curriculum", "advance", "test-model", "nonexistent_phase"]
             )
@@ -201,7 +201,7 @@ class TestCurriculumCLI:
         store = CurriculumStore(db_path=db)
         store.save(CurriculumTrack(model_id="dup"))
 
-        with patch("carl_studio.curriculum_cli._get_store", return_value=store):
+        with patch("carl_studio.cli.curriculum._get_store", return_value=store):
             result = runner.invoke(_app, ["curriculum", "enroll", "dup"])
             assert result.exit_code == 0
             assert "already enrolled" in result.output

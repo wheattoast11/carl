@@ -1,16 +1,32 @@
-"""Alias wiring and optional integration sub-app registration."""
+"""Alias wiring and optional integration sub-app registration.
+
+All CLI command modules live inside this package (carl_studio.cli.*).
+Domain logic stays in carl_studio.* — this package imports from there.
+"""
 
 from __future__ import annotations
 
 from .apps import app, camp_app, lab_app
-from .lab import admin_app, align_cmd, bench_cmd, chat, dev, golf_app, learn_cmd, mcp_serve, paper_app
-from .platform import login, sync_app
+from .lab import (
+    admin_app,
+    align_cmd,
+    bench_cmd,
+    chat,
+    dev,
+    golf_app,
+    learn_cmd,
+    mcp_serve,
+    paper_app,
+)
+from .platform import login, logout, sync_app
 
 # ---------------------------------------------------------------------------
 # Register camp/lab aliases for the converged command map
 # ---------------------------------------------------------------------------
 
 camp_app.command(name="login")(login)
+camp_app.command(name="logout")(logout)
+app.command(name="logout", hidden=True)(logout)
 camp_app.add_typer(sync_app, name="sync")
 
 lab_app.command(name="dev")(dev)
@@ -49,23 +65,24 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Wire billing commands (top-level: carl upgrade, carl billing, carl subscription)
+# Wire billing commands
 # ---------------------------------------------------------------------------
 try:
-    from carl_studio.billing_cli import billing_portal, subscription_status, upgrade
+    from .billing import account_status, billing_portal, subscription_status, upgrade
 
     app.command(name="upgrade", hidden=True)(upgrade)
     app.command(name="billing", hidden=True)(billing_portal)
     app.command(name="subscription", hidden=True)(subscription_status)
+    camp_app.command(name="account")(account_status)
     camp_app.command(name="upgrade")(upgrade)
     camp_app.command(name="billing")(billing_portal)
     camp_app.command(name="subscription")(subscription_status)
 except ImportError:
-    pass  # billing module not installed
+    pass
 
 
 # ---------------------------------------------------------------------------
-# Wire credits sub-app (Sprint 2)
+# Wire credits sub-app
 # ---------------------------------------------------------------------------
 try:
     from carl_studio.credits._cli import credits_app
@@ -77,10 +94,10 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Wire curriculum sub-app + infer command (Sprint 2)
+# Wire curriculum sub-app + infer command
 # ---------------------------------------------------------------------------
 try:
-    from carl_studio.curriculum_cli import curriculum_app
+    from .curriculum import curriculum_app
 
     app.add_typer(curriculum_app, name="curriculum", hidden=True)
     lab_app.add_typer(curriculum_app, name="curriculum")
@@ -88,7 +105,7 @@ except ImportError:
     pass
 
 try:
-    from carl_studio.infer_cli import infer_cmd
+    from .infer import infer_cmd
 
     app.command(name="infer")(infer_cmd)
 except ImportError:
@@ -96,14 +113,59 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
-# Wire marketplace sub-app + publish command (Sprint 2)
+# Wire marketplace sub-app + publish command
 # ---------------------------------------------------------------------------
 try:
-    from carl_studio.marketplace_cli import marketplace_app, publish_cmd
+    from .marketplace import marketplace_app, publish_cmd
 
     app.add_typer(marketplace_app, name="marketplace", hidden=True)
     app.command(name="publish", hidden=True)(publish_cmd)
     camp_app.add_typer(marketplace_app, name="marketplace")
     camp_app.command(name="publish")(publish_cmd)
+except ImportError:
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Wire consent sub-app
+# ---------------------------------------------------------------------------
+try:
+    from .consent import consent_app
+
+    camp_app.add_typer(consent_app, name="consent")
+except ImportError:
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Wire contract sub-app
+# ---------------------------------------------------------------------------
+try:
+    from .contract import contract_app
+
+    camp_app.add_typer(contract_app, name="contract")
+except ImportError:
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Wire x402 sub-app
+# ---------------------------------------------------------------------------
+try:
+    from .x402 import x402_app
+
+    camp_app.add_typer(x402_app, name="x402")
+except ImportError:
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Wire carlito sub-app
+# ---------------------------------------------------------------------------
+try:
+    from .carlito import carlito_app
+
+    app.add_typer(carlito_app, name="carlito", hidden=True)
+    lab_app.add_typer(carlito_app, name="carlito")
 except ImportError:
     pass

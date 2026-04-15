@@ -1,4 +1,4 @@
-"""Tests for carl_studio.billing and carl_studio.billing_cli."""
+"""Tests for carl_studio.billing and carl_studio.cli.billing."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from carl_studio.billing import (
     SubscriptionStatus,
     get_subscription_status,
 )
-from carl_studio.billing_cli import billing_portal, subscription_status, upgrade
+from carl_studio.cli.billing import billing_portal, subscription_status, upgrade
 
 
 def _make_app() -> typer.Typer:
@@ -237,7 +237,7 @@ class TestGetSubscriptionStatus:
 
 def _patch_effective_tier(tier: str):
     """Context manager: patch billing_cli._effective_tier to return tier."""
-    return patch("carl_studio.billing_cli._effective_tier", return_value=tier)
+    return patch("carl_studio.cli.billing._effective_tier", return_value=tier)
 
 
 def _patch_db(jwt: str | None, supabase_url: str | None):
@@ -245,7 +245,7 @@ def _patch_db(jwt: str | None, supabase_url: str | None):
     mock_db = MagicMock()
     mock_db.get_auth.return_value = jwt
     mock_db.get_config.return_value = supabase_url
-    return patch("carl_studio.billing_cli.LocalDB", return_value=mock_db)
+    return patch("carl_studio.cli.billing.LocalDB", return_value=mock_db)
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +306,7 @@ class TestUpgradeCommand:
         )
         with _patch_effective_tier("paid"), \
                 _patch_db("jwt-tok", "https://example.supabase.co"), \
-                patch("carl_studio.billing_cli.get_subscription_status", return_value=mock_status):
+                patch("carl_studio.cli.billing.get_subscription_status", return_value=mock_status):
             result = runner.invoke(app, ["upgrade"])
         assert "12" in result.output or "days" in result.output
 
@@ -315,7 +315,7 @@ class TestUpgradeCommand:
         with _patch_effective_tier("paid"), \
                 _patch_db("jwt-tok", "https://example.supabase.co"), \
                 patch(
-                    "carl_studio.billing_cli.get_subscription_status",
+                    "carl_studio.cli.billing.get_subscription_status",
                     side_effect=BillingError("offline"),
                 ):
             result = runner.invoke(app, ["upgrade"])
@@ -332,7 +332,7 @@ class TestUpgradeCommand:
         )
         with _patch_effective_tier("paid"), \
                 _patch_db("jwt-tok", "https://example.supabase.co"), \
-                patch("carl_studio.billing_cli.get_subscription_status", return_value=mock_status):
+                patch("carl_studio.cli.billing.get_subscription_status", return_value=mock_status):
             result = runner.invoke(app, ["upgrade"])
         assert "cancel" in result.output.lower()
 
@@ -394,7 +394,7 @@ class TestSubscriptionCommand:
         with _patch_db("jwt-tok", "https://example.supabase.co"), \
                 _patch_effective_tier("free"), \
                 patch(
-                    "carl_studio.billing_cli.get_subscription_status",
+                    "carl_studio.cli.billing.get_subscription_status",
                     side_effect=BillingError("network down"),
                 ):
             result = runner.invoke(app, ["subscription"])
@@ -412,7 +412,7 @@ class TestSubscriptionCommand:
         )
         with _patch_db("jwt-tok", "https://example.supabase.co"), \
                 patch(
-                    "carl_studio.billing_cli.get_subscription_status",
+                    "carl_studio.cli.billing.get_subscription_status",
                     return_value=mock_status,
                 ):
             result = runner.invoke(app, ["subscription"])
@@ -432,7 +432,7 @@ class TestSubscriptionCommand:
         )
         with _patch_db("jwt-tok", "https://example.supabase.co"), \
                 patch(
-                    "carl_studio.billing_cli.get_subscription_status",
+                    "carl_studio.cli.billing.get_subscription_status",
                     return_value=mock_status,
                 ):
             result = runner.invoke(app, ["subscription", "--json"])
@@ -447,7 +447,7 @@ class TestSubscriptionCommand:
         with _patch_db("jwt-tok", "https://example.supabase.co"), \
                 _patch_effective_tier("free"), \
                 patch(
-                    "carl_studio.billing_cli.get_subscription_status",
+                    "carl_studio.cli.billing.get_subscription_status",
                     side_effect=BillingError("offline"),
                 ):
             result = runner.invoke(app, ["subscription", "--json"])
@@ -466,7 +466,7 @@ class TestSubscriptionCommand:
         )
         with _patch_db("jwt-tok", "https://example.supabase.co"), \
                 patch(
-                    "carl_studio.billing_cli.get_subscription_status",
+                    "carl_studio.cli.billing.get_subscription_status",
                     return_value=mock_status,
                 ):
             result = runner.invoke(app, ["subscription"])
@@ -476,7 +476,7 @@ class TestSubscriptionCommand:
         mock_status = SubscriptionStatus(tier="free", status="unknown")
         with _patch_db("jwt-tok", "https://example.supabase.co"), \
                 patch(
-                    "carl_studio.billing_cli.get_subscription_status",
+                    "carl_studio.cli.billing.get_subscription_status",
                     return_value=mock_status,
                 ):
             result = runner.invoke(app, ["subscription"])

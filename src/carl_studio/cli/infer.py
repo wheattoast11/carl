@@ -5,7 +5,6 @@ Register in cli.py via: ``app.command('infer')(infer_cmd)``
 """
 from __future__ import annotations
 
-import sys
 from typing import Any
 
 import typer

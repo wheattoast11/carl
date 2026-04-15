@@ -29,6 +29,64 @@ set +a
 | `carl run status`, `carl run logs`, `carl run stop`, `carl push` | `HF_TOKEN` or prior Hugging Face login |
 | RunPod backend | `RUNPOD_API_KEY` and usually `HF_TOKEN` |
 
+## Managed Account Truth
+
+CARL Paid comes from `carl.camp` account state, not from provider credentials.
+
+- `HF_TOKEN` / `hf auth login` unlock Hugging Face workflows
+- `ANTHROPIC_API_KEY` unlocks BYOK Claude features
+- `carl camp login` attaches the managed platform session
+- `carl camp logout` severs the managed session and returns to local-first FREE mode
+- `carl camp account` shows the current managed tier, credits, and any enabled wallet/x402/telemetry flags
+
+The public repo stays local-first by default. Observability and product telemetry remain opt-in at the managed account layer.
+
+## Privacy & Consent
+
+All consent flags default to **off**. The user must explicitly opt in.
+
+```bash
+carl camp consent show           # see current flags
+carl camp consent update observability --enable
+carl camp consent update telemetry --disable
+carl camp consent reset --force  # all off
+```
+
+Consent categories:
+- **observability** — coherence probes sent to carl.camp
+- **telemetry** — anonymous CLI usage counts
+- **usage_analytics** — feature analytics
+- **contract_witnessing** — hash-sign service terms
+
+Local state is authoritative. The server cannot silently enable tracking.
+
+## Payment Rails
+
+| Rail | Default | Setup |
+|------|---------|-------|
+| Stripe (card) | yes | `carl camp upgrade` |
+| x402 (micropayments) | opt-in | `carl camp x402 configure --wallet <addr> --facilitator <url>` |
+| Wallet auth | opt-in | enabled via carl.camp account settings |
+
+x402 uses a facilitator API for chain interaction — no web3 dependency required locally.
+
+```bash
+carl camp x402 status            # show config
+carl camp x402 check <url>       # probe a URL for x402 capability
+```
+
+## Contract Witnessing
+
+Service agreements can be locally witnessed with deterministic hashing:
+
+```bash
+carl camp contract sign https://carl.camp/terms/agent
+carl camp contract list
+carl camp contract verify <id>
+```
+
+Requires `contract_witnessing` consent to be enabled.
+
 ## Provider Notes
 
 ### Hugging Face

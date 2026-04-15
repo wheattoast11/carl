@@ -1,4 +1,4 @@
-"""Tests for carl_studio.marketplace and carl_studio.marketplace_cli."""
+"""Tests for carl_studio.marketplace and carl_studio.cli.marketplace."""
 from __future__ import annotations
 
 import json
@@ -19,7 +19,7 @@ from carl_studio.marketplace import (
     MarketplaceModel,
     MarketplaceRecipe,
 )
-from carl_studio.marketplace_cli import (
+from carl_studio.cli.marketplace import (
     create_marketplace_app,
     list_adapters,
     list_kits,
@@ -325,7 +325,7 @@ class TestStar:
 
 
 class TestCLIListModels:
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_renders_table(self, mock_get: MagicMock) -> None:
         client = MagicMock()
         client.list_models.return_value = [MarketplaceModel(**_SAMPLE_MODEL)]
@@ -336,7 +336,7 @@ class TestCLIListModels:
         # Rich table renders name and hub_id (may truncate in narrow terminals)
         assert "OmniCoder" in result.output
 
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_empty(self, mock_get: MagicMock) -> None:
         client = MagicMock()
         client.list_models.return_value = []
@@ -346,7 +346,7 @@ class TestCLIListModels:
         assert result.exit_code == 0
         assert "No models found" in result.output
 
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_network_error(self, mock_get: MagicMock) -> None:
         client = MagicMock()
         client.list_models.side_effect = MarketplaceError("Network error: Connection refused")
@@ -358,7 +358,7 @@ class TestCLIListModels:
 
 
 class TestCLIListAdapters:
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_renders_table(self, mock_get: MagicMock) -> None:
         client = MagicMock()
         client.list_adapters.return_value = [MarketplaceAdapter(**_SAMPLE_ADAPTER)]
@@ -370,7 +370,7 @@ class TestCLIListAdapters:
 
 
 class TestCLIListRecipes:
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_renders_table(self, mock_get: MagicMock) -> None:
         client = MagicMock()
         client.list_recipes.return_value = [MarketplaceRecipe(**_SAMPLE_RECIPE)]
@@ -382,7 +382,7 @@ class TestCLIListRecipes:
 
 
 class TestCLIListKits:
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_renders_table(self, mock_get: MagicMock) -> None:
         client = MagicMock()
         client.list_kits.return_value = [MarketplaceKit(**_SAMPLE_KIT)]
@@ -394,7 +394,7 @@ class TestCLIListKits:
 
 
 class TestCLIShow:
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_show_model(self, mock_get: MagicMock) -> None:
         client = MagicMock()
         client.get_model.return_value = MarketplaceModel(**_SAMPLE_MODEL)
@@ -405,7 +405,7 @@ class TestCLIShow:
         assert "OmniCoder 9B" in result.output
         assert "Tesslate/OmniCoder-9B" in result.output
 
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_show_adapter_fallback(self, mock_get: MagicMock) -> None:
         client = MagicMock()
         client.get_model.return_value = None
@@ -416,7 +416,7 @@ class TestCLIShow:
         assert result.exit_code == 0
         assert "Adapter" in result.output
 
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_show_not_found(self, mock_get: MagicMock) -> None:
         client = MagicMock()
         client.get_model.return_value = None
@@ -429,8 +429,8 @@ class TestCLIShow:
 
 
 class TestCLIPublish:
-    @patch("carl_studio.marketplace_cli.check_tier")
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace.check_tier")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_publish_model(self, mock_get: MagicMock, mock_tier: MagicMock) -> None:
         from carl_studio.tier import Tier
 
@@ -449,7 +449,7 @@ class TestCLIPublish:
         assert result.exit_code == 0
         assert "Published model" in result.output
 
-    @patch("carl_studio.marketplace_cli.check_tier")
+    @patch("carl_studio.cli.marketplace.check_tier")
     def test_publish_blocked_free_tier(self, mock_tier: MagicMock) -> None:
         from carl_studio.tier import Tier
 
@@ -459,8 +459,8 @@ class TestCLIPublish:
         assert result.exit_code == 1
         assert "Paid" in result.output or "carl.camp/pricing" in result.output
 
-    @patch("carl_studio.marketplace_cli.check_tier")
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace.check_tier")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_publish_adapter(self, mock_get: MagicMock, mock_tier: MagicMock) -> None:
         from carl_studio.tier import Tier
 
@@ -478,8 +478,8 @@ class TestCLIPublish:
         assert result.exit_code == 0
         assert "Published adapter" in result.output
 
-    @patch("carl_studio.marketplace_cli.check_tier")
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace.check_tier")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_publish_invalid_type(self, mock_get: MagicMock, mock_tier: MagicMock) -> None:
         from carl_studio.tier import Tier
 
@@ -492,8 +492,8 @@ class TestCLIPublish:
         assert result.exit_code == 1
         assert "Invalid type" in result.output
 
-    @patch("carl_studio.marketplace_cli.check_tier")
-    @patch("carl_studio.marketplace_cli._get_client")
+    @patch("carl_studio.cli.marketplace.check_tier")
+    @patch("carl_studio.cli.marketplace._get_client")
     def test_publish_api_error(self, mock_get: MagicMock, mock_tier: MagicMock) -> None:
         from carl_studio.tier import Tier
 

@@ -1,13 +1,7 @@
 """Billing CLI commands for carl.camp subscription management.
 
-Registration in cli.py (integration step):
-
-    from carl_studio.billing_cli import upgrade, billing_portal, subscription_status
-    app.command(name="upgrade")(upgrade)
-    app.command(name="billing")(billing_portal)
-    app.command(name="subscription")(subscription_status)
-
-Commands are standalone Typer-compatible functions, not a sub-app.
+Commands: upgrade, billing (portal), subscription, account.
+Wired in cli/wiring.py.
 """
 
 from __future__ import annotations
@@ -24,9 +18,11 @@ from carl_studio.billing import (
     BillingError,
     get_subscription_status,
 )
-from carl_studio.cli.shared import _warn_legacy_command_alias
+from carl_studio.camp import CampError, resolve_camp_profile
 from carl_studio.console import get_console
 from carl_studio.db import LocalDB
+
+from .shared import _warn_legacy_command_alias
 
 
 # ---------------------------------------------------------------------------
@@ -219,3 +215,84 @@ def subscription_status(
             c.warn("Could not reach carl.camp — showing cached tier.")
             c.kv("Tier", tier)
             c.info("Check your connection or run: carl camp login")
+
+
+# ---------------------------------------------------------------------------
+# carl camp account
+# ---------------------------------------------------------------------------
+
+
+def account_status(
+    json_output: bool = typer.Option(False, "--json", help="Output account profile as JSON"),
+    refresh: bool = typer.Option(
+        True, "--refresh/--cached", help="Refresh from carl.camp before rendering"
+    ),
+) -> None:
+    """Show the unified managed account profile and payment capabilities."""
+    c = get_console()
+    db = LocalDB()
+
+    try:
+        session, profile, source = resolve_camp_profile(refresh=refresh, db=db)
+    except CampError as exc:
+        if json_output:
+            typer.echo(
+                json.dumps({"authenticated": True, "error": str(exc), "source": "error"}, indent=2)
+            )
+            raise typer.Exit(0)
+        c.header("Camp Account", "error")
+        c.warn(str(exc))
+        c.info("Use cached mode with: carl camp account --cached")
+        raise typer.Exit(0)
+
+    payload = {
+        "authenticated": bool(session.jwt),
+        "supabase_configured": bool(session.supabase_url),
+        "cached_tier": session.cached_tier,
+        "source": source,
+        "profile": profile.to_dict() if profile is not None else None,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+        raise typer.Exit(0)
+
+    c.header("Camp Account", source)
+    if not session.jwt:
+        c.warn("Not logged in. CARL Studio still works fully in local-first FREE mode.")
+        c.info("Attach the managed platform later with: carl camp login")
+        c.info("Free/core path stays available: carl train --config carl.yaml")
+        raise typer.Exit(0)
+
+    c.kv("Authenticated", "yes")
+    c.kv("Supabase", session.supabase_url or "(not set)")
+
+    if profile is None:
+        c.warn("Authenticated, but no account profile is cached yet.")
+        c.info("Run: carl camp subscription")
+        raise typer.Exit(0)
+
+    c.kv("Tier", profile.tier.title())
+    c.kv("Plan", profile.plan or "free")
+    c.kv("Status", profile.status)
+    if profile.days_remaining is not None:
+        c.kv("Renews in", f"{profile.days_remaining} days")
+    c.kv("Credits", f"{profile.credits_remaining} remaining / {profile.credits_total} total")
+    c.kv("Payments", profile.payment_summary)
+    c.kv("Wallet login", "enabled" if profile.wallet_auth_enabled else "not enabled")
+    c.kv("x402 rail", "enabled" if profile.x402_enabled else "planned")
+    c.kv("Observability", "opt-in" if profile.observability_opt_in else "off by default")
+    c.kv("Telemetry", "opt-in" if profile.telemetry_opt_in else "off by default")
+    c.kv("Usage tracking", "minimal" if profile.usage_tracking_enabled else "off")
+    c.kv("Contract witnesses", "enabled" if profile.contract_witnessing else "planned")
+    if profile.contract_terms_url:
+        c.kv("Terms", profile.contract_terms_url)
+
+    c.blank()
+    if profile.tier == "paid":
+        c.info("Manage subscription: carl camp billing")
+        c.info("Inspect credits: carl camp credits show")
+        c.info("Sync managed state: carl camp sync push")
+    else:
+        c.info("Stay local-first on FREE: carl train --config carl.yaml")
+        c.info("Attach managed features later: carl camp upgrade")
+        c.info("Lead-safe default: observability and telemetry remain opt-in")

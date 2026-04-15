@@ -88,37 +88,28 @@ class TestAutoElevation:
     def test_no_credentials_stays_free(self, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.delenv("HF_TOKEN", raising=False)
-        # Patch out huggingface_hub detection
         monkeypatch.setattr(tier_mod, "_detect_hf_token", lambda: None)
         assert detect_effective_tier(Tier.FREE) == Tier.FREE
 
-    def test_anthropic_key_elevates_to_pro(self, monkeypatch):
+    def test_provider_keys_do_not_upgrade_to_paid(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-123")
-        monkeypatch.setattr(tier_mod, "_detect_hf_token", lambda: None)
-        assert detect_effective_tier(Tier.FREE) == Tier.PRO
-
-    def test_hf_token_elevates_to_pro(self, monkeypatch):
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.setattr(tier_mod, "_detect_hf_token", lambda: "hf_test_token")
-        assert detect_effective_tier(Tier.FREE) == Tier.PRO
+        assert detect_effective_tier(Tier.FREE) == Tier.FREE
+
+    def test_cached_paid_session_elevates_free(self, monkeypatch):
+        import carl_studio.db as db_mod
+
+        class FakeDB:
+            def get_auth(self, key: str):
+                return "paid" if key == "tier" else None
+
+        monkeypatch.setattr(db_mod, "LocalDB", FakeDB)
+        assert detect_effective_tier(Tier.FREE) == Tier.PAID
 
     def test_never_downgrades(self, monkeypatch):
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
         monkeypatch.setattr(tier_mod, "_detect_hf_token", lambda: None)
         assert detect_effective_tier(Tier.PRO) == Tier.PRO
-
-    def test_enterprise_needs_flag_and_keys(self, monkeypatch):
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-        monkeypatch.setenv("CARL_ENTERPRISE", "1")
-        monkeypatch.setattr(tier_mod, "_detect_hf_token", lambda: "hf_test")
-        assert detect_effective_tier(Tier.FREE) == Tier.ENTERPRISE
-
-    def test_enterprise_flag_without_keys_stays_pro(self, monkeypatch):
-        monkeypatch.setenv("CARL_ENTERPRISE", "1")
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-        monkeypatch.setattr(tier_mod, "_detect_hf_token", lambda: None)
-        # Has anthropic but not HF -> only pro, enterprise needs both
-        assert detect_effective_tier(Tier.FREE) == Tier.PRO
 
 
 # ---------------------------------------------------------------------------

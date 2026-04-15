@@ -14,7 +14,7 @@ from __future__ import annotations
 import typer
 from typing import cast
 
-from carl_studio.cli.shared import _warn_legacy_command_alias
+from .shared import _warn_legacy_command_alias
 from carl_studio.console import get_console
 from carl_studio.marketplace import (
     MarketplaceAdapter,

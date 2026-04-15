@@ -152,9 +152,15 @@ carl eval --adapter your-username/your-model
 | Claude diagnosis | `carl observe --diagnose ...` | `pip install 'carl-studio[observe]'` |
 | Local train/eval | `carl train`, `carl eval` | `pip install 'carl-studio[training]'` |
 | HF job management / publish | `carl run status`, `carl run logs`, `carl run stop`, `carl push` | `pip install 'carl-studio[hf]'` |
-| Camp account + marketplace | `carl camp login`, `carl camp credits`, `carl camp marketplace` | platform features (optional) |
+| Camp account + marketplace | `carl camp account`, `carl camp login`, `carl camp logout`, `carl camp credits`, `carl camp marketplace` | platform features (optional) |
+| Privacy consent | `carl camp consent show`, `carl camp consent update` | included |
+| x402 payment rail | `carl camp x402 configure`, `carl camp x402 status` | included |
+| Contract witnessing | `carl camp contract sign`, `carl camp contract verify` | included |
+| Carlito management | `carl carlito list`, `carl carlito spawn`, `carl carlito show` | included |
 
 Managed tiers build on top of these open workflows; extras control local capabilities, not research access.
+
+Provider credentials unlock provider workflows, not CARL Paid platform access. Use `carl camp account` to inspect managed account state, credits, and enabled wallet/x402 capabilities. Privacy consent is managed locally with `carl camp consent` — all flags default off.
 
 ## Credential Matrix
 

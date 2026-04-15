@@ -17,6 +17,7 @@ from .shared import (
     _render_command_inventory,
 )
 
+
 # ---------------------------------------------------------------------------
 # carl doctor
 # ---------------------------------------------------------------------------
@@ -116,7 +117,7 @@ def start(
     ),
     json_output: bool = typer.Option(False, "--json", help="Output readiness as JSON"),
 ) -> None:
-    """Show the next best local-first setup steps for this machine or repo."""
+    """Guided onboarding: setup project, check readiness, and discover commands."""
     c = get_console()
     summary = _build_start_summary()
     readiness = summary["readiness"]
@@ -131,6 +132,34 @@ def start(
 
     c.blank()
     c.header("CARL Start")
+
+    # Interactive Project Setup Handoff
+    if not inventory and not project.get("path"):
+        c.info("No carl.yaml found in current directory.")
+        if typer.confirm("Would you like to initialize a new project now?", default=True):
+            from carl_studio.cli.project_data import project_init
+
+            # Execute the interactive wizard
+            project_init(
+                name="my-carl-project",
+                model="",
+                method="grpo",
+                dataset="",
+                output_repo="",
+                compute="",
+                description="",
+                use_case="",
+                output="carl.yaml",
+                interactive=True,
+            )
+            # Re-evaluate readiness after initialization
+            summary = _build_start_summary()
+            readiness = summary["readiness"]
+            project = summary["project"]
+            dependencies = summary["dependencies"]
+            c.blank()
+            c.header("Readiness Check")
+
     c.config_block(
         [
             (
@@ -189,11 +218,11 @@ def start(
         for title, commands in _inventory_rows(command_tree):
             c.kv(title, commands, key_width=21)
         c.info("Run 'carl start --inventory' for the full installed command map.")
+        c.info("Run 'carl doctor' for a detailed diagnostic audit.")
+        c.info("Run 'carl camp account' for managed account, billing, and capability status.")
     c.blank()
 
     c.print("  [camp.primary]Next steps[/]")
     for idx, step in enumerate(summary["next_steps"], start=1):
         c.print(f"    {idx}. {step}")
     c.blank()
-
-

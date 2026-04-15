@@ -14,24 +14,34 @@
 - [CARLTrainer](src/carl_studio/training/trainer.py): Async dispatch to HF Jobs, RunPod, local
 - [ComputeBackend](src/carl_studio/compute/protocol.py): Protocol for compute backends
 - [HFJobsBackend](src/carl_studio/compute/hf_jobs.py): HuggingFace Jobs — provision, execute, status, logs, stop
-- [Tier](src/carl_studio/tier.py): FREE/PRO/ENTERPRISE gating with auto-elevation
+- [Tier](src/carl_studio/tier.py): FREE/PAID gating from cached camp subscription truth
+- [ConsentManager](src/carl_studio/consent.py): Privacy-first consent state machine — all flags off by default
+- [X402Client](src/carl_studio/x402.py): x402 HTTP payment rail client — no web3 dep, facilitator-based
+- [ContractWitness](src/carl_studio/contract.py): Chain-agnostic service agreement with deterministic witness hashing
+- [CarlitoRegistry](src/carl_studio/carlito.py): Agent spawning from graduated curriculum tracks
 
 ## CLI
 - `carl observe --url URL`: Crystal metrics on any Trackio run (no GPU)
-- `carl observe --live --url URL`: Real-time Textual TUI dashboard (PRO)
-- `carl observe --diagnose`: Claude-powered coherence diagnosis (PRO)
+- `carl observe --live --url URL`: Real-time Textual TUI dashboard (FREE + `carl-studio[tui]`)
+- `carl observe --diagnose`: Claude-powered coherence diagnosis (FREE, BYOK Anthropic)
 - `carl train --model MODEL --method grpo --compute a100`: Train with CARL rewards
-- `carl train --send-it`: Full autonomous pipeline: SFT -> gate -> GRPO -> eval -> push (PRO)
+- `carl train --send-it`: Full autonomous pipeline: SFT -> gate -> GRPO -> eval -> push (PAID)
 - `carl eval --adapter HUB_ID`: Run eval gate on checkpoint
 - `carl eval --remote`: Submit eval as HF Job
 - `carl config show`: Display settings
 - `carl config init`: Interactive setup wizard
 - `carl config preset research|production|quick`: Apply preset
-- `carl status ID`: Job status
-- `carl logs ID`: Job logs
-- `carl stop ID`: Cancel job
+- `carl run status ID`: Job status
+- `carl run logs ID`: Job logs
+- `carl run stop ID`: Cancel job
 - `carl bundle`: Generate self-contained PEP 723 training script
-- `carl mcp`: Start MCP server with 9 tools (ENTERPRISE)
+- `carl camp account`: Inspect managed tier, credits, and account capabilities
+- `carl camp logout`: Drop managed session and return to local-first FREE mode
+- `carl camp consent show/update/reset`: Privacy-first consent management (all off by default)
+- `carl camp x402 status/configure/check`: x402 HTTP payment rail configuration
+- `carl camp contract sign/list/verify`: Service contract witnessing with deterministic hashes
+- `carl carlito list/show/spawn/retire`: Manage carlitos — small specialized agents from graduated tracks
+- `carl lab mcp`: Start MCP server with 9 tools (PAID)
 
 ## Constants (never configurable)
 - KAPPA = 64/3 (conservation constant)
@@ -48,6 +58,5 @@
 - `CARLSettings.load()` for layered config resolution
 
 ## Tiers
-- FREE: observe, train, eval, bench, align, learn, push, bundle, compute
-- PRO: --live, --diagnose, --send-it, auto-gating, scheduled runs
-- ENTERPRISE: MCP server, custom environments, orchestration
+- FREE: observe, observe --live, observe --diagnose, train, eval, bench, align, learn, push, bundle, compute
+- PAID: --send-it, auto-gating, scheduled runs, sync, credits, marketplace publish, MCP server, orchestration

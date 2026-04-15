@@ -76,7 +76,8 @@ carl infer                                Run local inference helper
 
 **Namespaces:**
 ```
-carl camp ...                             Account/sync/credits/marketplace surfaces
+carl camp ...                             Account/login/logout/sync/credits/marketplace/consent/contract/x402 surfaces
+carl carlito ...                          Manage carlitos -- small specialized agents you train and spawn
 carl lab ...                              Experimental and advanced/internal workflows
 ```
 
@@ -94,6 +95,11 @@ pip install 'carl-studio[all]'            Everything
 ```
 HF Hub / HF Jobs / push   HF_TOKEN or prior `hf auth login`
 Anthropic features        ANTHROPIC_API_KEY or --api-key
+Camp platform truth       `carl camp login` / `carl camp logout` / `carl camp account`
+Privacy consent           `carl camp consent show` / `carl camp consent update`
+x402 payment rail         `carl camp x402 configure` / `carl camp x402 status`
+Contract witnessing       `carl camp contract sign` / `carl camp contract verify`
+Carlito management        `carl carlito list` / `carl carlito spawn` / `carl carlito show`
 RunPod backend            RUNPOD_API_KEY
 .env files                supported if you load them yourself; not auto-loaded
 ```

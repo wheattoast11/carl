@@ -91,9 +91,15 @@ class MarketplaceClient:
     Writes (publish/star) require JWT from carl camp login.
     """
 
-    def __init__(self, supabase_url: str = "", jwt: str = "") -> None:
+    def __init__(
+        self,
+        supabase_url: str = "",
+        jwt: str = "",
+        profile: Any | None = None,
+    ) -> None:
         self._url = supabase_url
         self._jwt = jwt
+        self._profile = profile
 
     # -- Factory constructors -------------------------------------------------
 
@@ -114,6 +120,24 @@ class MarketplaceClient:
 
         s = CARLSettings.load()
         return cls(supabase_url=s.supabase_url, jwt="")
+
+    @classmethod
+    def from_camp_session(
+        cls,
+        session: Any,
+        profile: Any | None = None,
+    ) -> MarketplaceClient:
+        """Create client from a resolved CampSession + optional CampProfile."""
+        return cls(
+            supabase_url=getattr(session, "supabase_url", "") or "",
+            jwt=getattr(session, "jwt", "") or "",
+            profile=profile,
+        )
+
+    @property
+    def camp_profile(self) -> Any | None:
+        """The resolved CampProfile, if available."""
+        return self._profile
 
     # -- HTTP transport -------------------------------------------------------
 

@@ -92,6 +92,19 @@ CREATE TABLE IF NOT EXISTS sync_queue (
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
 CREATE INDEX IF NOT EXISTS idx_sync_pending ON sync_queue (status) WHERE status = 'pending';
+
+CREATE TABLE IF NOT EXISTS contracts (
+    id TEXT PRIMARY KEY,
+    parties TEXT NOT NULL,
+    terms_hash TEXT NOT NULL,
+    terms_url TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'draft',
+    signed_at TEXT,
+    witness_hash TEXT,
+    chain TEXT,
+    envelope TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+);
 """
 
 
@@ -406,3 +419,59 @@ class LocalDB:
                     (status, sync_id),
                 )
             conn.commit()
+
+    # ─── Contracts ──────────────────────────────────────────────
+
+    def insert_contract(self, contract: dict[str, str | None]) -> str:
+        """Insert a contract and return its id."""
+        cid = str(contract.get("id") or uuid4())
+        with self._connect() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO contracts
+                   (id, parties, terms_hash, terms_url, status,
+                    signed_at, witness_hash, chain, envelope)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    cid,
+                    contract.get("parties", "[]"),
+                    contract.get("terms_hash", ""),
+                    contract.get("terms_url", ""),
+                    contract.get("status", "draft"),
+                    contract.get("signed_at"),
+                    contract.get("witness_hash"),
+                    contract.get("chain"),
+                    contract.get("envelope"),
+                ),
+            )
+            conn.commit()
+        return cid
+
+    def update_contract(self, contract_id: str, updates: dict[str, str | None]) -> None:
+        """Update specific fields on a contract."""
+        if not updates:
+            return
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [contract_id]
+        with self._connect() as conn:
+            conn.execute(
+                f"UPDATE contracts SET {set_clause} WHERE id = ?",  # noqa: S608
+                values,
+            )
+            conn.commit()
+
+    def get_contract(self, contract_id: str) -> dict[str, str | None] | None:
+        """Get a single contract by id."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM contracts WHERE id = ?", (contract_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_contracts(self, limit: int = 20) -> list[dict[str, str | None]]:
+        """List contracts ordered by creation date."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM contracts ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return [dict(r) for r in rows]
