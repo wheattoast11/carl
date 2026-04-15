@@ -11,16 +11,37 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
+import typer
 
 from carl_studio import __version__
 from carl_studio.console import CampConsole, get_console
 
 from .apps import app
 
+
 def _camp_header() -> None:
     """Print the Camp CARL banner with current theme."""
     c = get_console()
     c.banner(f"v{__version__}")
+
+
+def _warn_legacy_command_alias(
+    c: CampConsole,
+    ctx: typer.Context | None,
+    canonical_command: str,
+) -> None:
+    """Warn when a hidden compatibility alias is used instead of the canonical path."""
+    if ctx is None:
+        return
+
+    invoked_path = getattr(ctx, "command_path", "").strip()
+    canonical_path = canonical_command.strip()
+    if not invoked_path or invoked_path == canonical_path:
+        return
+
+    c.warn(f"Compatibility alias detected: {invoked_path}")
+    c.info(f"Use: {canonical_path}")
+    c.blank()
 
 
 # ---------------------------------------------------------------------------
@@ -534,5 +555,3 @@ def _camp_status_label(summary: dict[str, Any]) -> str:
     if not camp["connected"]:
         return "local-only"
     return f"connected ({summary['effective_tier']})"
-
-

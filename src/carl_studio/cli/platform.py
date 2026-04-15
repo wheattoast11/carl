@@ -7,6 +7,7 @@ import typer
 from carl_studio.console import get_console
 
 from .apps import app
+from .shared import _warn_legacy_command_alias
 
 # ---------------------------------------------------------------------------
 # carl config — settings management
@@ -324,6 +325,7 @@ def config_preset(
 
 @app.command(name="login", hidden=True)
 def login(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     upgrade: bool = typer.Option(False, "--upgrade", help="Open upgrade checkout after login"),
 ) -> None:
     """Authenticate with carl.camp. Opens browser for login."""
@@ -333,6 +335,7 @@ def login(
     import threading
 
     c = get_console()
+    _warn_legacy_command_alias(c, ctx, "carl camp login")
     c.blank()
     c.header("CARL Login")
 
@@ -344,7 +347,7 @@ def login(
     existing_jwt = db.get_auth("jwt")
     if existing_jwt and not upgrade:
         c.ok("Already authenticated.")
-        c.info("Run 'carl login --upgrade' to open the upgrade page.")
+        c.info("Run 'carl camp upgrade' to open the upgrade page.")
         c.blank()
         return
 
@@ -412,7 +415,7 @@ def login(
         c.blank()
     else:
         c.error("Authentication timed out or failed.")
-        c.info("Try again: carl login")
+        c.info("Try again: carl camp login")
         c.blank()
         raise typer.Exit(1)
 
@@ -421,8 +424,18 @@ def login(
 # carl sync — push/pull data to carl.camp
 # ---------------------------------------------------------------------------
 
-sync_app = typer.Typer(name="sync", help="Sync data with carl.camp")
+sync_app = typer.Typer(
+    name="sync",
+    help="Push and pull local data with carl.camp.",
+    no_args_is_help=True,
+)
 app.add_typer(sync_app, hidden=True)
+
+
+@sync_app.callback()
+def sync_callback(ctx: typer.Context = typer.Option(None, hidden=True)) -> None:
+    """Warn when the legacy top-level sync group is used."""
+    _warn_legacy_command_alias(get_console(), ctx, "carl camp sync")
 
 
 @sync_app.command(name="push")
@@ -438,7 +451,7 @@ def sync_push_cmd(
     allowed, _, _ = check_tier("sync.cloud")
     if not allowed:
         c.warn(tier_message("sync.cloud") or "Cloud sync requires CARL Paid.")
-        c.info("Upgrade: carl login --upgrade  or  https://carl.camp/pricing")
+        c.info("Upgrade: carl camp upgrade  or  https://carl.camp/pricing")
         raise typer.Exit(1)
     c.blank()
     c.header("CARL Sync", "Push")
@@ -473,7 +486,7 @@ def sync_pull_cmd(
     allowed, _, _ = check_tier("sync.cloud")
     if not allowed:
         c.warn(tier_message("sync.cloud") or "Cloud sync requires CARL Paid.")
-        c.info("Upgrade: carl login --upgrade  or  https://carl.camp/pricing")
+        c.info("Upgrade: carl camp upgrade  or  https://carl.camp/pricing")
         raise typer.Exit(1)
     c.blank()
     c.header("CARL Sync", "Pull")
@@ -494,4 +507,3 @@ def sync_pull_cmd(
         raise typer.Exit(1)
 
     c.blank()
-

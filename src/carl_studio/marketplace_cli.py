@@ -14,6 +14,7 @@ from __future__ import annotations
 import typer
 from typing import cast
 
+from carl_studio.cli.shared import _warn_legacy_command_alias
 from carl_studio.console import get_console
 from carl_studio.marketplace import (
     MarketplaceAdapter,
@@ -42,7 +43,7 @@ def _handle_error(e: MarketplaceError) -> None:
     if "Network error" in msg or "URLError" in msg:
         c.error("Could not reach carl.camp. Check your connection.")
     elif "(401)" in msg or "authentication" in msg.lower():
-        c.error("Not authenticated. Run: carl login")
+        c.error("Not authenticated. Run: carl camp login")
     elif "not configured" in msg.lower():
         c.error("Marketplace URL not configured. Run: carl config set supabase_url <URL>")
     else:
@@ -58,6 +59,12 @@ marketplace_app = typer.Typer(
     help="Browse and publish on the carl.camp marketplace.",
     no_args_is_help=True,
 )
+
+
+@marketplace_app.callback()
+def marketplace_callback(ctx: typer.Context = typer.Option(None, hidden=True)) -> None:
+    """Warn when the legacy top-level marketplace group is used."""
+    _warn_legacy_command_alias(get_console(), ctx, "carl camp marketplace")
 
 
 @marketplace_app.command("models")
@@ -212,6 +219,7 @@ def show_item(
 
 
 def publish_cmd(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     hub_id: str = typer.Argument(..., help="HF Hub repo ID to publish"),
     item_type: str = typer.Option("model", "--type", "-t", help="model or adapter"),
     name: str = typer.Option("", "--name", "-n", help="Display name (defaults to hub_id)"),
@@ -222,6 +230,7 @@ def publish_cmd(
 ) -> None:
     """Publish a model or adapter to the carl.camp marketplace."""
     c = get_console()
+    _warn_legacy_command_alias(c, ctx, "carl camp publish")
 
     # Tier gate: publishing requires PAID
     allowed, effective, _required = check_tier("marketplace.publish")

@@ -4,8 +4,9 @@ Pydantic models mirroring the Supabase marketplace schema (001_marketplace.sql).
 Client calls Supabase Edge Functions via urllib (no supabase-py dependency).
 
 Public reads (list/get) work without auth.
-Writes (publish/star) require JWT from ``carl login``.
+Writes (publish/star) require JWT from ``carl camp login``.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,8 +19,10 @@ from pydantic import BaseModel, Field
 
 __all__ = [
     "MarketplaceError",
-    "MarketplaceModel", "MarketplaceAdapter",
-    "MarketplaceRecipe", "MarketplaceKit",
+    "MarketplaceModel",
+    "MarketplaceAdapter",
+    "MarketplaceRecipe",
+    "MarketplaceKit",
     "MarketplaceClient",
 ]
 
@@ -85,7 +88,7 @@ class MarketplaceClient:
 
     Calls Edge Functions via urllib (no supabase-py dep).
     Public reads (list/get) work without auth.
-    Writes (publish/star) require JWT from carl login.
+    Writes (publish/star) require JWT from carl camp login.
     """
 
     def __init__(self, supabase_url: str = "", jwt: str = "") -> None:
@@ -127,15 +130,12 @@ class MarketplaceClient:
         """
         if not self._url:
             raise MarketplaceError(
-                "Marketplace URL not configured. "
-                "Run: carl config set supabase_url <URL>"
+                "Marketplace URL not configured. Run: carl config set supabase_url <URL>"
             )
 
         url = f"{self._url}/functions/v1/{function}"
         if params:
-            query = urllib.parse.urlencode(
-                {k: v for k, v in params.items() if v}
-            )
+            query = urllib.parse.urlencode({k: v for k, v in params.items() if v})
             if query:
                 url = f"{url}?{query}"
 
@@ -152,9 +152,7 @@ class MarketplaceClient:
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.fp else ""
-            raise MarketplaceError(
-                f"Marketplace API error ({e.code}): {error_body}"
-            )
+            raise MarketplaceError(f"Marketplace API error ({e.code}): {error_body}")
         except urllib.error.URLError as e:
             raise MarketplaceError(f"Network error: {e.reason}")
 
@@ -167,12 +165,15 @@ class MarketplaceClient:
         limit: int = 20,
     ) -> list[MarketplaceModel]:
         """List models from the marketplace."""
-        data = self._request("marketplace-list", params={
-            "type": "models",
-            "public": str(public_only).lower(),
-            "q": query,
-            "limit": str(limit),
-        })
+        data = self._request(
+            "marketplace-list",
+            params={
+                "type": "models",
+                "public": str(public_only).lower(),
+                "q": query,
+                "limit": str(limit),
+            },
+        )
         return [MarketplaceModel(**item) for item in data.get("items", [])]
 
     def list_adapters(
@@ -182,28 +183,37 @@ class MarketplaceClient:
         limit: int = 20,
     ) -> list[MarketplaceAdapter]:
         """List adapters from the marketplace."""
-        data = self._request("marketplace-list", params={
-            "type": "adapters",
-            "public": str(public_only).lower(),
-            "q": query,
-            "limit": str(limit),
-        })
+        data = self._request(
+            "marketplace-list",
+            params={
+                "type": "adapters",
+                "public": str(public_only).lower(),
+                "q": query,
+                "limit": str(limit),
+            },
+        )
         return [MarketplaceAdapter(**item) for item in data.get("items", [])]
 
     def list_recipes(self, limit: int = 20) -> list[MarketplaceRecipe]:
         """List recipes from the marketplace."""
-        data = self._request("marketplace-list", params={
-            "type": "recipes",
-            "limit": str(limit),
-        })
+        data = self._request(
+            "marketplace-list",
+            params={
+                "type": "recipes",
+                "limit": str(limit),
+            },
+        )
         return [MarketplaceRecipe(**item) for item in data.get("items", [])]
 
     def list_kits(self, limit: int = 20) -> list[MarketplaceKit]:
         """List kits from the marketplace."""
-        data = self._request("marketplace-list", params={
-            "type": "kits",
-            "limit": str(limit),
-        })
+        data = self._request(
+            "marketplace-list",
+            params={
+                "type": "kits",
+                "limit": str(limit),
+            },
+        )
         return [MarketplaceKit(**item) for item in data.get("items", [])]
 
     def get_model(self, model_id: str) -> MarketplaceModel | None:
@@ -211,10 +221,13 @@ class MarketplaceClient:
         if not model_id:
             return None
         try:
-            data = self._request("marketplace-get", params={
-                "type": "models",
-                "id": model_id,
-            })
+            data = self._request(
+                "marketplace-get",
+                params={
+                    "type": "models",
+                    "id": model_id,
+                },
+            )
             return MarketplaceModel(**data) if data else None
         except MarketplaceError:
             return None
@@ -224,10 +237,13 @@ class MarketplaceClient:
         if not adapter_id:
             return None
         try:
-            data = self._request("marketplace-get", params={
-                "type": "adapters",
-                "id": adapter_id,
-            })
+            data = self._request(
+                "marketplace-get",
+                params={
+                    "type": "adapters",
+                    "id": adapter_id,
+                },
+            )
             return MarketplaceAdapter(**data) if data else None
         except MarketplaceError:
             return None
@@ -237,44 +253,58 @@ class MarketplaceClient:
     def _require_auth(self, action: str) -> None:
         """Raise MarketplaceError if no JWT is set."""
         if not self._jwt:
-            raise MarketplaceError(
-                f"{action} requires authentication. Run: carl login"
-            )
+            raise MarketplaceError(f"{action} requires authentication. Run: carl camp login")
 
     def publish_model(self, model: MarketplaceModel) -> MarketplaceModel:
         """Publish or update a model. Requires JWT + PAID tier."""
         self._require_auth("Publishing")
-        data = self._request("marketplace-publish", method="POST", body={
-            "type": "models",
-            "item": model.model_dump(exclude_defaults=True),
-        })
+        data = self._request(
+            "marketplace-publish",
+            method="POST",
+            body={
+                "type": "models",
+                "item": model.model_dump(exclude_defaults=True),
+            },
+        )
         return MarketplaceModel(**data.get("item", {}))
 
     def publish_adapter(self, adapter: MarketplaceAdapter) -> MarketplaceAdapter:
         """Publish or update an adapter. Requires JWT + PAID tier."""
         self._require_auth("Publishing")
-        data = self._request("marketplace-publish", method="POST", body={
-            "type": "adapters",
-            "item": adapter.model_dump(exclude_defaults=True),
-        })
+        data = self._request(
+            "marketplace-publish",
+            method="POST",
+            body={
+                "type": "adapters",
+                "item": adapter.model_dump(exclude_defaults=True),
+            },
+        )
         return MarketplaceAdapter(**data.get("item", {}))
 
     def publish_recipe(self, recipe: MarketplaceRecipe) -> MarketplaceRecipe:
         """Publish or update a recipe. Requires JWT + PAID tier."""
         self._require_auth("Publishing")
-        data = self._request("marketplace-publish", method="POST", body={
-            "type": "recipes",
-            "item": recipe.model_dump(exclude_defaults=True),
-        })
+        data = self._request(
+            "marketplace-publish",
+            method="POST",
+            body={
+                "type": "recipes",
+                "item": recipe.model_dump(exclude_defaults=True),
+            },
+        )
         return MarketplaceRecipe(**data.get("item", {}))
 
     def publish_kit(self, kit: MarketplaceKit) -> MarketplaceKit:
         """Publish or update a kit. Requires JWT + PAID tier."""
         self._require_auth("Publishing")
-        data = self._request("marketplace-publish", method="POST", body={
-            "type": "kits",
-            "item": kit.model_dump(exclude_defaults=True),
-        })
+        data = self._request(
+            "marketplace-publish",
+            method="POST",
+            body={
+                "type": "kits",
+                "item": kit.model_dump(exclude_defaults=True),
+            },
+        )
         return MarketplaceKit(**data.get("item", {}))
 
     def star(self, item_type: str, item_id: str) -> bool:
@@ -293,8 +323,12 @@ class MarketplaceClient:
                 f"Invalid item type {item_type!r}. "
                 f"Must be one of: {', '.join(sorted(_VALID_TYPES))}"
             )
-        data = self._request("marketplace-star", method="POST", body={
-            "type": item_type,
-            "id": item_id,
-        })
+        data = self._request(
+            "marketplace-star",
+            method="POST",
+            body={
+                "type": item_type,
+                "id": item_id,
+            },
+        )
         return bool(data.get("starred", False))

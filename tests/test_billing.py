@@ -249,7 +249,7 @@ def _patch_db(jwt: str | None, supabase_url: str | None):
 
 
 # ---------------------------------------------------------------------------
-# carl upgrade CLI tests
+# carl camp upgrade CLI tests
 # ---------------------------------------------------------------------------
 
 
@@ -259,7 +259,7 @@ class TestUpgradeCommand:
             result = runner.invoke(app, ["upgrade"])
         assert result.exit_code == 0
         assert "Already CARL Paid" in result.output
-        assert "carl billing" in result.output
+        assert "carl camp billing" in result.output
 
     def test_already_paid_no_browser_open(self) -> None:
         with _patch_effective_tier("paid"), _patch_db(None, None), \
@@ -272,7 +272,7 @@ class TestUpgradeCommand:
                 patch("webbrowser.open"):
             result = runner.invoke(app, ["upgrade"])
         assert "--send-it" in result.output or "send-it" in result.output or "send_it" in result.output
-        assert "carl login" in result.output
+        assert "carl camp login" in result.output
 
     def test_free_opens_monthly_by_default(self) -> None:
         with _patch_effective_tier("free"), \
@@ -338,7 +338,7 @@ class TestUpgradeCommand:
 
 
 # ---------------------------------------------------------------------------
-# carl billing CLI tests
+# carl camp billing CLI tests
 # ---------------------------------------------------------------------------
 
 
@@ -348,7 +348,7 @@ class TestBillingPortalCommand:
             result = runner.invoke(app, ["billing"])
         assert result.exit_code == 1
         assert "Not logged in" in result.output
-        assert "carl login" in result.output
+        assert "carl camp login" in result.output
 
     def test_logged_in_opens_browser(self) -> None:
         with _patch_db("jwt-tok", None), \
@@ -381,7 +381,7 @@ class TestSubscriptionCommand:
         with _patch_db(None, None):
             result = runner.invoke(app, ["subscription"])
         assert result.exit_code == 0
-        assert "Not logged in" in result.output or "carl login" in result.output
+        assert "Not logged in" in result.output or "carl camp login" in result.output
 
     def test_no_supabase_url_shows_cached_tier(self) -> None:
         with _patch_db("jwt-tok", None), _patch_effective_tier("free"):

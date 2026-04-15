@@ -409,7 +409,7 @@ class TestCreditsShowCLI:
         with _patch_effective_tier("free"):
             result = runner.invoke(app, ["credits", "show"])
         assert result.exit_code == 0
-        assert "carl upgrade" in result.output
+        assert "carl camp upgrade" in result.output
 
     def test_success_renders_balance(self) -> None:
         balance_data = {
@@ -449,7 +449,7 @@ class TestCreditsShowCLI:
                 patch("urllib.request.urlopen", side_effect=err):
             result = runner.invoke(app, ["credits", "show"])
         assert result.exit_code == 0
-        assert "offline" in result.output.lower() or "carl login" in result.output
+        assert "offline" in result.output.lower() or "carl camp login" in result.output
 
     def test_json_output(self) -> None:
         balance_data = {
@@ -576,7 +576,7 @@ class TestCreditsBuyCLI:
         with _patch_effective_tier("free"):
             result = runner.invoke(app, ["credits", "buy", "starter"])
         assert result.exit_code == 0
-        assert "carl upgrade" in result.output
+        assert "carl camp upgrade" in result.output
 
     def test_shows_per_credit_price(self) -> None:
         with _patch_effective_tier("paid"), \
@@ -595,7 +595,7 @@ class TestCreditsHistoryCLI:
         with _patch_effective_tier("paid"), _patch_db(None, None):
             result = runner.invoke(app, ["credits", "history"])
         assert result.exit_code == 0
-        assert "carl login" in result.output
+        assert "carl camp login" in result.output
 
     def test_success_renders_table(self) -> None:
         history_data = {
@@ -662,4 +662,4 @@ class TestCreditsHistoryCLI:
         with _patch_effective_tier("free"):
             result = runner.invoke(app, ["credits", "history"])
         assert result.exit_code == 0
-        assert "carl upgrade" in result.output
+        assert "carl camp upgrade" in result.output

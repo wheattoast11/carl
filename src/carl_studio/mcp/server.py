@@ -1,4 +1,5 @@
 """CARL Studio MCP Server -- exposes training tools for AI agents."""
+
 from __future__ import annotations
 
 import json
@@ -19,6 +20,7 @@ _session: dict[str, str] = {"jwt": "", "tier": "free", "user_id": ""}
 try:
     from carl_studio.skills.runner import SkillRunner, SkillRegistry
     from carl_studio.skills.builtins import BUILTIN_SKILLS
+
     _skills_available = True
 except ImportError:
     _skills_available = False
@@ -31,18 +33,21 @@ except ImportError:
 def _require_tier(feature: str) -> bool:
     """Return True if current session tier allows the feature."""
     from carl_studio.tier import Tier, tier_allows
+
     t = Tier(_session.get("tier", "free"))
     return tier_allows(t, feature)
 
 
 def _tier_error(feature: str) -> str:
     """Return standard JSON error for tier gate failures."""
-    return json.dumps({
-        "error": f"Feature '{feature}' requires CARL Paid tier.",
-        "current_tier": _session.get("tier", "free"),
-        "upgrade": "https://carl.camp/pricing",
-        "hint": "Call authenticate(jwt) first, or upgrade at carl.camp",
-    })
+    return json.dumps(
+        {
+            "error": f"Feature '{feature}' requires CARL Paid tier.",
+            "current_tier": _session.get("tier", "free"),
+            "upgrade": "https://carl.camp/pricing",
+            "hint": "Call authenticate(jwt) first, or upgrade at carl.camp",
+        }
+    )
 
 
 def _build_skill_runner() -> "SkillRunner":
@@ -72,13 +77,15 @@ async def start_training(config_yaml: str) -> str:
     trainer = CARLTrainer(config)
     run = await trainer.train()
 
-    return json.dumps({
-        "run_id": run.id,
-        "phase": run.phase.value,
-        "hub_job_id": run.hub_job_id,
-        "model": config.base_model,
-        "method": config.method.value,
-    })
+    return json.dumps(
+        {
+            "run_id": run.id,
+            "phase": run.phase.value,
+            "hub_job_id": run.hub_job_id,
+            "model": config.base_model,
+            "method": config.method.value,
+        }
+    )
 
 
 @mcp.tool()
@@ -126,13 +133,15 @@ async def get_coherence_metrics(logits_summary: str) -> str:
 
     data = json.loads(logits_summary)
     d = data.get("embedding_dim", 3072)
-    return json.dumps({
-        "kappa": KAPPA,
-        "sigma": SIGMA,
-        "kappa_x_sigma": KAPPA * SIGMA,
-        "t_star": T_STAR(d),
-        "embedding_dim": d,
-    })
+    return json.dumps(
+        {
+            "kappa": KAPPA,
+            "sigma": SIGMA,
+            "kappa_x_sigma": KAPPA * SIGMA,
+            "t_star": T_STAR(d),
+            "embedding_dim": d,
+        }
+    )
 
 
 @mcp.tool()
@@ -149,7 +158,11 @@ async def stop_training(run_id: str, backend: str = "hf_jobs") -> str:
 async def list_backends() -> str:
     """List available compute backends and their status."""
     backends = [
-        {"name": "hf_jobs", "type": "managed", "description": "HuggingFace Jobs (PEP 723 UV scripts)"},
+        {
+            "name": "hf_jobs",
+            "type": "managed",
+            "description": "HuggingFace Jobs (PEP 723 UV scripts)",
+        },
         {"name": "runpod", "type": "pods", "description": "RunPod GPU pods"},
         {"name": "tinker", "type": "managed", "description": "Tinker managed training API"},
         {"name": "prime", "type": "marketplace", "description": "Prime Intellect GPU marketplace"},
@@ -170,12 +183,14 @@ async def validate_config(config_yaml: str) -> str:
     try:
         raw = yaml.safe_load(config_yaml) or {}
         config = TrainingConfig(**raw)
-        return json.dumps({
-            "valid": True,
-            "model": config.base_model,
-            "method": config.method.value,
-            "compute": config.compute_target.value,
-        })
+        return json.dumps(
+            {
+                "valid": True,
+                "model": config.base_model,
+                "method": config.method.value,
+                "compute": config.compute_target.value,
+            }
+        )
     except Exception as e:
         return json.dumps({"valid": False, "error": str(e)})
 
@@ -218,7 +233,12 @@ async def authenticate(jwt: str) -> str:
     try:
         parts = jwt.split(".")
         if len(parts) != 3:
-            return json.dumps({"error": "Invalid JWT format — expected 3 dot-separated segments", "authenticated": False})
+            return json.dumps(
+                {
+                    "error": "Invalid JWT format — expected 3 dot-separated segments",
+                    "authenticated": False,
+                }
+            )
 
         # Pad to valid base64 length
         payload_b64 = parts[1]
@@ -240,15 +260,18 @@ async def authenticate(jwt: str) -> str:
         _session["user_id"] = user_id
 
         from carl_studio.tier import Tier, FEATURE_TIERS, tier_allows
+
         t = Tier(tier)
         features = [f for f, _req in FEATURE_TIERS.items() if tier_allows(t, f)]
 
-        return json.dumps({
-            "tier": tier,
-            "user_id": user_id,
-            "features_available": features,
-            "authenticated": True,
-        })
+        return json.dumps(
+            {
+                "tier": tier,
+                "user_id": user_id,
+                "features_available": features,
+                "authenticated": True,
+            }
+        )
     except Exception as e:
         return json.dumps({"error": str(e), "authenticated": False})
 
@@ -272,12 +295,14 @@ async def get_tier_status() -> str:
     t = Tier(tier)
     features = {f: tier_allows(t, f) for f in FEATURE_TIERS}
 
-    return json.dumps({
-        "tier": tier,
-        "authenticated": authenticated,
-        "user_id": _session.get("user_id", ""),
-        "features": features,
-    })
+    return json.dumps(
+        {
+            "tier": tier,
+            "authenticated": authenticated,
+            "user_id": _session.get("user_id", ""),
+            "features": features,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -298,6 +323,7 @@ async def get_project_state(config_path: str = "carl.yaml") -> str:
     project_data: dict = {}
     try:
         from carl_studio.project import load_project
+
         project = load_project(Path(config_path))
         project_data = project.model_dump()
     except FileNotFoundError:
@@ -310,6 +336,7 @@ async def get_project_state(config_path: str = "carl.yaml") -> str:
     pending_sync_count: int = 0
     try:
         from carl_studio.db import LocalDB
+
         db = LocalDB()
         runs = db.list_runs(limit=1)
         last_run = runs[0] if runs else None
@@ -325,12 +352,15 @@ async def get_project_state(config_path: str = "carl.yaml") -> str:
     except Exception as e:
         last_run = {"error": str(e)}
 
-    return json.dumps({
-        "project": project_data,
-        "last_run": last_run,
-        "last_eval": last_eval,
-        "pending_sync": pending_sync_count,
-    }, default=str)
+    return json.dumps(
+        {
+            "project": project_data,
+            "last_run": last_run,
+            "last_eval": last_eval,
+            "pending_sync": pending_sync_count,
+        },
+        default=str,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -361,10 +391,12 @@ async def run_skill(skill_name: str, inputs_json: str = "{}") -> str:
     if skill is None:
         runner.close()
         available = [s.name for s in runner.list_skills()]
-        return json.dumps({
-            "error": f"Skill '{skill_name}' not found.",
-            "available": available,
-        })
+        return json.dumps(
+            {
+                "error": f"Skill '{skill_name}' not found.",
+                "available": available,
+            }
+        )
 
     # Tier gate for paid skills
     requires_tier = getattr(skill, "requires_tier", "free")
@@ -422,6 +454,7 @@ async def get_agent_card() -> str:
     skills, tier, and endpoint.
     """
     from carl_studio.a2a.agent_card import CARLAgentCard
+
     card = CARLAgentCard.current()
     return card.to_json()
 
@@ -467,12 +500,14 @@ async def dispatch_a2a_task(
         task_id = bus.post(task)
         bus.close()
 
-        return json.dumps({
-            "task_id": task_id,
-            "status": "pending",
-            "skill": skill_name,
-            "sender": sender,
-        })
+        return json.dumps(
+            {
+                "task_id": task_id,
+                "status": "pending",
+                "skill": skill_name,
+                "sender": sender,
+            }
+        )
     except Exception as e:
         return json.dumps({"error": str(e), "task_id": None, "status": "failed"})
 
@@ -486,7 +521,7 @@ async def dispatch_a2a_task(
 async def sync_data(direction: str = "push", entity_types: str = "runs") -> str:
     """Sync local data with carl.camp. direction: push | pull.
 
-    Requires PAID tier and carl login (JWT in session or local DB).
+    Requires PAID tier and carl camp login (JWT in session or local DB).
     Returns: JSON with sync results.
     """
     if not _require_tier("sync.cloud"):
@@ -503,6 +538,7 @@ async def sync_data(direction: str = "push", entity_types: str = "runs") -> str:
     if jwt:
         try:
             from carl_studio.db import LocalDB
+
             db = LocalDB()
             db.set_auth("jwt", jwt, ttl_hours=24)
             db.close()
@@ -517,16 +553,20 @@ async def sync_data(direction: str = "push", entity_types: str = "runs") -> str:
         else:
             results = pull()
 
-        return json.dumps({
-            "direction": direction,
-            "entity_types": types_list,
-            "results": results,
-            "status": "ok",
-        })
+        return json.dumps(
+            {
+                "direction": direction,
+                "entity_types": types_list,
+                "results": results,
+                "status": "ok",
+            }
+        )
     except Exception as e:
-        return json.dumps({
-            "direction": direction,
-            "entity_types": types_list,
-            "error": str(e),
-            "status": "failed",
-        })
+        return json.dumps(
+            {
+                "direction": direction,
+                "entity_types": types_list,
+                "error": str(e),
+                "status": "failed",
+            }
+        )

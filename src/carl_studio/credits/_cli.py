@@ -16,6 +16,7 @@ from typing import Any
 
 import typer
 
+from carl_studio.cli.shared import _warn_legacy_command_alias
 from carl_studio.console import get_console
 from carl_studio.credits.balance import CreditBalance, CreditError, get_credit_balance
 from carl_studio.credits.estimate import (
@@ -32,6 +33,12 @@ credits_app = typer.Typer(
     help="Manage compute credits -- balance, estimates, and purchases.",
     no_args_is_help=True,
 )
+
+
+@credits_app.callback()
+def credits_callback(ctx: typer.Context = typer.Option(None, hidden=True)) -> None:
+    """Warn when the legacy top-level credits group is used."""
+    pass # removed due to json output interference
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +63,7 @@ def _require_paid(c: Any) -> bool:
     tier = _effective_tier()
     if tier != "paid":
         c.warn("Credits require CARL Paid tier.")
-        c.info("Run: carl upgrade")
+        c.info("Run: carl camp upgrade")
         return False
     return True
 
@@ -79,10 +86,13 @@ def _get_auth() -> tuple[str | None, str | None]:
 
 @credits_app.command(name="show")
 def credits_show(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """Show current credit balance."""
     c = get_console()
+    if not json_output:
+        _warn_legacy_command_alias(c, ctx, "carl camp credits show")
 
     if not _require_paid(c):
         raise typer.Exit(0)
@@ -91,12 +101,12 @@ def credits_show(
 
     if not jwt:
         c.warn("Not logged in. Credits require carl.camp account.")
-        c.info("Run: carl login")
+        c.info("Run: carl camp login")
         raise typer.Exit(0)
 
     if not supabase_url:
         c.warn("No Supabase URL configured.")
-        c.info("Run: carl login")
+        c.info("Run: carl camp login")
         raise typer.Exit(0)
 
     try:
@@ -106,7 +116,7 @@ def credits_show(
             typer.echo(json.dumps({"error": "offline", "remaining": None}))
         else:
             c.warn("Could not fetch balance (offline).")
-            c.info("Run: carl login")
+            c.info("Run: carl camp login")
         raise typer.Exit(0)
 
     if json_output:
@@ -132,6 +142,7 @@ def credits_show(
 
 @credits_app.command(name="estimate")
 def credits_estimate(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     hardware: str = typer.Option("a100-large", help="Hardware flavor"),
     steps: int = typer.Option(80, help="Max training steps"),
     method: str = typer.Option(
@@ -142,6 +153,8 @@ def credits_estimate(
 ) -> None:
     """Estimate credit cost for a training job."""
     c = get_console()
+    if not json_output:
+        _warn_legacy_command_alias(c, ctx, "carl camp credits estimate")
 
     per_step = METHOD_STEP_SECONDS.get(method)
     if per_step is None:
@@ -193,6 +206,7 @@ def credits_estimate(
 
 @credits_app.command(name="buy")
 def credits_buy(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     bundle: str = typer.Argument(
         "explorer",
         help="Bundle: starter (100/$8), explorer (500/$35), researcher (2000/$120)",
@@ -203,6 +217,7 @@ def credits_buy(
 ) -> None:
     """Buy a credit bundle. Opens carl.camp checkout."""
     c = get_console()
+    _warn_legacy_command_alias(c, ctx, "carl camp credits buy")
 
     if not _require_paid(c):
         raise typer.Exit(0)
@@ -244,11 +259,14 @@ def credits_buy(
 
 @credits_app.command(name="history")
 def credits_history(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     limit: int = typer.Option(10, help="Number of transactions to show"),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """Show recent credit transactions."""
     c = get_console()
+    if not json_output:
+        _warn_legacy_command_alias(c, ctx, "carl camp credits history")
 
     if not _require_paid(c):
         raise typer.Exit(0)
@@ -256,7 +274,7 @@ def credits_history(
     jwt, supabase_url = _get_auth()
 
     if not jwt or not supabase_url:
-        c.warn("Not logged in. Run: carl login")
+        c.warn("Not logged in. Run: carl camp login")
         raise typer.Exit(0)
 
     # Fetch from Supabase Edge Function

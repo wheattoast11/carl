@@ -10,24 +10,27 @@ import typer
 from carl_studio.console import get_console
 
 from .apps import app
-from .shared import _render_extra_install_hint
+from .shared import _render_extra_install_hint, _warn_legacy_command_alias
+
 
 # ---------------------------------------------------------------------------
 # carl mcp
 # ---------------------------------------------------------------------------
 @app.command(name="mcp", hidden=True)
 def mcp_serve(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     transport: str = typer.Option("stdio", "--transport", "-t", help="Transport: stdio or http"),
     port: int = typer.Option(8100, "--port", "-p", help="HTTP port (if transport=http)"),
 ) -> None:
     """[experimental] Start the CARL Studio MCP server (9 tools for AI agents)."""
     c = get_console()
+    _warn_legacy_command_alias(c, ctx, "carl lab mcp")
     from carl_studio.tier import check_tier, tier_message
 
     allowed, _, _ = check_tier("mcp.serve")
     if not allowed:
         c.warn(tier_message("mcp.serve") or "MCP server requires CARL Paid.")
-        c.info("Upgrade: carl login --upgrade  or  https://carl.camp/pricing")
+        c.info("Upgrade: carl camp upgrade  or  https://carl.camp/pricing")
         raise typer.Exit(1)
     try:
         from carl_studio.mcp import mcp as mcp_server
@@ -54,8 +57,17 @@ golf_app = typer.Typer(
 )
 app.add_typer(golf_app, hidden=True)
 
+
+@golf_app.callback()
+def golf_callback(ctx: typer.Context = typer.Option(None, hidden=True)) -> None:
+    """Warn when the legacy top-level golf group is used."""
+    _warn_legacy_command_alias(get_console(), ctx, "carl lab golf")
+
+
 _GOLF_BASE = (
-    Path(__file__).resolve().parent.parent.parent.parent.parent / "zero-rl-pipeline" / "parameter-golf"
+    Path(__file__).resolve().parent.parent.parent.parent.parent
+    / "zero-rl-pipeline"
+    / "parameter-golf"
 )
 
 
@@ -103,7 +115,6 @@ def golf_configs() -> None:
     c.blank()
 
 
-
 # ---------------------------------------------------------------------------
 # carl dev — development workflow orchestration
 # ---------------------------------------------------------------------------
@@ -111,6 +122,7 @@ def golf_configs() -> None:
 
 @app.command(name="dev", hidden=True)
 def dev(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     phase: str = typer.Option(
         "all", "--phase", "-p", help="Phase: ground, test, data, scripts, validate, update, all"
     ),
@@ -123,6 +135,7 @@ def dev(
     phases = ["ground", "test", "data", "scripts", "validate", "update"]
 
     c = get_console()
+    _warn_legacy_command_alias(c, ctx, "carl lab dev")
     if phase != "all" and phase not in phases:
         c.error(f"Unknown phase: {phase}. Choose from: {', '.join(phases)}, all")
         raise typer.Exit(1)
@@ -184,6 +197,7 @@ def dev(
 
 @app.command(name="chat", hidden=True)
 def chat(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     model: str = typer.Option("claude-sonnet-4-6", "--model", "-m", help="Claude model for agent"),
     config: str = typer.Option("carl.yaml", "--config", "-c", help="Project config for context"),
     api_key: str | None = typer.Option(
@@ -192,6 +206,7 @@ def chat(
 ) -> None:
     """Interactive CARL agent chat. Discuss training, get recommendations, dispatch runs."""
     c = get_console()
+    _warn_legacy_command_alias(c, ctx, "carl lab chat")
     if not api_key:
         c.error("ANTHROPIC_API_KEY required for carl chat")
         c.info("Set via env var or --api-key")
@@ -300,6 +315,7 @@ Keep responses concise. Lead with recommendations, not explanations."""
 
 @app.command(name="bench", hidden=True)
 def bench_cmd(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     model_id: str = typer.Argument(..., help="HF model ID to benchmark"),
     suite: str = typer.Option(
         "all", "--suite", "-s", help="Probe suite: all, transition, stability, pressure, adaptation"
@@ -307,6 +323,7 @@ def bench_cmd(
     compare: str = typer.Option("", "--compare", "-c", help="Compare against baseline model"),
 ) -> None:
     """Measure model trainability with CARL meta-benchmarks (CTI score)."""
+    _warn_legacy_command_alias(get_console(), ctx, "carl lab bench")
     try:
         from carl_studio.bench import BenchConfig, BenchSuite
     except ImportError:
@@ -350,6 +367,7 @@ def bench_cmd(
 
 @app.command(name="align", hidden=True)
 def align_cmd(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     mode: str = typer.Option(
         ..., "--mode", "-m", help="Alignment mode: patterns, temporal, format"
     ),
@@ -364,6 +382,7 @@ def align_cmd(
 ) -> None:
     """Targeted model realignment (patterns, temporal, or format drift)."""
     c = get_console()
+    _warn_legacy_command_alias(c, ctx, "carl lab align")
     try:
         from carl_studio.align import AlignConfig, AlignMode, AlignPipeline
     except ImportError:
@@ -407,6 +426,7 @@ def align_cmd(
 
 @app.command(name="learn", hidden=True)
 def learn_cmd(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     source: str = typer.Argument(..., help="Source material (URL, file, directory, or HF dataset)"),
     model_id: str = typer.Option("", "--model", "-m", help="Model to teach"),
     depth: str = typer.Option(
@@ -430,6 +450,7 @@ def learn_cmd(
 ) -> None:
     """Ingest new knowledge from source material into a model."""
     c = get_console()
+    _warn_legacy_command_alias(c, ctx, "carl lab learn")
     try:
         from carl_studio.learn import LearnConfig, LearnPipeline
     except ImportError:
@@ -561,6 +582,12 @@ paper_app = typer.Typer(
 app.add_typer(paper_app, hidden=True)
 
 
+@paper_app.callback()
+def paper_callback(ctx: typer.Context = typer.Option(None, hidden=True)) -> None:
+    """Warn when the legacy top-level paper group is used."""
+    _warn_legacy_command_alias(get_console(), ctx, "carl lab paper")
+
+
 @paper_app.command(name="draft")
 def paper_draft(
     template: str = typer.Option(
@@ -638,6 +665,12 @@ admin_app = typer.Typer(name="admin", help="Admin unlock (hardware-gated)", no_a
 app.add_typer(admin_app, hidden=True)
 
 
+@admin_app.callback()
+def admin_callback(ctx: typer.Context = typer.Option(None, hidden=True)) -> None:
+    """Warn when the legacy top-level admin group is used."""
+    _warn_legacy_command_alias(get_console(), ctx, "carl lab admin")
+
+
 @admin_app.command(name="unlock")
 def admin_unlock() -> None:
     """Generate and write the admin key for this machine.
@@ -689,4 +722,3 @@ def admin_clear() -> None:
         raise typer.Exit(0)
     clear_admin_key()
     c.ok("Admin key removed. Admin mode locked.")
-

@@ -11,6 +11,7 @@ Usage:
     pull()                      # Pull all updates since last pull
     pull(since='2026-04-01')    # Pull updates since specific date
 """
+
 from __future__ import annotations
 
 import json
@@ -24,6 +25,7 @@ from carl_studio.db import LocalDB
 
 class SyncError(Exception):
     """Raised when sync fails after retries."""
+
     pass
 
 
@@ -39,9 +41,7 @@ def _supabase_request(
     supabase_url = db.get_config("supabase_url")
 
     if not jwt or not supabase_url:
-        raise SyncError(
-            "Not authenticated. Run: carl login"
-        )
+        raise SyncError("Not authenticated. Run: carl camp login")
 
     url = f"{supabase_url}/functions/v1/{function}"
     if params:
@@ -69,6 +69,7 @@ def _supabase_request(
 
 # ─── Push ────────────────────────────────────────────────────
 
+
 def push(
     entity_types: list[str] | None = None,
     db: LocalDB | None = None,
@@ -95,8 +96,7 @@ def push(
         # Clean entities for transport (remove SQLite-specific fields)
         entities = []
         for entity in unsynced:
-            clean = {k: v for k, v in entity.items()
-                     if k not in ("synced", "remote_id")}
+            clean = {k: v for k, v in entity.items() if k not in ("synced", "remote_id")}
             # Parse JSON strings back to dicts for transport
             for json_field in ("config", "result", "data", "criteria", "results"):
                 if json_field in clean and isinstance(clean[json_field], str):
@@ -107,10 +107,14 @@ def push(
             entities.append(clean)
 
         try:
-            response = _supabase_request(db, "sync-push", body={
-                "entity_type": etype,
-                "entities": entities,
-            })
+            response = _supabase_request(
+                db,
+                "sync-push",
+                body={
+                    "entity_type": etype,
+                    "entities": entities,
+                },
+            )
 
             synced_ids = response.get("ids", [])
             for entity, remote_id in zip(unsynced, synced_ids):
@@ -128,6 +132,7 @@ def push(
 
 
 # ─── Pull ────────────────────────────────────────────────────
+
 
 def pull(
     since: str | None = None,
@@ -185,6 +190,7 @@ def pull(
 
 # ─── Retry Queue ─────────────────────────────────────────────
 
+
 def process_sync_queue(
     db: LocalDB | None = None,
     max_retries: int = 3,
@@ -208,12 +214,18 @@ def process_sync_queue(
             continue
 
         try:
-            payload = json.loads(item["payload"]) if isinstance(item["payload"], str) else item["payload"]
+            payload = (
+                json.loads(item["payload"]) if isinstance(item["payload"], str) else item["payload"]
+            )
 
-            _supabase_request(db, f"sync-{item['operation']}", body={
-                "entity_type": item["entity_type"],
-                "entities": [payload],
-            })
+            _supabase_request(
+                db,
+                f"sync-{item['operation']}",
+                body={
+                    "entity_type": item["entity_type"],
+                    "entities": [payload],
+                },
+            )
 
             db.update_sync_status(item["id"], "synced")
             synced += 1

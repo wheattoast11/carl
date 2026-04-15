@@ -24,6 +24,7 @@ from carl_studio.billing import (
     BillingError,
     get_subscription_status,
 )
+from carl_studio.cli.shared import _warn_legacy_command_alias
 from carl_studio.console import get_console
 from carl_studio.db import LocalDB
 
@@ -60,11 +61,13 @@ def _effective_tier() -> str:
 
 
 def upgrade(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     annual: bool = typer.Option(False, "--annual", help="Annual plan ($290/year, save 17%)"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open browser to checkout"),
 ) -> None:
     """Upgrade to CARL Paid. Opens carl.camp checkout."""
     c = get_console()
+    _warn_legacy_command_alias(c, ctx, "carl camp upgrade")
     c.header("CARL Upgrade", "carl.camp")
 
     tier = _effective_tier()
@@ -89,7 +92,7 @@ def upgrade(
                 c.ok("Already CARL Paid.")
         else:
             c.ok("Already CARL Paid.")
-        c.info("Manage: carl billing")
+        c.info("Manage: carl camp billing")
         raise typer.Exit(0)
 
     # FREE → show what PAID unlocks
@@ -113,7 +116,7 @@ def upgrade(
             pass  # Non-interactive environments — URL is already printed
 
     c.blank()
-    c.info("After checkout, run: carl login  to update your session.")
+    c.info("After checkout, run: carl camp login  to update your session.")
 
 
 # ---------------------------------------------------------------------------
@@ -122,19 +125,21 @@ def upgrade(
 
 
 def billing_portal(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     open_browser: bool = typer.Option(
         True, "--open/--no-open", help="Open browser to billing portal"
     ),
 ) -> None:
     """Open carl.camp billing portal to manage subscription."""
     c = get_console()
+    _warn_legacy_command_alias(c, ctx, "carl camp billing")
     c.header("CARL Billing", "carl.camp/billing")
 
     db = LocalDB()
     jwt = db.get_auth("jwt")
 
     if not jwt:
-        c.warn("Not logged in. Run: carl login")
+        c.warn("Not logged in. Run: carl camp login")
         raise typer.Exit(1)
 
     c.ok("Opening billing portal...")
@@ -153,10 +158,13 @@ def billing_portal(
 
 
 def subscription_status(
+    ctx: typer.Context = typer.Option(None, hidden=True),
     json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
 ) -> None:
     """Show current subscription status."""
     c = get_console()
+    if not json_output:
+        _warn_legacy_command_alias(c, ctx, "carl camp subscription")
 
     db = LocalDB()
     jwt = db.get_auth("jwt")
@@ -164,7 +172,7 @@ def subscription_status(
 
     if not jwt:
         c.warn("Not logged in.")
-        c.info("Run: carl login")
+        c.info("Run: carl camp login")
         raise typer.Exit(0)
 
     if not supabase_url:
@@ -175,7 +183,7 @@ def subscription_status(
         else:
             c.header("Subscription", "cached")
             c.kv("Tier", tier)
-            c.warn("No Supabase URL configured. Run: carl login")
+            c.warn("No Supabase URL configured. Run: carl camp login")
         raise typer.Exit(0)
 
     try:
@@ -200,7 +208,7 @@ def subscription_status(
         if status.is_active_paid:
             c.ok("CARL Paid — full autonomy unlocked.")
         elif status.tier == "free":
-            c.info("Free tier. Run: carl upgrade  to unlock autonomy.")
+            c.info("Free tier. Run: carl camp upgrade  to unlock autonomy.")
 
     except BillingError:
         # Graceful offline fallback
@@ -210,4 +218,4 @@ def subscription_status(
         else:
             c.warn("Could not reach carl.camp — showing cached tier.")
             c.kv("Tier", tier)
-            c.info("Check your connection or run: carl login")
+            c.info("Check your connection or run: carl camp login")

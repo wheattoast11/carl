@@ -26,6 +26,7 @@ from .shared import (
     _resolve_run_reference,
     _run_remote_id,
     _safe_json_object,
+    _warn_legacy_command_alias,
 )
 
 if TYPE_CHECKING:
@@ -113,7 +114,7 @@ def run_status_cmd(
     run_id: str = typer.Argument(..., help="Local run ID or remote job ID"),
 ) -> None:
     """Show remote status, resolving a local run ID when possible."""
-    status(run_id)
+    _status_impl(run_id)
 
 
 @run_app.command(name="logs")
@@ -122,7 +123,7 @@ def run_logs_cmd(
     tail: int = typer.Option(50, "--tail", "-n", help="Number of log entries to show"),
 ) -> None:
     """Show remote logs, resolving a local run ID when possible."""
-    logs(run_id, tail=tail)
+    _logs_impl(run_id, tail)
 
 
 @run_app.command(name="stop")
@@ -130,7 +131,7 @@ def run_stop_cmd(
     run_id: str = typer.Argument(..., help="Local run ID or remote job ID"),
 ) -> None:
     """Cancel a remote job, resolving a local run ID when possible."""
-    stop(run_id)
+    _stop_impl(run_id)
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +471,7 @@ def train(
             allowed, _, _ = check_tier("train.send_it")
             if not allowed:
                 c.warn(tier_message("train.send_it") or "--send-it requires CARL Paid.")
-                c.info("Upgrade: carl login --upgrade  or  https://carl.camp/pricing")
+                c.info("Upgrade: carl camp upgrade  or  https://carl.camp/pricing")
                 raise typer.Exit(1)
         from carl_studio.training.pipeline import SendItPipeline
 
@@ -558,7 +559,7 @@ def train(
 
     if run.hub_job_id:
         c.ok(f"Job submitted: {run.hub_job_id}")
-        c.info(f"Monitor remote job: carl status {run.hub_job_id}")
+        c.info(f"Monitor remote job: carl run status {run.hub_job_id}")
         c.info(f"Monitor via local run: carl run status {run.id}")
     c.kv("Run ID", run.id)
     c.kv("Phase", run.phase.value)
@@ -568,10 +569,7 @@ def train(
 # ---------------------------------------------------------------------------
 # carl status <run_id>
 # ---------------------------------------------------------------------------
-@app.command(hidden=True)
-def status(
-    run_id: str = typer.Argument(..., help="Local run ID or HF Jobs run/job ID"),
-) -> None:
+def _status_impl(run_id: str) -> None:
     """Show job status via HF Jobs API or a stored local run ID."""
     c = get_console()
     local_run, remote_job_id = _resolve_run_reference(run_id)
@@ -631,11 +629,7 @@ def status(
 # ---------------------------------------------------------------------------
 # carl logs <run_id>
 # ---------------------------------------------------------------------------
-@app.command(hidden=True)
-def logs(
-    run_id: str = typer.Argument(..., help="Local run ID or HF Jobs run/job ID"),
-    tail: int = typer.Option(50, "--tail", "-n", help="Number of log entries to show"),
-) -> None:
+def _logs_impl(run_id: str, tail: int) -> None:
     """Stream logs from a training run."""
     c = get_console()
     local_run, remote_job_id = _resolve_run_reference(run_id)
@@ -671,10 +665,7 @@ def logs(
 # ---------------------------------------------------------------------------
 # carl stop <run_id>
 # ---------------------------------------------------------------------------
-@app.command(hidden=True)
-def stop(
-    run_id: str = typer.Argument(..., help="Local run ID or HF Jobs run/job ID to cancel"),
-) -> None:
+def _stop_impl(run_id: str) -> None:
     """Cancel a training run."""
     c = get_console()
     local_run, remote_job_id = _resolve_run_reference(run_id)
@@ -714,3 +705,33 @@ def stop(
 
     c.ok(f"Job {remote_job_id} cancelled.")
 
+
+@app.command(hidden=True)
+def status(
+    run_id: str = typer.Argument(..., help="Local run ID or HF Jobs run/job ID"),
+    ctx: typer.Context = typer.Option(None, hidden=True),
+) -> None:
+    """Compatibility alias for `carl run status`."""
+    _warn_legacy_command_alias(get_console(), ctx, "carl run status")
+    _status_impl(run_id)
+
+
+@app.command(hidden=True)
+def logs(
+    run_id: str = typer.Argument(..., help="Local run ID or HF Jobs run/job ID"),
+    tail: int = typer.Option(50, "--tail", "-n", help="Number of log entries to show"),
+    ctx: typer.Context = typer.Option(None, hidden=True),
+) -> None:
+    """Compatibility alias for `carl run logs`."""
+    _warn_legacy_command_alias(get_console(), ctx, "carl run logs")
+    _logs_impl(run_id, tail)
+
+
+@app.command(hidden=True)
+def stop(
+    run_id: str = typer.Argument(..., help="Local run ID or HF Jobs run/job ID to cancel"),
+    ctx: typer.Context = typer.Option(None, hidden=True),
+) -> None:
+    """Compatibility alias for `carl run stop`."""
+    _warn_legacy_command_alias(get_console(), ctx, "carl run stop")
+    _stop_impl(run_id)
