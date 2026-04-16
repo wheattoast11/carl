@@ -38,6 +38,13 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - `src/carl_studio/db.py` — local SQLite state under `~/.carl`.
 - `src/carl_studio/settings.py` — layered config from env, `~/.carl/config.yaml`, and `carl.yaml`.
 - `src/carl_studio/admin.py` — hardware-gated access to the private runtime.
+- `src/carl_studio/chat_agent.py` — CARLAgent agentic loop (streaming, tools, sessions, cost, permissions).
+- `src/carl_studio/frame.py` — WorkFrame analytical lens (domain/function/role/objectives).
+- `src/carl_studio/contract.py` — service contract witnessing (SHA-256 hash chain).
+- `src/carl_studio/consent.py` — privacy-first consent state machine (all flags off by default).
+- `src/carl_studio/x402.py` — HTTP 402 payment rail client (facilitator-based, no web3.py).
+- `src/carl_studio/carlito.py` — small specialized agents spawned from graduated curricula.
+- `src/carl_studio/camp.py` — CampProfile managed-account contract for billing/credits.
 - `skills/`, `a2a/`, `credits/`, `marketplace.py`, and `curriculum.py` are live code paths.
 
 ## Product and licensing boundaries
@@ -97,6 +104,20 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - `python -m build` works.
 - Single pytest node IDs work from the repo root.
 - Repo-wide Ruff and Pyright currently have pre-existing noise; validate touched files first.
+- Test baseline: 1103 tests, ~4s. `tests/test_uat_e2e.py` is the E2E UAT suite.
+
+## Claude API integration (chat_agent.py)
+
+- The agent module is `chat_agent.py`, NOT `agent.py` — `agent/` is a package (FSM agent).
+- `anthropic.Anthropic(api_key="")` blocks env var fallback. Always pass `api_key or None`.
+- Adaptive thinking (`thinking: {"type": "adaptive"}`) is Opus 4.6 / Sonnet 4.6 only.
+  Haiku 4.5 and Claude 3 will 400. Check model before adding.
+- Model IDs use short form: `claude-opus-4-6`, `claude-sonnet-4-6`. No date suffixes.
+- CLI commands lazy-import from source modules inside function bodies. Patch at
+  `carl_studio.<module>.<Class>`, not `carl_studio.cli.<module>.<Class>`.
+- `SourceIngester.ingest()` on an empty directory raises `ValueError`, not empty list.
+- Sessions persist at `~/.carl/sessions/`. Knowledge `words` are sets — serialize as sorted lists.
+- Anthropic SDK: >=0.95.0 required for `cache_control` top-level param and streaming.
 
 ## Keep an eye on
 
