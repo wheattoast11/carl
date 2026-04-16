@@ -180,3 +180,14 @@ try:
     app.add_typer(frame_app, name="frame")
 except ImportError:
     pass
+
+
+# ---------------------------------------------------------------------------
+# Wire carl chat (top-level agentic chat)
+# ---------------------------------------------------------------------------
+try:
+    from .chat import chat_cmd
+
+    app.command(name="chat")(chat_cmd)
+except ImportError:
+    pass
