@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Hard context bounds
 # ---------------------------------------------------------------------------
-_MAX_CONTEXT_TOKENS = 180_000
 _COMPACT_THRESHOLD = 140_000
 _TOOL_RESULT_MAX = 8_000
 _KEEP_RECENT = 10
@@ -171,10 +170,18 @@ class CARLAgent:
             self._client = anthropic.Anthropic(api_key=api_key)
         self._model = model
         self._frame = frame
-        self._workdir = workdir
+        self._workdir = str(Path(workdir).resolve())
         self._messages: list[dict[str, Any]] = []
-        self._knowledge: list[dict[str, str]] = []  # {text, source}
+        self._knowledge: list[dict[str, Any]] = []  # {text, source, words}
         self._token_count = 0
+        self._project_line = ""
+        try:
+            from carl_studio.project import load_project
+
+            proj = load_project("carl.yaml")
+            self._project_line = f"PROJECT: {proj.name} | Model: {proj.base_model} | Method: {proj.method}"
+        except Exception:
+            pass
 
     def chat(self, user_input: str) -> Iterator[AgentEvent]:
         """Send message, handle tool calls, yield events."""
@@ -209,6 +216,7 @@ class CARLAgent:
                     yield AgentEvent(kind="text", content=block.text)
                 elif block.type == "tool_use":
                     has_tool_use = True
+                    tool_input: dict[str, Any] = block.input if isinstance(block.input, dict) else {}
                     assistant_content.append({
                         "type": "tool_use",
                         "id": block.id,
@@ -218,11 +226,11 @@ class CARLAgent:
                     yield AgentEvent(
                         kind="tool_call",
                         tool_name=block.name,
-                        tool_args=block.input if isinstance(block.input, dict) else {},
+                        tool_args=tool_input,
                     )
 
                     # Execute tool
-                    result = self._dispatch_tool(block.name, block.input if isinstance(block.input, dict) else {})
+                    result = self._dispatch_tool(block.name, tool_input)
                     yield AgentEvent(kind="tool_result", tool_name=block.name, content=result)
 
                     # Append assistant message + tool result for continuation
@@ -267,15 +275,10 @@ class CARLAgent:
             parts.append("No frame set. When the user describes their goal, call set_frame immediately.")
             parts.append("")
 
-        # Project context
-        try:
-            from carl_studio.project import load_project
-
-            proj = load_project("carl.yaml")
-            parts.append(f"PROJECT: {proj.name} | Model: {proj.base_model} | Method: {proj.method}")
+        # Project context (cached at construction time)
+        if self._project_line:
+            parts.append(self._project_line)
             parts.append("")
-        except Exception:
-            pass
 
         # Knowledge base
         if self._knowledge:
@@ -326,10 +329,13 @@ class CARLAgent:
 
         ingester = SourceIngester()
         chunks = ingester.ingest(path)
+        modalities: dict[str, int] = {}
         for c in chunks:
-            self._knowledge.append({"text": c.text, "source": c.source})
-        modalities = {}
-        for c in chunks:
+            self._knowledge.append({
+                "text": c.text,
+                "source": c.source,
+                "words": set(c.text.lower().split()),
+            })
             mod = getattr(c, "modality", "text")
             modalities[mod] = modalities.get(mod, 0) + 1
         summary = ", ".join(f"{v} {k}" for k, v in sorted(modalities.items()))
@@ -339,19 +345,18 @@ class CARLAgent:
         if not self._knowledge:
             return "Knowledge base is empty. Ingest files first with ingest_source."
         terms = set(question.lower().split())
-        scored = []
+        scored: list[tuple[int, dict[str, Any]]] = []
         for chunk in self._knowledge:
-            words = set(chunk["text"].lower().split())
-            overlap = len(terms & words)
+            overlap = len(terms & chunk.get("words", set()))
             if overlap > 0:
                 scored.append((overlap, chunk))
         scored.sort(key=lambda x: x[0], reverse=True)
         results = scored[:5]
         if not results:
             return "No relevant chunks found for that query."
-        parts = []
+        parts: list[str] = []
         for score, chunk in results:
-            text = chunk["text"][:1500]
+            text = str(chunk["text"])[:1500]
             parts.append(f"[{chunk['source']}] (relevance: {score})\n{text}")
         return "\n\n---\n\n".join(parts)
 
@@ -369,14 +374,26 @@ class CARLAgent:
             return stdout or "(no output)"
         return f"Exit code {result.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}"
 
+    def _resolve_safe_path(self, path: str) -> Path | None:
+        """Resolve path against workdir and reject traversal attempts."""
+        resolved = Path(path).resolve()
+        workdir = Path(self._workdir).resolve()
+        if resolved == workdir or str(resolved).startswith(str(workdir) + os.sep):
+            return resolved
+        return None
+
     def _tool_create(self, path: str, content: str) -> str:
-        p = Path(path)
+        p = self._resolve_safe_path(path)
+        if p is None:
+            return f"Blocked: path '{path}' is outside the working directory."
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
-        return f"Created {path} ({len(content)} chars)"
+        return f"Created {p} ({len(content)} chars)"
 
     def _tool_read(self, path: str) -> str:
-        p = Path(path)
+        p = self._resolve_safe_path(path)
+        if p is None:
+            return f"Blocked: path '{path}' is outside the working directory."
         if not p.is_file():
             return f"File not found: {path}"
         text = p.read_text(encoding="utf-8", errors="replace")

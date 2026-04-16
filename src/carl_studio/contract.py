@@ -13,6 +13,7 @@ import json
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 from uuid import uuid4
 
@@ -21,6 +22,14 @@ from pydantic import BaseModel, Field
 
 class ContractError(Exception):
     """Raised when contract operations fail."""
+
+
+class ContractStatus(str, Enum):
+    """Lifecycle status of a service contract."""
+
+    DRAFT = "draft"
+    SIGNED = "signed"
+    WITNESSED = "witnessed"
 
 
 def _now_iso() -> str:
@@ -38,7 +47,7 @@ class ServiceContract(BaseModel):
     signed_at: str | None = None
     witness_hash: str | None = None
     chain: str | None = None
-    status: str = "draft"  # draft | signed | witnessed
+    status: ContractStatus = ContractStatus.DRAFT
 
 
 class WitnessEnvelope(BaseModel):
@@ -127,21 +136,16 @@ class ContractWitness:
             artifacts=artifacts,
         )
 
-        # Update contract status
-        contract.witness_hash = witness_hash
-        contract.signed_at = ts
-        contract.status = "witnessed"
-
-        # Persist
+        # Persist witnessed contract (immutable — no in-place mutation)
         db = self._get_db()
         db.insert_contract({
             "id": contract.id,
             "parties": json.dumps(contract.parties),
             "terms_hash": contract.terms_hash,
             "terms_url": contract.terms_url,
-            "status": contract.status,
-            "signed_at": contract.signed_at,
-            "witness_hash": contract.witness_hash,
+            "status": ContractStatus.WITNESSED.value,
+            "signed_at": ts,
+            "witness_hash": witness_hash,
             "chain": contract.chain,
             "envelope": envelope.model_dump_json(),
         })
@@ -177,6 +181,17 @@ class ContractWitness:
             witness_hash=row.get("witness_hash"),
             chain=row.get("chain"),
         )
+
+    def get_envelope(self, contract_id: str) -> WitnessEnvelope | None:
+        """Load a witness envelope from local storage."""
+        db = self._get_db()
+        row = db.get_contract(contract_id)
+        if row is None:
+            return None
+        raw = row.get("envelope")
+        if not raw:
+            return None
+        return WitnessEnvelope.model_validate_json(raw)
 
     def list_contracts(self, limit: int = 20) -> list[ServiceContract]:
         """List locally stored contracts."""

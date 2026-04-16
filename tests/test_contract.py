@@ -92,7 +92,10 @@ class TestContractWitness:
         assert envelope.terms_hash == "abc123"
         assert envelope.witness_hash != ""
         assert envelope.witnessed_at != ""
-        assert contract.status == "witnessed"
+        # sign() no longer mutates — check DB state instead
+        stored = db.contracts.get(contract.id)
+        assert stored is not None
+        assert stored["status"] == "witnessed"
 
     def test_sign_without_consent_raises(self) -> None:
         db = FakeDB()

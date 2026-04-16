@@ -129,23 +129,16 @@ def contract_verify(
 ) -> None:
     """Verify a contract's witness hash."""
     from carl_studio.console import get_console
-    from carl_studio.contract import ContractWitness, WitnessEnvelope
+    from carl_studio.contract import ContractWitness
 
     c = get_console()
     witness = ContractWitness()
-    db = witness._get_db()
-    row = db.get_contract(contract_id)
+    envelope = witness.get_envelope(contract_id)
 
-    if row is None:
-        c.error(f"Contract '{contract_id}' not found.")
+    if envelope is None:
+        c.error(f"Contract '{contract_id}' not found or has no witness envelope.")
         raise typer.Exit(1)
 
-    envelope_raw = row.get("envelope")
-    if not envelope_raw:
-        c.warn("No witness envelope stored for this contract.")
-        raise typer.Exit(1)
-
-    envelope = WitnessEnvelope.model_validate_json(envelope_raw)
     valid = witness.verify(envelope)
 
     if valid:

@@ -23,6 +23,9 @@ _CARL_DIR = Path.home() / ".carl"
 _DB_PATH = _CARL_DIR / "carl.db"
 
 _CARLITO_SCHEMA = """
+PRAGMA journal_mode=WAL;
+PRAGMA foreign_keys=ON;
+
 CREATE TABLE IF NOT EXISTS carlitos (
     name TEXT PRIMARY KEY,
     parent_model TEXT NOT NULL,

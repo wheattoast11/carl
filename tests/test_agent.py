@@ -78,8 +78,8 @@ class TestAgentEvent:
 
 class TestCARLAgentToolDispatch:
     @pytest.fixture()
-    def agent(self) -> CARLAgent:
-        return CARLAgent(model="test-model", _client=MagicMock())
+    def agent(self, tmp_path: Path) -> CARLAgent:
+        return CARLAgent(model="test-model", workdir=str(tmp_path), _client=MagicMock())
 
     def test_tool_read_file(self, agent: CARLAgent, tmp_path: Path) -> None:
         test_file = tmp_path / "test.txt"
@@ -87,8 +87,8 @@ class TestCARLAgentToolDispatch:
         result = agent._dispatch_tool("read_file", {"path": str(test_file)})
         assert "hello world" in result
 
-    def test_tool_read_file_not_found(self, agent: CARLAgent) -> None:
-        result = agent._dispatch_tool("read_file", {"path": "/nonexistent/file.txt"})
+    def test_tool_read_file_not_found(self, agent: CARLAgent, tmp_path: Path) -> None:
+        result = agent._dispatch_tool("read_file", {"path": str(tmp_path / "nonexistent.txt")})
         assert "not found" in result.lower()
 
     def test_tool_read_file_truncation(self, agent: CARLAgent, tmp_path: Path) -> None:
@@ -145,9 +145,11 @@ class TestCARLAgentToolDispatch:
         assert "empty" in result.lower()
 
     def test_tool_query_with_knowledge(self, agent: CARLAgent) -> None:
+        text1 = "Territory North has 500 accounts and 3 sellers"
+        text2 = "Quota attainment last quarter was 87%"
         agent._knowledge = [
-            {"text": "Territory North has 500 accounts and 3 sellers", "source": "test"},
-            {"text": "Quota attainment last quarter was 87%", "source": "test"},
+            {"text": text1, "source": "test", "words": set(text1.lower().split())},
+            {"text": text2, "source": "test", "words": set(text2.lower().split())},
         ]
         result = agent._dispatch_tool("query_knowledge", {"question": "territory accounts sellers"})
         assert "500 accounts" in result

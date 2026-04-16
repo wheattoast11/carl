@@ -469,13 +469,16 @@ class SourceIngester:
             modality="image", metadata={"extraction": "ocr"},
         )]
 
+    _whisper_model: Any = None
+
     def _ingest_audio(self, path: str, start_id: int = 0) -> list[SourceChunk]:
         """Transcribe audio file. Tries whisper, then skip."""
         try:
             import whisper  # type: ignore[import-untyped]
 
-            model = whisper.load_model("base")
-            result = model.transcribe(path)
+            if SourceIngester._whisper_model is None:
+                SourceIngester._whisper_model = whisper.load_model("base")
+            result = SourceIngester._whisper_model.transcribe(path)
             text = result.get("text", "")
         except ImportError:
             logger.warning(
