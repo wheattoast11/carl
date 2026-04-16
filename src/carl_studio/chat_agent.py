@@ -5,22 +5,24 @@ as callable tools via the Claude API tool use protocol.  The agent drives
 the workflow: it recommends next steps, ingests files on mention, runs
 analyses, and creates deliverables proactively.
 
-Context window management:
-  System prompt:  ~6K tokens  (frame + project + tools)
-  Working context: up to 140K (messages + tool results)
-  Buffer:          54K        (never touched — overflow guard)
-
-When working context exceeds _COMPACT_THRESHOLD, older messages are
-summarized and compacted.  Tool results are truncated to _TOOL_RESULT_MAX.
+Features:
+  - Session persistence: save/resume conversations across invocations
+  - Permission hooks: pre/post tool-use callbacks for consent gating
+  - Cost tracking: per-turn cost accumulation with budget enforcement
+  - Context compaction: automatic summarization at token threshold
+  - Streaming: real-time token display via text_delta events
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
+from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 from pydantic import BaseModel, Field
 
@@ -32,6 +34,127 @@ logger = logging.getLogger(__name__)
 _COMPACT_THRESHOLD = 140_000
 _TOOL_RESULT_MAX = 8_000
 _KEEP_RECENT = 10
+
+# ---------------------------------------------------------------------------
+# Model pricing ($/M tokens: input, output)
+# ---------------------------------------------------------------------------
+_MODEL_PRICING: dict[str, tuple[float, float]] = {
+    "claude-opus-4-6": (5.00, 25.00),
+    "claude-sonnet-4-6": (3.00, 15.00),
+    "claude-haiku-4-5": (1.00, 5.00),
+    "claude-haiku-4-5-20251001": (1.00, 5.00),
+    "claude-3-haiku-20240307": (0.25, 1.25),
+}
+_DEFAULT_PRICING = (5.00, 25.00)  # assume Opus pricing if unknown
+
+
+def _compute_turn_cost(usage: Any, model: str) -> float:
+    """Compute USD cost for a single API turn from response.usage."""
+    input_rate, output_rate = _MODEL_PRICING.get(model, _DEFAULT_PRICING)
+    input_tokens = getattr(usage, "input_tokens", 0) or 0
+    output_tokens = getattr(usage, "output_tokens", 0) or 0
+    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+    cache_create = getattr(usage, "cache_creation_input_tokens", 0) or 0
+    return (
+        (input_tokens * input_rate / 1_000_000)
+        + (output_tokens * output_rate / 1_000_000)
+        + (cache_read * input_rate * 0.1 / 1_000_000)
+        + (cache_create * input_rate * 1.25 / 1_000_000)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Permission hooks
+# ---------------------------------------------------------------------------
+
+
+class ToolPermission(str, Enum):
+    """Result from a pre-tool-use hook."""
+
+    ALLOW = "allow"
+    DENY = "deny"
+
+
+# Callback types
+PreToolHook = Callable[[str, dict[str, Any]], ToolPermission]
+PostToolHook = Callable[[str, dict[str, Any], str], None]
+
+
+# ---------------------------------------------------------------------------
+# Session persistence
+# ---------------------------------------------------------------------------
+
+_SESSIONS_DIR = Path.home() / ".carl" / "sessions"
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class SessionStore:
+    """Save and resume CARLAgent sessions at ~/.carl/sessions/."""
+
+    def __init__(self, sessions_dir: Path | str | None = None) -> None:
+        self._dir = Path(sessions_dir) if sessions_dir else _SESSIONS_DIR
+        self._dir.mkdir(parents=True, exist_ok=True)
+
+    def save(self, session_id: str, state: dict[str, Any]) -> Path:
+        """Persist session state to JSON."""
+        state["updated_at"] = _now_iso()
+        if "created_at" not in state:
+            state["created_at"] = state["updated_at"]
+        path = self._dir / f"{session_id}.json"
+        # Serialize sets in knowledge entries
+        knowledge = state.get("knowledge", [])
+        serializable_knowledge = []
+        for entry in knowledge:
+            entry_copy = dict(entry)
+            if "words" in entry_copy and isinstance(entry_copy["words"], set):
+                entry_copy["words"] = sorted(entry_copy["words"])
+            serializable_knowledge.append(entry_copy)
+        state["knowledge"] = serializable_knowledge
+        path.write_text(json.dumps(state, indent=2, default=str))
+        return path
+
+    def load(self, session_id: str) -> dict[str, Any] | None:
+        """Load session state from JSON. Returns None if not found."""
+        path = self._dir / f"{session_id}.json"
+        if not path.is_file():
+            return None
+        data = json.loads(path.read_text())
+        # Deserialize word lists back to sets
+        for entry in data.get("knowledge", []):
+            if "words" in entry and isinstance(entry["words"], list):
+                entry["words"] = set(entry["words"])
+        return data
+
+    def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
+        """List sessions, most recent first."""
+        sessions = []
+        for p in sorted(self._dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+            if len(sessions) >= limit:
+                break
+            try:
+                data = json.loads(p.read_text())
+                sessions.append({
+                    "id": p.stem,
+                    "title": data.get("title", ""),
+                    "model": data.get("model", ""),
+                    "turn_count": data.get("turn_count", 0),
+                    "total_cost_usd": data.get("total_cost_usd", 0.0),
+                    "updated_at": data.get("updated_at", ""),
+                })
+            except Exception:
+                continue
+        return sessions
+
+    def delete(self, session_id: str) -> bool:
+        """Delete a session. Returns True if found."""
+        path = self._dir / f"{session_id}.json"
+        if path.is_file():
+            path.unlink()
+            return True
+        return False
 
 # ---------------------------------------------------------------------------
 # Tool schemas for Claude API
@@ -147,7 +270,13 @@ class AgentEvent(BaseModel):
 
 
 class CARLAgent:
-    """Agentic chat loop with tool use, frame awareness, and proactive guidance."""
+    """Agentic chat loop with tool use, frame awareness, and proactive guidance.
+
+    Features beyond raw API relay:
+      - **Session persistence**: save/resume via SessionStore
+      - **Permission hooks**: pre_tool_use callback can deny tool calls
+      - **Cost tracking**: per-turn cost from response.usage, max_budget_usd cap
+    """
 
     def __init__(
         self,
@@ -156,6 +285,10 @@ class CARLAgent:
         frame: Any | None = None,
         workdir: str = ".",
         *,
+        max_budget_usd: float = 0.0,
+        pre_tool_use: PreToolHook | None = None,
+        post_tool_use: PostToolHook | None = None,
+        session_id: str = "",
         _client: Any | None = None,
     ) -> None:
         if _client is not None:
@@ -167,13 +300,29 @@ class CARLAgent:
                 raise ImportError(
                     "Anthropic SDK required: pip install carl-studio[observe]"
                 ) from exc
-            self._client = anthropic.Anthropic(api_key=api_key)
+            self._client = anthropic.Anthropic(api_key=api_key or None)
         self._model = model
         self._frame = frame
         self._workdir = str(Path(workdir).resolve())
         self._messages: list[dict[str, Any]] = []
         self._knowledge: list[dict[str, Any]] = []  # {text, source, words}
         self._token_count = 0
+
+        # Cost tracking
+        self._total_cost_usd = 0.0
+        self._max_budget_usd = max_budget_usd  # 0 = unlimited
+        self._total_input_tokens = 0
+        self._total_output_tokens = 0
+        self._turn_count = 0
+
+        # Permission hooks
+        self._pre_tool_use = pre_tool_use
+        self._post_tool_use = post_tool_use
+
+        # Session
+        self._session_id = session_id
+
+        # Project context (cached at construction)
         self._project_line = ""
         try:
             from carl_studio.project import load_project
@@ -184,38 +333,82 @@ class CARLAgent:
             pass
 
     def chat(self, user_input: str) -> Iterator[AgentEvent]:
-        """Send message, handle tool calls, yield events."""
+        """Send message, handle tool calls, yield events.
+
+        Uses streaming to prevent HTTP timeouts on long responses.
+        Yields text_delta events for real-time token display.
+        Enforces max_budget_usd if set. Runs pre/post tool hooks.
+        """
         self._messages.append({"role": "user", "content": user_input})
+        self._turn_count += 1
 
         while True:
+            # Budget check before API call
+            if self._max_budget_usd > 0 and self._total_cost_usd >= self._max_budget_usd:
+                yield AgentEvent(
+                    kind="error",
+                    content=f"Budget exceeded: ${self._total_cost_usd:.4f} >= ${self._max_budget_usd:.2f}",
+                )
+                return
+
             system = self._build_system_prompt()
 
-            response = self._client.messages.create(
-                model=self._model,
-                max_tokens=4096,
-                system=system,
-                messages=self._messages,
-                tools=TOOLS,
-            )
+            try:
+                kwargs: dict[str, Any] = {
+                    "model": self._model,
+                    "max_tokens": 64000,
+                    "system": system,
+                    "messages": self._messages,
+                    "tools": TOOLS,
+                    "cache_control": {"type": "ephemeral"},
+                }
+                if any(fam in self._model for fam in ("opus-4-6", "sonnet-4-6")):
+                    kwargs["thinking"] = {"type": "adaptive"}
 
-            self._token_count = getattr(
-                getattr(response, "usage", None), "input_tokens", self._token_count
-            )
+                with self._client.messages.stream(**kwargs) as stream:
+                    for event in stream:
+                        if event.type == "content_block_delta":
+                            if event.delta.type == "text_delta":
+                                yield AgentEvent(
+                                    kind="text_delta", content=event.delta.text
+                                )
+                    response = stream.get_final_message()
+            except Exception as exc:
+                yield AgentEvent(kind="error", content=f"API error: {exc}")
+                return
 
-            # Check context pressure
+            # Track cost
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                turn_cost = _compute_turn_cost(usage, self._model)
+                self._total_cost_usd += turn_cost
+                self._total_input_tokens += getattr(usage, "input_tokens", 0) or 0
+                self._total_output_tokens += getattr(usage, "output_tokens", 0) or 0
+
+            self._token_count = getattr(usage, "input_tokens", self._token_count) if usage else self._token_count
+
+            # Context pressure
             if self._token_count > _COMPACT_THRESHOLD:
                 self._compact()
 
-            # Process response blocks
+            # pause_turn: server-side tool iteration limit
+            if response.stop_reason == "pause_turn":
+                self._messages = [
+                    {"role": "user", "content": user_input},
+                    {"role": "assistant", "content": self._content_to_dicts(response.content)},
+                ]
+                continue
+
+            # Collect blocks
             assistant_content: list[dict[str, Any]] = []
-            has_tool_use = False
+            tool_use_blocks: list[Any] = []
 
             for block in response.content:
                 if block.type == "text":
                     assistant_content.append({"type": "text", "text": block.text})
-                    yield AgentEvent(kind="text", content=block.text)
+                elif block.type == "thinking":
+                    pass
                 elif block.type == "tool_use":
-                    has_tool_use = True
                     tool_input: dict[str, Any] = block.input if isinstance(block.input, dict) else {}
                     assistant_content.append({
                         "type": "tool_use",
@@ -223,37 +416,55 @@ class CARLAgent:
                         "name": block.name,
                         "input": block.input,
                     })
+                    tool_use_blocks.append(block)
                     yield AgentEvent(
                         kind="tool_call",
                         tool_name=block.name,
                         tool_args=tool_input,
                     )
 
-                    # Execute tool
-                    result = self._dispatch_tool(block.name, tool_input)
-                    yield AgentEvent(kind="tool_result", tool_name=block.name, content=result)
+            if not tool_use_blocks:
+                self._messages.append({"role": "assistant", "content": assistant_content})
+                yield AgentEvent(kind="done", content=f"${self._total_cost_usd:.4f}")
+                return
 
-                    # Append assistant message + tool result for continuation
-                    self._messages.append({"role": "assistant", "content": assistant_content})
-                    self._messages.append({
-                        "role": "user",
-                        "content": [{
+            # Execute ALL tool calls with permission hooks
+            self._messages.append({"role": "assistant", "content": assistant_content})
+
+            tool_results: list[dict[str, Any]] = []
+            for block in tool_use_blocks:
+                tool_input = block.input if isinstance(block.input, dict) else {}
+
+                # Pre-tool hook
+                if self._pre_tool_use is not None:
+                    permission = self._pre_tool_use(block.name, tool_input)
+                    if permission == ToolPermission.DENY:
+                        result = f"Blocked by permission policy: {block.name}"
+                        yield AgentEvent(kind="tool_blocked", tool_name=block.name, content=result)
+                        tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
                             "content": result,
-                        }],
-                    })
-                    assistant_content = []
-                    break  # re-enter loop for next API call
+                            "is_error": True,
+                        })
+                        continue
 
-            if not has_tool_use:
-                # Final response — no more tool calls
-                self._messages.append({"role": "assistant", "content": assistant_content})
-                yield AgentEvent(kind="done")
-                return
+                result = self._dispatch_tool(block.name, tool_input)
+                yield AgentEvent(kind="tool_result", tool_name=block.name, content=result)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+
+                # Post-tool hook
+                if self._post_tool_use is not None:
+                    self._post_tool_use(block.name, tool_input, result)
+
+            self._messages.append({"role": "user", "content": tool_results})
 
             if response.stop_reason == "end_turn":
-                yield AgentEvent(kind="done")
+                yield AgentEvent(kind="done", content=f"${self._total_cost_usd:.4f}")
                 return
 
     # ------------------------------------------------------------------
@@ -299,6 +510,22 @@ class CARLAgent:
         ])
 
         return "\n".join(parts)
+
+    @staticmethod
+    def _content_to_dicts(content: Any) -> list[dict[str, Any]]:
+        """Convert SDK content blocks to dicts for message history."""
+        result: list[dict[str, Any]] = []
+        for block in content:
+            if getattr(block, "type", None) == "text":
+                result.append({"type": "text", "text": block.text})
+            elif getattr(block, "type", None) == "tool_use":
+                result.append({
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": block.input,
+                })
+        return result
 
     # ------------------------------------------------------------------
     # Tool dispatch
@@ -471,3 +698,71 @@ class CARLAgent:
         ]
         self._token_count = 0
         logger.info("Compacted %d messages into summary + %d recent", len(old), len(recent))
+
+    # ------------------------------------------------------------------
+    # Session persistence
+    # ------------------------------------------------------------------
+
+    def save_session(
+        self, title: str = "", store: SessionStore | None = None
+    ) -> str:
+        """Save current state to a session file. Returns session ID."""
+        from uuid import uuid4
+
+        if not self._session_id:
+            self._session_id = str(uuid4())[:8]
+
+        state: dict[str, Any] = {
+            "id": self._session_id,
+            "title": title,
+            "model": self._model,
+            "workdir": self._workdir,
+            "messages": self._messages,
+            "knowledge": self._knowledge,
+            "frame": self._frame.model_dump() if self._frame and hasattr(self._frame, "model_dump") else None,
+            "total_cost_usd": self._total_cost_usd,
+            "total_input_tokens": self._total_input_tokens,
+            "total_output_tokens": self._total_output_tokens,
+            "turn_count": self._turn_count,
+        }
+
+        s = store or SessionStore()
+        s.save(self._session_id, state)
+        return self._session_id
+
+    def load_session(
+        self, session_id: str, store: SessionStore | None = None
+    ) -> bool:
+        """Load a saved session. Returns True if found."""
+        s = store or SessionStore()
+        state = s.load(session_id)
+        if state is None:
+            return False
+
+        self._session_id = state.get("id", session_id)
+        self._messages = state.get("messages", [])
+        self._knowledge = state.get("knowledge", [])
+        self._total_cost_usd = state.get("total_cost_usd", 0.0)
+        self._total_input_tokens = state.get("total_input_tokens", 0)
+        self._total_output_tokens = state.get("total_output_tokens", 0)
+        self._turn_count = state.get("turn_count", 0)
+
+        frame_data = state.get("frame")
+        if frame_data:
+            from carl_studio.frame import WorkFrame
+
+            self._frame = WorkFrame.model_validate(frame_data)
+
+        return True
+
+    @property
+    def cost_summary(self) -> dict[str, Any]:
+        """Current cost and token usage."""
+        return {
+            "total_cost_usd": round(self._total_cost_usd, 6),
+            "total_input_tokens": self._total_input_tokens,
+            "total_output_tokens": self._total_output_tokens,
+            "turn_count": self._turn_count,
+            "model": self._model,
+            "budget_remaining_usd": round(self._max_budget_usd - self._total_cost_usd, 6) if self._max_budget_usd > 0 else None,
+        }
