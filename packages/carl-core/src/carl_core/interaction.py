@@ -1,0 +1,218 @@
+"""InteractionChain — typed trace of every interaction Carl participates in.
+
+Every CLI command, tool call, LLM reply, permission gate, and external call
+emits a `Step` into an `InteractionChain`. The chain is the raw material for:
+
+  - Replay and debug (`carl replay <session>`)
+  - Training signal (which interaction shapes drove success)
+  - Contract / witness trace (see `carl_studio.contract`)
+
+This primitive lives in carl-core so it's a dependency-free lingua franca
+across every Carl package. Only depends on the standard library.
+"""
+from __future__ import annotations
+
+import json
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any
+
+
+class ActionType(str, Enum):
+    """Enumerates the shapes of interactions we trace."""
+
+    USER_INPUT = "user_input"         # text typed by user in chat or CLI
+    TOOL_CALL = "tool_call"           # CARLAgent calls a registered tool
+    LLM_REPLY = "llm_reply"           # model streamed a reply
+    CLI_CMD = "cli_cmd"               # top-level CLI command dispatch
+    GATE = "gate"                     # credential / permission prompt
+    EXTERNAL = "external"             # HTTP request, file write, subprocess
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _new_id() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+@dataclass
+class Step:
+    """One atomic unit in an InteractionChain.
+
+    Attributes
+    ----------
+    action
+        The shape of this interaction. See `ActionType`.
+    name
+        Short human-readable label, e.g. ``"require:ANTHROPIC_API_KEY"``,
+        ``"carl chat"``, ``"ingest_source"``.
+    input
+        What went in (prompt string, args dict, credential name — never the
+        credential value itself).
+    output
+        What came out (response text, tool result, ``True``/``False`` for gates).
+    success
+        Whether the step succeeded. Failures persist too — they are signal.
+    started_at / duration_ms
+        Timing, populated by the caller.
+    parent_id
+        Step id of the parent when nested or dispatched in parallel.
+    step_id
+        Stable id for this step (12-hex chars, generated here).
+    """
+
+    action: ActionType
+    name: str
+    input: Any = None
+    output: Any = None
+    success: bool = True
+    started_at: datetime = field(default_factory=_utcnow)
+    duration_ms: float | None = None
+    parent_id: str | None = None
+    step_id: str = field(default_factory=_new_id)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "step_id": self.step_id,
+            "action": self.action.value,
+            "name": self.name,
+            "input": _json_safe(self.input),
+            "output": _json_safe(self.output),
+            "success": self.success,
+            "started_at": self.started_at.isoformat(),
+            "duration_ms": self.duration_ms,
+            "parent_id": self.parent_id,
+        }
+
+
+@dataclass
+class InteractionChain:
+    """An ordered log of `Step`s plus a free-form context dict.
+
+    The chain is append-only; once a step lands, it doesn't get mutated.
+    Serialize with `to_dict()` / `to_jsonl()`, reload with `from_dict()`.
+    """
+
+    chain_id: str = field(default_factory=_new_id)
+    started_at: datetime = field(default_factory=_utcnow)
+    steps: list[Step] = field(default_factory=list)
+    context: dict[str, Any] = field(default_factory=dict)
+
+    # -- core mutation -----------------------------------------------------
+
+    def append(self, step: Step, result: Any = None) -> Step:
+        """Append a step. If `result` is given, it overwrites `step.output`."""
+        if result is not None:
+            step.output = result
+        self.steps.append(step)
+        return step
+
+    def record(
+        self,
+        action: ActionType,
+        name: str,
+        *,
+        input: Any = None,
+        output: Any = None,
+        success: bool = True,
+        duration_ms: float | None = None,
+        parent_id: str | None = None,
+    ) -> Step:
+        """Build and append a step in one call — the common case."""
+        step = Step(
+            action=action,
+            name=name,
+            input=input,
+            output=output,
+            success=success,
+            duration_ms=duration_ms,
+            parent_id=parent_id,
+        )
+        self.steps.append(step)
+        return step
+
+    # -- query -------------------------------------------------------------
+
+    def __len__(self) -> int:
+        return len(self.steps)
+
+    def last(self) -> Step | None:
+        return self.steps[-1] if self.steps else None
+
+    def by_action(self, action: ActionType) -> list[Step]:
+        return [s for s in self.steps if s.action == action]
+
+    def success_rate(self) -> float:
+        """Fraction of steps where success=True. Empty chain returns 1.0."""
+        if not self.steps:
+            return 1.0
+        return sum(1 for s in self.steps if s.success) / len(self.steps)
+
+    # -- serialization -----------------------------------------------------
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "chain_id": self.chain_id,
+            "started_at": self.started_at.isoformat(),
+            "steps": [s.to_dict() for s in self.steps],
+            "context": _json_safe(self.context),
+        }
+
+    def to_jsonl(self) -> str:
+        """Serialize as newline-delimited JSON: header row + one row per step."""
+        header = json.dumps({"chain_id": self.chain_id, "started_at": self.started_at.isoformat(), "context": _json_safe(self.context)})
+        rows = [json.dumps(s.to_dict()) for s in self.steps]
+        return "\n".join([header, *rows])
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> InteractionChain:
+        chain = cls(
+            chain_id=d.get("chain_id", _new_id()),
+            context=dict(d.get("context", {})),
+        )
+        if started := d.get("started_at"):
+            chain.started_at = datetime.fromisoformat(started)
+        for raw in d.get("steps", []):
+            chain.steps.append(
+                Step(
+                    action=ActionType(raw["action"]),
+                    name=raw["name"],
+                    input=raw.get("input"),
+                    output=raw.get("output"),
+                    success=bool(raw.get("success", True)),
+                    started_at=datetime.fromisoformat(raw["started_at"]) if raw.get("started_at") else _utcnow(),
+                    duration_ms=raw.get("duration_ms"),
+                    parent_id=raw.get("parent_id"),
+                    step_id=raw.get("step_id", _new_id()),
+                )
+            )
+        return chain
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+
+def _json_safe(value: Any) -> Any:
+    """Coerce a value to a JSON-serializable form. Falls back to repr()."""
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Enum):
+        return value.value
+    if hasattr(value, "to_dict"):
+        try:
+            return _json_safe(value.to_dict())
+        except Exception:
+            pass
+    return repr(value)

@@ -51,6 +51,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "carl-core>=0.1.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.0",
     "typer>=0.12",
@@ -96,10 +97,17 @@ carl = "carl_studio.cli:app"
 [tool.hatch.build.targets.wheel]
 packages = ["src/carl_studio"]
 
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+carl-core = { workspace = true }
+
 [tool.pyright]
-include = ["src"]
+include = ["src", "packages/*/src"]
 typeCheckingMode = "strict"
 pythonVersion = "3.11"
+extraPaths = ["packages/carl-core/src"]
 
 [tool.ruff]
 target-version = "py311"
