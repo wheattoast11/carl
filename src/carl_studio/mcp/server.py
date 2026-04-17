@@ -12,6 +12,7 @@ mcp = FastMCP("carl-studio")
 # ---------------------------------------------------------------------------
 
 _session: dict[str, str] = {"jwt": "", "tier": "free", "user_id": ""}
+_SESSION_MAX_AGE = 3600  # 1 hour — re-authenticate after this
 
 # ---------------------------------------------------------------------------
 # Skills availability — graceful degradation if optional deps missing
@@ -31,8 +32,25 @@ except ImportError:
 
 
 def _require_tier(feature: str) -> bool:
-    """Return True if current session tier allows the feature."""
+    """Return True if current session tier allows the feature.
+
+    Also enforces session age — sessions older than ``_SESSION_MAX_AGE``
+    seconds are treated as unauthenticated (free tier).
+    """
+    import time
+
     from carl_studio.tier import Tier, tier_allows
+
+    # Expire stale sessions — force re-authentication
+    auth_at = _session.get("authenticated_at")
+    if auth_at:
+        try:
+            if time.time() - int(auth_at) > _SESSION_MAX_AGE:
+                _session["tier"] = "free"
+                _session["jwt"] = ""
+                _session["authenticated_at"] = ""
+        except (ValueError, TypeError):
+            pass
 
     t = Tier(_session.get("tier", "free"))
     return tier_allows(t, feature)
@@ -221,43 +239,34 @@ async def authenticate(jwt: str) -> str:
     """Authenticate this MCP session with a carl.camp JWT.
 
     Call this first before using PAID features.
+    The JWT is verified server-side via the carl.camp Supabase Edge Function.
     Returns: JSON with {tier, user_id, features_available: []}.
     """
     global _session
-    import base64
-    import json as json_mod
+    import time
 
     if not jwt or not isinstance(jwt, str):
         return json.dumps({"error": "jwt must be a non-empty string", "authenticated": False})
 
     try:
-        parts = jwt.split(".")
-        if len(parts) != 3:
-            return json.dumps(
-                {
-                    "error": "Invalid JWT format — expected 3 dot-separated segments",
-                    "authenticated": False,
-                }
-            )
+        # Server-side JWT verification via Supabase Edge Function
+        from carl_studio.camp import fetch_camp_profile, DEFAULT_CARL_CAMP_SUPABASE_URL
+        from carl_studio.settings import CARLSettings
 
-        # Pad to valid base64 length
-        payload_b64 = parts[1]
-        padding = 4 - (len(payload_b64) % 4)
-        if padding != 4:
-            payload_b64 += "=" * padding
+        settings = CARLSettings.load()
+        supabase_url = settings.supabase_url or DEFAULT_CARL_CAMP_SUPABASE_URL
 
-        payload = json_mod.loads(base64.urlsafe_b64decode(payload_b64))
+        profile = fetch_camp_profile(jwt, supabase_url)
 
-        user_id = str(payload.get("sub", ""))
-        app_meta = payload.get("app_metadata", {}) or {}
-        user_meta = payload.get("user_metadata", {}) or {}
-        tier_raw = app_meta.get("tier") or user_meta.get("tier") or "free"
-        # Normalize aliases to canonical values
+        # CampProfile.tier is a plain str — normalize to canonical values
+        tier_raw = profile.tier
         tier = "paid" if tier_raw in ("paid", "pro", "enterprise") else "free"
+        user_id = profile.user_id or ""
 
         _session["jwt"] = jwt
         _session["tier"] = tier
-        _session["user_id"] = user_id
+        _session["user_id"] = str(user_id)
+        _session["authenticated_at"] = str(int(time.time()))
 
         from carl_studio.tier import Tier, FEATURE_TIERS, tier_allows
 
@@ -267,13 +276,21 @@ async def authenticate(jwt: str) -> str:
         return json.dumps(
             {
                 "tier": tier,
-                "user_id": user_id,
+                "user_id": str(user_id),
                 "features_available": features,
                 "authenticated": True,
             }
         )
     except Exception as e:
-        return json.dumps({"error": str(e), "authenticated": False})
+        # Fail closed — do NOT store the unverified JWT or grant paid access
+        _session["jwt"] = ""
+        _session["tier"] = "free"
+        _session["user_id"] = ""
+        return json.dumps({
+            "error": f"Server verification failed: {e}",
+            "authenticated": False,
+            "hint": "Ensure carl.camp is reachable, or check your JWT with 'carl camp account'",
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -389,8 +406,8 @@ async def run_skill(skill_name: str, inputs_json: str = "{}") -> str:
     runner = _build_skill_runner()
     skill = runner.get(skill_name)
     if skill is None:
-        runner.close()
         available = [s.name for s in runner.list_skills()]
+        runner.close()
         return json.dumps(
             {
                 "error": f"Skill '{skill_name}' not found.",

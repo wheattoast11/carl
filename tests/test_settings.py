@@ -149,7 +149,7 @@ class TestSettings:
         assert s.tier == Tier.FREE
         assert s.preset == Preset.CUSTOM
         assert s.default_compute == ComputeTarget.L40SX1
-        assert s.default_model == "Tesslate/OmniCoder-9B"
+        assert s.default_model == ""
         assert s.log_level == "info"
 
     def test_log_level_validation(self):

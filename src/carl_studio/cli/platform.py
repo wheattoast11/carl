@@ -208,7 +208,7 @@ def config_init(
             c.info(f"Detected HF namespace: {detected_ns}")
         settings.hub_namespace = typer.prompt(
             "  Hub namespace",
-            default=detected_ns or "wheattoast11",
+            default=detected_ns or "",
         )
 
         # Naming prefix

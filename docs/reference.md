@@ -7,9 +7,9 @@ Credential and provider setup lives in [docs/auth.md](auth.md).
 ## Architecture
 
 ```
-Layer 4  MCP Server       9 tools for AI agent consumption
+Layer 4  MCP Server       16 tools for AI agent consumption
          ──────────────────────────────────────────────────
-Layer 3  CLI              carl start | doctor | project | train | run | observe | eval | infer
+Layer 3  CLI              carl start | doctor | project | train | run | observe | eval | infer | chat | frame
          ──────────────────────────────────────────────────
 Layer 2  Training         CARLTrainer, CascadeRewardManager, environments
          ──────────────────────────────────────────────────
@@ -72,12 +72,15 @@ carl observe --url URL --run RUN          See coherence metrics on a Trackio run
 carl observe --file PATH                  See coherence metrics from a local JSONL log
 carl eval [--adapter HUB_ID]              Pass/fail checkpoint gate
 carl infer                                Run local inference helper
+carl chat [--session ID]                  Agentic chat with tool use, sessions, cost tracking
+carl frame set/show/clear                 WorkFrame analytical lens (domain/function/role/objectives)
 ```
 
 **Namespaces:**
 ```
 carl camp ...                             Account/login/logout/sync/credits/marketplace/consent/contract/x402 surfaces
-carl carlito ...                          Manage carlitos -- small specialized agents you train and spawn
+carl lab carlito ...                      Manage carlitos -- small specialized agents you train and spawn
+carl lab curriculum ...                   Training curriculum FSM tracking
 carl lab ...                              Experimental and advanced/internal workflows
 ```
 
@@ -99,7 +102,7 @@ Camp platform truth       `carl camp login` / `carl camp logout` / `carl camp ac
 Privacy consent           `carl camp consent show` / `carl camp consent update`
 x402 payment rail         `carl camp x402 configure` / `carl camp x402 status`
 Contract witnessing       `carl camp contract sign` / `carl camp contract verify`
-Carlito management        `carl carlito list` / `carl carlito spawn` / `carl carlito show`
+Carlito management        `carl lab carlito list` / `carl lab carlito spawn` / `carl lab carlito show`
 RunPod backend            RUNPOD_API_KEY
 .env files                supported if you load them yourself; not auto-loaded
 ```
@@ -109,7 +112,8 @@ RunPod backend            RUNPOD_API_KEY
 carl observe --live                       Real-time TUI dashboard
 carl observe --diagnose                   Claude-powered analysis
 carl train --send-it                      Full SFT->gate->GRPO->eval->push pipeline
-carl lab mcp                              Start MCP server (9 tools)
+carl lab mcp                              Start MCP server (16 tools)
+carl lab repl                             Simple chat REPL (no tool use)
 ```
 
 ## Compute Backends

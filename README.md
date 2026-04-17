@@ -110,7 +110,7 @@ carl run list
 Or run directly from the CLI:
 
 ```bash
-carl train --model Tesslate/OmniCoder-9B --method grpo --dataset your-org/your-dataset --output-repo your-org/your-model --compute a100-large
+carl train --model your-org/your-base-model --method grpo --dataset your-org/your-dataset --output-repo your-org/your-model --compute a100-large
 ```
 
 **Gate a checkpoint** (`carl-studio[training]`):

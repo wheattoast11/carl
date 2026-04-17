@@ -119,6 +119,15 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - Sessions persist at `~/.carl/sessions/`. Knowledge `words` are sets — serialize as sorted lists.
 - Anthropic SDK: >=0.95.0 required for `cache_control` top-level param and streaming.
 
+## CLI routing (as of 2026-04-16)
+
+- `carl chat` → `cli/chat.py:chat_cmd` → full CARLAgent agentic loop (correct path).
+- `carl lab repl` → `cli/lab.py:chat_repl` → simple REPL (no tool use, legacy).
+- `carl lab chat` no longer exists — renamed to `carl lab repl` to avoid confusion.
+- `carl lab curriculum` and `carl lab carlito` are the canonical paths (not top-level).
+- `settings.py` defaults: `default_model=""`, `naming_prefix=""` — user must configure.
+- CLI `wiring.py` stubs print install hints when extras are missing (not silent `pass`).
+
 ## Keep an eye on
 
 - Preserve optional dependency boundaries.

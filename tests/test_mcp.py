@@ -27,6 +27,15 @@ def _reset_session() -> None:
     srv._session["jwt"] = ""
     srv._session["tier"] = "free"
     srv._session["user_id"] = ""
+    srv._session["authenticated_at"] = ""
+
+
+def _mock_camp_profile(tier: str = "free", user_id: str = "") -> MagicMock:
+    """Build a mock CampProfile for authenticate tests."""
+    profile = MagicMock()
+    profile.tier = tier
+    profile.user_id = user_id
+    return profile
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +65,12 @@ class TestAuthenticate(unittest.IsolatedAsyncioTestCase):
             "sub": "user-abc",
             "app_metadata": {"tier": "paid"},
         })
-        result_raw = await srv.authenticate(jwt)
+        mock_profile = _mock_camp_profile(tier="paid", user_id="user-abc")
+        with patch("carl_studio.mcp.server.fetch_camp_profile", mock_profile, create=True), \
+             patch("carl_studio.camp.fetch_camp_profile", return_value=mock_profile), \
+             patch("carl_studio.settings.CARLSettings.load") as mock_settings:
+            mock_settings.return_value = MagicMock(supabase_url="https://example.supabase.co")
+            result_raw = await srv.authenticate(jwt)
         result = json.loads(result_raw)
 
         assert result["authenticated"] is True
@@ -73,7 +87,11 @@ class TestAuthenticate(unittest.IsolatedAsyncioTestCase):
         import carl_studio.mcp.server as srv
 
         jwt = _make_jwt({"sub": "user-free", "user_metadata": {"tier": "free"}})
-        result = json.loads(await srv.authenticate(jwt))
+        mock_profile = _mock_camp_profile(tier="free", user_id="user-free")
+        with patch("carl_studio.camp.fetch_camp_profile", return_value=mock_profile), \
+             patch("carl_studio.settings.CARLSettings.load") as mock_settings:
+            mock_settings.return_value = MagicMock(supabase_url="https://example.supabase.co")
+            result = json.loads(await srv.authenticate(jwt))
 
         assert result["authenticated"] is True
         assert result["tier"] == "free"
@@ -83,7 +101,11 @@ class TestAuthenticate(unittest.IsolatedAsyncioTestCase):
         import carl_studio.mcp.server as srv
 
         jwt = _make_jwt({"sub": "user-pro", "app_metadata": {"tier": "pro"}})
-        result = json.loads(await srv.authenticate(jwt))
+        mock_profile = _mock_camp_profile(tier="pro", user_id="user-pro")
+        with patch("carl_studio.camp.fetch_camp_profile", return_value=mock_profile), \
+             patch("carl_studio.settings.CARLSettings.load") as mock_settings:
+            mock_settings.return_value = MagicMock(supabase_url="https://example.supabase.co")
+            result = json.loads(await srv.authenticate(jwt))
 
         assert result["tier"] == "paid"
 
@@ -91,14 +113,23 @@ class TestAuthenticate(unittest.IsolatedAsyncioTestCase):
         import carl_studio.mcp.server as srv
 
         jwt = _make_jwt({"sub": "user-ent", "app_metadata": {"tier": "enterprise"}})
-        result = json.loads(await srv.authenticate(jwt))
+        mock_profile = _mock_camp_profile(tier="enterprise", user_id="user-ent")
+        with patch("carl_studio.camp.fetch_camp_profile", return_value=mock_profile), \
+             patch("carl_studio.settings.CARLSettings.load") as mock_settings:
+            mock_settings.return_value = MagicMock(supabase_url="https://example.supabase.co")
+            result = json.loads(await srv.authenticate(jwt))
 
         assert result["tier"] == "paid"
 
     async def test_authenticate_invalid_jwt_two_parts(self) -> None:
         import carl_studio.mcp.server as srv
 
-        result = json.loads(await srv.authenticate("bad.jwt"))
+        # Server rejects the JWT; fallback also fails (no DB)
+        with patch("carl_studio.camp.fetch_camp_profile", side_effect=Exception("invalid token")), \
+             patch("carl_studio.settings.CARLSettings.load") as mock_settings, \
+             patch("carl_studio.tier.detect_effective_tier", side_effect=Exception("no DB")):
+            mock_settings.return_value = MagicMock(supabase_url="https://example.supabase.co")
+            result = json.loads(await srv.authenticate("bad.jwt"))
 
         assert result["authenticated"] is False
         assert "error" in result
@@ -106,7 +137,12 @@ class TestAuthenticate(unittest.IsolatedAsyncioTestCase):
     async def test_authenticate_invalid_jwt_not_base64(self) -> None:
         import carl_studio.mcp.server as srv
 
-        result = json.loads(await srv.authenticate("hdr.!!!invalid!!!!!.sig"))
+        # Server rejects the JWT; fallback also fails (no DB)
+        with patch("carl_studio.camp.fetch_camp_profile", side_effect=Exception("invalid token")), \
+             patch("carl_studio.settings.CARLSettings.load") as mock_settings, \
+             patch("carl_studio.tier.detect_effective_tier", side_effect=Exception("no DB")):
+            mock_settings.return_value = MagicMock(supabase_url="https://example.supabase.co")
+            result = json.loads(await srv.authenticate("hdr.!!!invalid!!!!!.sig"))
 
         assert result["authenticated"] is False
         assert "error" in result

@@ -24,7 +24,8 @@ set +a
 | `carl observe --url ... --run ...` against a public Trackio Space | nothing |
 | `carl observe --live ...` | no key required for public Spaces; install `carl-studio[tui]` |
 | `carl observe --diagnose ...` | `ANTHROPIC_API_KEY` or `--api-key` |
-| `carl lab chat` | `ANTHROPIC_API_KEY` or `--api-key` |
+| `carl chat` (agentic) | `ANTHROPIC_API_KEY` or `--api-key` |
+| `carl lab repl` (simple) | `ANTHROPIC_API_KEY` or `--api-key` |
 | `carl train`, `carl eval` on Hub models/datasets | `HF_TOKEN` or prior Hugging Face login |
 | `carl run status`, `carl run logs`, `carl run stop`, `carl push` | `HF_TOKEN` or prior Hugging Face login |
 | RunPod backend | `RUNPOD_API_KEY` and usually `HF_TOKEN` |
@@ -119,7 +120,7 @@ Or pass a key directly:
 
 ```bash
 carl observe --file logs/train.jsonl --diagnose --api-key sk-ant-xxx
-carl lab chat --api-key sk-ant-xxx
+carl chat --api-key sk-ant-xxx
 ```
 
 ### RunPod
@@ -140,6 +141,32 @@ Remote observe uses Gradio client calls against a Trackio Space.
 - local file observe works without credentials
 - the CLI currently assumes public/shareable Trackio Spaces for remote observe
 
+## Alternative LLM Providers
+
+CARL Studio auto-detects available LLM providers for chat and observability features.
+You can override the provider with these settings:
+
+```bash
+carl config set llm_model "your-model-id"
+carl config set llm_base_url "http://localhost:1234/v1"
+```
+
+Or via environment variables:
+
+```bash
+export CARL_LLM_MODEL=qwen3.5:9b
+export CARL_LLM_BASE_URL=http://localhost:11434/v1
+```
+
+Auto-detection priority (when no override set):
+1. `ANTHROPIC_API_KEY` → Anthropic native SDK
+2. `OPENROUTER_API_KEY` → OpenRouter (OpenAI-compatible)
+3. `OPENAI_API_KEY` → OpenAI
+4. `localhost:11434` → Ollama (auto-probed)
+5. `localhost:1234` → LM Studio (auto-probed)
+
+Any OpenAI-compatible endpoint works via `llm_base_url`.
+
 ## Config Files vs Secrets
 
 `carl config init` and `~/.carl/config.yaml` are for non-secret defaults like:
@@ -148,6 +175,7 @@ Remote observe uses Gradio client calls against a Trackio Space.
 - default compute target
 - Hub namespace
 - Trackio URL
+- LLM provider override (`llm_model`, `llm_base_url`)
 
 Secrets are intentionally not persisted there.
 

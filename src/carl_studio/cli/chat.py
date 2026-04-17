@@ -4,6 +4,7 @@ Primary natural language interface to CARL. Launches an agentic chat loop
 with tool use, frame awareness, and proactive guidance.
 
 Session persistence: --session <id> resumes, auto-saves on exit.
+Session listing: --sessions lists all saved sessions.
 Cost tracking: --budget <usd> sets a hard spending cap.
 """
 
@@ -14,6 +15,67 @@ from typing import Any
 import typer
 
 from carl_studio.console import get_console
+
+
+def _list_sessions() -> None:
+    """List saved chat sessions as a Rich table and exit."""
+    import json
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from rich.console import Console
+    from rich.table import Table
+
+    console = Console()
+    sessions_dir = Path.home() / ".carl" / "sessions"
+
+    if not sessions_dir.exists():
+        console.print("[dim]No sessions found.[/dim]")
+        return
+
+    table = Table(title="Chat Sessions")
+    table.add_column("Session ID", style="cyan")
+    table.add_column("Title", style="white")
+    table.add_column("Model", style="dim")
+    table.add_column("Turns", justify="right")
+    table.add_column("Cost", justify="right", style="green")
+    table.add_column("Last Modified", style="dim")
+
+    for path in sorted(
+        sessions_dir.glob("*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ):
+        try:
+            data = json.loads(path.read_text())
+            turn_count = data.get("turn_count", len(data.get("messages", [])))
+            cost = data.get("total_cost_usd", 0.0)
+            title = data.get("title", "")
+            model = data.get("model", "")
+            updated = data.get("updated_at", "")
+            if not updated:
+                mtime = path.stat().st_mtime
+                updated = datetime.fromtimestamp(mtime, tz=timezone.utc).strftime(
+                    "%Y-%m-%d %H:%M"
+                )
+            else:
+                # Trim ISO suffix for display
+                updated = updated[:16].replace("T", " ")
+            table.add_row(
+                path.stem,
+                title[:30],
+                model,
+                str(turn_count),
+                f"${cost:.4f}" if cost else "-",
+                updated,
+            )
+        except Exception:
+            table.add_row(path.stem, "?", "?", "?", "?", "?")
+
+    if table.row_count == 0:
+        console.print("[dim]No sessions found.[/dim]")
+    else:
+        console.print(table)
 
 
 def chat_cmd(
@@ -41,9 +103,16 @@ def chat_cmd(
     local: bool = typer.Option(
         False, "--local", help="Use local model via LM Studio (localhost:1234)"
     ),
+    sessions: bool = typer.Option(
+        False, "--sessions", help="List saved chat sessions and exit"
+    ),
 ) -> None:
     """Chat with CARL. Proactive agent with tool use, file ingestion, and analysis."""
     c = get_console()
+
+    if sessions:
+        _list_sessions()
+        raise typer.Exit(0)
 
     if voice:
         c.warn("Voice mode coming soon. Requires: pip install faster-whisper kokoro pyaudio")

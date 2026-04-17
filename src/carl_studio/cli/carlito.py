@@ -43,7 +43,7 @@ def carlito_list(
     registry.close()
 
     if not specs:
-        c.info("No carlitos yet. Spawn one with: carl carlito spawn <name>")
+        c.info("No carlitos yet. Spawn one with: carl lab carlito spawn <name>")
         return
 
     table = c.make_table("Name", "Domain", "Parent Model", "Status", "Skills", title="Carlitos")
@@ -118,7 +118,7 @@ def carlito_spawn(
         track = store.current()
 
     if track is None:
-        c.error("No curriculum track found. Enroll a model first: carl curriculum enroll")
+        c.error("No curriculum track found. Enroll a model first: carl lab curriculum enroll")
         registry.close()
         store.close()
         raise typer.Exit(1)
@@ -139,7 +139,7 @@ def carlito_spawn(
     c.kv("Domain", domain or "(general)", key_width=16)
     c.kv("Skills", ", ".join(card.skills) or "(none)", key_width=16)
     c.kv("Status", "deployed", key_width=16)
-    c.info("Show details: carl carlito show " + name)
+    c.info("Show details: carl lab carlito show " + name)
 
     registry.close()
     store.close()

@@ -531,3 +531,45 @@ def test_run_list_and_show_json(monkeypatch, tmp_path: Path):
     show_payload = json.loads(show_result.output)
     assert show_payload["id"] == "run-json"
     assert show_payload["result"]["hub_job_id"] == "job-json"
+
+
+# ---------------------------------------------------------------------------
+# Chat CLI flags
+# ---------------------------------------------------------------------------
+
+
+def test_chat_sessions_flag(monkeypatch, tmp_path: Path):
+    """--sessions flag lists sessions and exits."""
+    # _list_sessions does ``from pathlib import Path; Path.home()`` inside
+    # the function body, so we patch pathlib.Path.home globally.
+    sessions_dir = tmp_path / ".carl" / "sessions"
+    sessions_dir.mkdir(parents=True)
+    (sessions_dir / "test-session.json").write_text(
+        json.dumps({"messages": [1, 2, 3], "turn_count": 3, "total_cost_usd": 0.01})
+    )
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    result = runner.invoke(app, ["chat", "--sessions"])
+    assert result.exit_code == 0
+    assert "test-session" in result.output
+
+
+def test_chat_sessions_flag_empty(monkeypatch, tmp_path: Path):
+    """--sessions flag with no sessions dir prints 'No sessions found'."""
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    result = runner.invoke(app, ["chat", "--sessions"])
+    assert result.exit_code == 0
+    assert "No sessions" in result.output
+
+
+def test_chat_voice_flag_exits():
+    """--voice flag shows coming soon message and exits 0."""
+    result = runner.invoke(app, ["chat", "--voice", "--api-key", "test"])
+    assert result.exit_code == 0
+    assert "coming soon" in result.output.lower() or "voice" in result.output.lower()
+
+
+def test_chat_local_flag_exits():
+    """--local flag shows coming soon message and exits 0."""
+    result = runner.invoke(app, ["chat", "--local", "--api-key", "test"])
+    assert result.exit_code == 0
+    assert "coming soon" in result.output.lower() or "local" in result.output.lower()

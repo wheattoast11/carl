@@ -471,6 +471,19 @@ class CARLAgent:
     # System prompt
     # ------------------------------------------------------------------
 
+    _GREETING_INSTRUCTIONS = (
+        "On the FIRST message of a new session (when you have no prior conversation history), begin by:\n"
+        "1. Briefly introduce yourself as CARL — a coherence-aware training assistant.\n"
+        "2. Ask 2-3 focused questions to understand what the user is working on:\n"
+        "   - What model are they training or want to train?\n"
+        "   - What is their training objective (task-specific, general, alignment)?\n"
+        "   - Do they have a dataset ready, or need help generating one?\n"
+        "3. If a WorkFrame is active, reference it to show you already have context.\n"
+        "\n"
+        "After each response, suggest 1-2 concrete next steps the user could take.\n"
+        "Keep responses concise — no walls of text."
+    )
+
     def _build_system_prompt(self) -> str:
         parts: list[str] = [
             "You are CARL, a coherence-aware training assistant from terminals.tech (Intuition Labs LLC).",
@@ -495,6 +508,13 @@ class CARLAgent:
         if self._knowledge:
             sources = len({k["source"] for k in self._knowledge})
             parts.append(f"KNOWLEDGE BASE: {len(self._knowledge)} chunks from {sources} sources.")
+            parts.append("")
+
+        # Greeting / proactive agency for new sessions
+        is_new_session = len(self._messages) <= 1
+        if is_new_session:
+            parts.append("SESSION START BEHAVIOR:")
+            parts.append(self._GREETING_INSTRUCTIONS)
             parts.append("")
 
         # Behavioral instructions

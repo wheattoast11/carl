@@ -42,8 +42,8 @@ class Bundler:
         return textwrap.dedent(f'''\
             # /// script
             # requires-python = ">=3.10"
-            # dependencies = ["trl>=0.12.0", "peft>=0.7.0", "transformers>=4.48.0",
-            #     "accelerate>=0.24.0", "trackio", "bitsandbytes", "numpy"]
+            # dependencies = ["trl>=1.0", "peft>=0.13", "transformers>=5.0",
+            #     "datasets>=3.0", "accelerate>=0.24.0", "trackio", "bitsandbytes", "numpy"]
             # ///
             """CARL Studio — Bundled SFT Script (auto-generated)."""
             import os, json, trackio
@@ -125,8 +125,8 @@ class Bundler:
         return textwrap.dedent(f'''\
             # /// script
             # requires-python = ">=3.10"
-            # dependencies = ["trl>=0.12.0", "peft>=0.7.0", "transformers>=4.48.0",
-            #     "accelerate>=0.24.0", "trackio", "bitsandbytes", "numpy"]
+            # dependencies = ["trl>=1.0", "peft>=0.13", "transformers>=5.0",
+            #     "datasets>=3.0", "accelerate>=0.24.0", "trackio", "bitsandbytes", "numpy"]
             # ///
             """CARL Studio — Bundled GRPO+CARL Script (auto-generated).
 

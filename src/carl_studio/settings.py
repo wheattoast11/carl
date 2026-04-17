@@ -152,12 +152,12 @@ class CARLSettings(BaseSettings):
     default_compute: ComputeTarget = Field(
         default=ComputeTarget.L40SX1, description="Default compute target"
     )
-    default_model: str = Field(default="Tesslate/OmniCoder-9B", description="Default base model")
+    default_model: str = Field(default="", description="Default base model")
     hub_namespace: str = Field(
         default="", description="HF Hub namespace (auto-detected from whoami)"
     )
     trackio_url: str | None = Field(default=None, description="Trackio dashboard URL")
-    naming_prefix: str = Field(default="il-terminals-carl", description="Naming convention prefix")
+    naming_prefix: str = Field(default="", description="Naming convention prefix")
     log_level: str = Field(default="info", description="Logging level")
 
     # -- Observe defaults --

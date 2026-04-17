@@ -2,16 +2,22 @@
 
 All CLI command modules live inside this package (carl_studio.cli.*).
 Domain logic stays in carl_studio.* — this package imports from there.
+
+When an optional sub-module cannot be imported, a lightweight stub command
+is registered that tells the user what to install instead of silently
+hiding the feature.
 """
 
 from __future__ import annotations
+
+import typer
 
 from .apps import app, camp_app, lab_app
 from .lab import (
     admin_app,
     align_cmd,
     bench_cmd,
-    chat,
+    chat_repl,
     dev,
     golf_app,
     learn_cmd,
@@ -19,6 +25,34 @@ from .lab import (
     paper_app,
 )
 from .platform import login, logout, sync_app
+
+
+# ---------------------------------------------------------------------------
+# Stub factory — keeps each fallback to two lines at the call site
+# ---------------------------------------------------------------------------
+
+_BASE_HINT = "pip install 'carl-studio'"
+_TRAINING_HINT = "pip install 'carl-studio[training]'"
+
+
+def _make_stub(
+    target_app: typer.Typer,
+    name: str,
+    *,
+    doc: str,
+    hint: str = _BASE_HINT,
+    hidden: bool = False,
+) -> None:
+    """Register a lightweight stub command that prints an install hint and exits."""
+
+    @target_app.command(name=name, hidden=hidden)
+    def _stub() -> None:  # noqa: D401
+        typer.echo(f"{doc}")
+        typer.echo(f"Install: {hint}")
+        raise typer.Exit(1)
+
+    _stub.__doc__ = f"{doc} (not installed)"
+
 
 # ---------------------------------------------------------------------------
 # Register camp/lab aliases for the converged command map
@@ -30,7 +64,7 @@ app.command(name="logout", hidden=True)(logout)
 camp_app.add_typer(sync_app, name="sync")
 
 lab_app.command(name="dev")(dev)
-lab_app.command(name="chat")(chat)
+lab_app.command(name="repl")(chat_repl)
 lab_app.command(name="bench")(bench_cmd)
 lab_app.command(name="align")(align_cmd)
 lab_app.command(name="learn")(learn_cmd)
@@ -38,6 +72,22 @@ lab_app.command(name="mcp")(mcp_serve)
 lab_app.add_typer(golf_app, name="golf")
 lab_app.add_typer(paper_app, name="paper")
 lab_app.add_typer(admin_app, name="admin")
+
+
+# ---------------------------------------------------------------------------
+# Wire research sub-app
+# ---------------------------------------------------------------------------
+try:
+    from carl_studio.research._cli import research_app
+
+    lab_app.add_typer(research_app, name="research")
+except ImportError:
+    _make_stub(
+        lab_app,
+        "research",
+        doc="Research requires the arxiv package.",
+        hint="pip install 'carl-studio[research]'",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +99,7 @@ try:
     app.add_typer(skills_app, name="skill", hidden=True)
     lab_app.add_typer(skills_app, name="skill")
 except ImportError:
-    pass  # carl-studio[skills] not installed
+    _make_stub(lab_app, "skill", doc="Skill commands require the full carl-studio package.")
 
 
 # ---------------------------------------------------------------------------
@@ -61,7 +111,7 @@ try:
     app.add_typer(agent_app, name="agent", hidden=True)
     lab_app.add_typer(agent_app, name="agent")
 except ImportError:
-    pass  # carl-studio a2a module not installed
+    _make_stub(lab_app, "agent", doc="Agent commands require the full carl-studio package.")
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +128,12 @@ try:
     camp_app.command(name="billing")(billing_portal)
     camp_app.command(name="subscription")(subscription_status)
 except ImportError:
-    pass
+    _make_stub(camp_app, "account", doc="Billing commands require the full carl-studio package.")
+    _make_stub(camp_app, "upgrade", doc="Billing commands require the full carl-studio package.")
+    _make_stub(camp_app, "billing", doc="Billing commands require the full carl-studio package.")
+    _make_stub(
+        camp_app, "subscription", doc="Billing commands require the full carl-studio package."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +145,7 @@ try:
     app.add_typer(credits_app, name="credits", hidden=True)
     camp_app.add_typer(credits_app, name="credits")
 except ImportError:
-    pass
+    _make_stub(camp_app, "credits", doc="Credits commands require the full carl-studio package.")
 
 
 # ---------------------------------------------------------------------------
@@ -102,14 +157,21 @@ try:
     app.add_typer(curriculum_app, name="curriculum", hidden=True)
     lab_app.add_typer(curriculum_app, name="curriculum")
 except ImportError:
-    pass
+    _make_stub(
+        lab_app, "curriculum", doc="Curriculum commands require the full carl-studio package."
+    )
 
 try:
     from .infer import infer_cmd
 
     app.command(name="infer")(infer_cmd)
 except ImportError:
-    pass
+    _make_stub(
+        app,
+        "infer",
+        doc="Inference requires the training extras.",
+        hint=_TRAINING_HINT,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +185,16 @@ try:
     camp_app.add_typer(marketplace_app, name="marketplace")
     camp_app.command(name="publish")(publish_cmd)
 except ImportError:
-    pass
+    _make_stub(
+        camp_app,
+        "marketplace",
+        doc="Marketplace commands require the full carl-studio package.",
+    )
+    _make_stub(
+        camp_app,
+        "publish",
+        doc="Marketplace commands require the full carl-studio package.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +205,7 @@ try:
 
     camp_app.add_typer(consent_app, name="consent")
 except ImportError:
-    pass
+    _make_stub(camp_app, "consent", doc="Consent commands require the full carl-studio package.")
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +216,9 @@ try:
 
     camp_app.add_typer(contract_app, name="contract")
 except ImportError:
-    pass
+    _make_stub(
+        camp_app, "contract", doc="Contract commands require the full carl-studio package."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +229,23 @@ try:
 
     camp_app.add_typer(x402_app, name="x402")
 except ImportError:
-    pass
+    _make_stub(camp_app, "x402", doc="x402 payment commands require the full carl-studio package.")
+
+
+# ---------------------------------------------------------------------------
+# Wire wallet sub-app
+# ---------------------------------------------------------------------------
+try:
+    from .wallet import wallet_app
+
+    camp_app.add_typer(wallet_app, name="wallet")
+except ImportError:
+    _make_stub(
+        camp_app,
+        "wallet",
+        doc="Wallet commands require: pip install 'carl-studio[wallet]'",
+        hint="pip install 'carl-studio[wallet]'",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +257,7 @@ try:
     app.add_typer(carlito_app, name="carlito", hidden=True)
     lab_app.add_typer(carlito_app, name="carlito")
 except ImportError:
-    pass
+    _make_stub(lab_app, "carlito", doc="Carlito commands require the full carl-studio package.")
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +268,7 @@ try:
 
     app.add_typer(frame_app, name="frame")
 except ImportError:
-    pass
+    _make_stub(app, "frame", doc="Frame commands require the full carl-studio package.")
 
 
 # ---------------------------------------------------------------------------
@@ -190,4 +279,4 @@ try:
 
     app.command(name="chat")(chat_cmd)
 except ImportError:
-    pass
+    _make_stub(app, "chat", doc="Chat requires the full carl-studio package.")

@@ -41,7 +41,7 @@ def curriculum_show(
             track = store.current()
 
         if track is None:
-            c.info("No carlitos enrolled yet. Start with: carl curriculum enroll <model_id>")
+            c.info("No carlitos enrolled yet. Start with: carl lab curriculum enroll <model_id>")
             return
 
         c.header("Curriculum Status")
@@ -70,7 +70,7 @@ def curriculum_list() -> None:
         tracks = store.list_tracks()
 
         if not tracks:
-            c.info("No carlitos enrolled yet. Start with: carl curriculum enroll <model_id>")
+            c.info("No carlitos enrolled yet. Start with: carl lab curriculum enroll <model_id>")
             return
 
         c.header("Enrolled Carlitos")
@@ -113,7 +113,7 @@ def curriculum_advance(
         if track is None:
             c.error(
                 f"No carlito found with ID: {model_id!r}. "
-                "Enroll first with: carl curriculum enroll <model_id>"
+                "Enroll first with: carl lab curriculum enroll <model_id>"
             )
             raise typer.Exit(code=1)
 

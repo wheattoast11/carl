@@ -38,24 +38,14 @@ class CARLAgentCard:
 
         skills: list[str] = []
         try:
-            from carl_studio.skills.runner import SkillRunner
-
-            runner = SkillRunner()
-            skills = [s.name for s in runner.list_skills()]
-            runner.close()
-        except Exception:
-            pass
-
-        # Try to pull any builtins that are registered
-        try:
             from carl_studio.skills.builtins import BUILTIN_SKILLS  # type: ignore[import]
             from carl_studio.skills.runner import SkillRunner
 
-            runner2 = SkillRunner()
+            runner = SkillRunner()
             for s in BUILTIN_SKILLS:
-                runner2.register(s)
-            skills = [s.name for s in runner2.list_skills()]
-            runner2.close()
+                runner.register(s)
+            skills = [s.name for s in runner.list_skills()]
+            runner.close()
         except Exception:
             pass
 
@@ -66,6 +56,12 @@ class CARLAgentCard:
             version = "0.3.0"
 
         return cls(tier=tier, skills=skills, version=version)
+
+    def to_a2a_spec(self) -> dict[str, Any]:
+        """Return A2A protocol spec-compliant agent card."""
+        from carl_studio.a2a.spec import agent_card_to_spec
+
+        return agent_card_to_spec(self)
 
     def to_json(self) -> str:
         """Serialize to JSON string."""

@@ -10,11 +10,78 @@ Auto-detection priority:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import sqlite3
+import time
 import urllib.request
+from pathlib import Path
 
-__all__ = ["LLMProvider", "parse_llm_json"]
+__all__ = ["LLMProvider", "parse_llm_json", "resolve_provider"]
+
+# ---------------------------------------------------------------------------
+# Response cache (SQLite, best-effort)
+# ---------------------------------------------------------------------------
+
+_CACHE_DB = Path.home() / ".carl" / "llm_cache.db"
+_CACHE_TTL_HOURS = 24
+
+
+def _get_cache_db() -> sqlite3.Connection:
+    """Open (and lazily create) the LLM response cache database."""
+    _CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_CACHE_DB))
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS llm_cache (
+            key TEXT PRIMARY KEY,
+            response TEXT NOT NULL,
+            model TEXT NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+    return conn
+
+
+def _cache_key(prompt: str, system: str, model: str, temperature: float) -> str:
+    """Deterministic cache key from prompt parameters."""
+    raw = f"{model}:{temperature}:{system}:{prompt}"
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _cache_get(key: str) -> str | None:
+    """Get cached response if within TTL."""
+    try:
+        conn = _get_cache_db()
+        try:
+            row = conn.execute(
+                "SELECT response, created_at FROM llm_cache WHERE key = ?", (key,)
+            ).fetchone()
+            if row and (time.time() - row[1]) < _CACHE_TTL_HOURS * 3600:
+                return row[0]
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return None
+
+
+def _cache_set(key: str, response: str, model: str) -> None:
+    """Store response in cache."""
+    try:
+        conn = _get_cache_db()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO llm_cache (key, response, model, created_at) VALUES (?, ?, ?, ?)",
+                (key, response, model, time.time()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
 
 
 def _probe_local(port: int, timeout: float = 0.5) -> bool:
@@ -67,6 +134,20 @@ class LLMProvider:
             "or start a local model server (Ollama/LM Studio)."
         )
 
+    # -- public read-only properties ------------------------------------------
+
+    @property
+    def backend(self) -> str:
+        return self._backend
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
+
     @property
     def provider_name(self) -> str:
         if self._backend == "anthropic":
@@ -77,11 +158,83 @@ class LLMProvider:
             return "Local"
         return "OpenAI"
 
+    # -- core completion -----------------------------------------------------
+
     def complete(self, messages: list[dict], *, max_tokens: int = 8192) -> str:
         """Send completion. Returns content string."""
         if self._backend == "anthropic":
             return self._complete_anthropic(messages, max_tokens)
         return self._complete_openai(messages, max_tokens)
+
+    # -- convenience wrappers with caching -----------------------------------
+
+    @staticmethod
+    def _build_messages(prompt: str, system: str) -> list[dict[str, str]]:
+        """Build a messages list from a prompt and optional system string."""
+        msgs: list[dict[str, str]] = []
+        if system:
+            msgs.append({"role": "system", "content": system})
+        msgs.append({"role": "user", "content": prompt})
+        return msgs
+
+    def cached_complete(
+        self,
+        prompt: str,
+        system: str = "",
+        temperature: float = 0.0,
+    ) -> str:
+        """Complete with response caching.
+
+        Same-prompt calls return the cached result within TTL.
+        Cache failures are silently ignored — the call always succeeds
+        (or raises from the underlying provider).
+        """
+        key = _cache_key(prompt, system, self._model, temperature)
+        cached = _cache_get(key)
+        if cached is not None:
+            return cached
+
+        result = self.complete(self._build_messages(prompt, system))
+        try:
+            _cache_set(key, result, self._model)
+        except Exception:
+            pass  # _cache_set catches internally; guard against mock replacement
+        return result
+
+    def batch_complete(
+        self,
+        prompts: list[str],
+        system: str = "",
+        temperature: float = 0.0,
+    ) -> list[str]:
+        """Complete multiple prompts.
+
+        Uses cache where available, sequential requests otherwise.
+        """
+        results: list[str] = []
+        uncached_indices: list[int] = []
+
+        # Check cache first
+        for i, prompt in enumerate(prompts):
+            key = _cache_key(prompt, system, self._model, temperature)
+            cached = _cache_get(key)
+            if cached is not None:
+                results.append(cached)
+            else:
+                results.append("")  # placeholder
+                uncached_indices.append(i)
+
+        # Complete uncached prompts sequentially
+        for i in uncached_indices:
+            result = self.complete(self._build_messages(prompts[i], system))
+            results[i] = result
+            key = _cache_key(prompts[i], system, self._model, temperature)
+            try:
+                _cache_set(key, result, self._model)
+            except Exception:
+                pass
+
+        return results
 
     def _complete_openai(self, messages: list[dict], max_tokens: int) -> str:
         try:
@@ -127,7 +280,6 @@ class LLMProvider:
 
 def parse_llm_json(text: str) -> dict | None:
     """Parse JSON from LLM response, stripping markdown fences."""
-    import json
     text = text.strip()
     if text.startswith("```"):
         parts = text.split("```")
@@ -139,3 +291,17 @@ def parse_llm_json(text: str) -> dict | None:
         return json.loads(text)
     except json.JSONDecodeError:
         return None
+
+
+def resolve_provider() -> dict[str, str]:
+    """Resolve the active LLM provider without constructing a client.
+
+    Returns dict with keys: backend, model, base_url.
+    Raises RuntimeError if no provider is available.
+    """
+    provider = LLMProvider.auto()
+    return {
+        "backend": provider.backend,
+        "model": provider.model,
+        "base_url": provider.base_url,
+    }

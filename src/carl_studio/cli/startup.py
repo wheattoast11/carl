@@ -24,6 +24,9 @@ from .shared import (
 @app.command(name="doctor")
 def doctor(
     json_output: bool = typer.Option(False, "--json", help="Output readiness as JSON"),
+    check_freshness: bool = typer.Option(
+        False, "--check-freshness", help="Force dependency freshness check"
+    ),
 ) -> None:
     """Audit local readiness for the guided CARL workbench workflow."""
     c = get_console()
@@ -103,6 +106,21 @@ def doctor(
         c.ok("Local workbench is ready.")
         c.info("Start with: carl train --config carl.yaml")
         c.blank()
+
+    # Freshness check (silent unless issues found)
+    from carl_studio.freshness import needs_check, run_freshness_check
+
+    if check_freshness or needs_check():
+        freshness = run_freshness_check(force=check_freshness)
+        if freshness.has_issues:
+            c.print(f"[yellow]Freshness: {freshness.summary}[/yellow]")
+            for w in freshness.stale_packages:
+                c.print(f"  [dim]- {w}[/dim]")
+            for w in freshness.config_warnings:
+                c.print(f"  [dim]- {w}[/dim]")
+            for w in freshness.credential_warnings:
+                c.print(f"  [dim]- {w}[/dim]")
+            c.blank()
 
     raise typer.Exit(0 if readiness["guided_workbench"] else 1)
 
@@ -221,6 +239,21 @@ def start(
         c.info("Run 'carl doctor' for a detailed diagnostic audit.")
         c.info("Run 'carl camp account' for managed account, billing, and capability status.")
     c.blank()
+
+    # Freshness check (silent unless issues found)
+    from carl_studio.freshness import needs_check, run_freshness_check
+
+    if needs_check():
+        freshness = run_freshness_check()
+        if freshness.has_issues:
+            c.print(f"[yellow]Freshness: {freshness.summary}[/yellow]")
+            for w in freshness.stale_packages:
+                c.print(f"  [dim]- {w}[/dim]")
+            for w in freshness.config_warnings:
+                c.print(f"  [dim]- {w}[/dim]")
+            for w in freshness.credential_warnings:
+                c.print(f"  [dim]- {w}[/dim]")
+            c.blank()
 
     c.print("  [camp.primary]Next steps[/]")
     for idx, step in enumerate(summary["next_steps"], start=1):

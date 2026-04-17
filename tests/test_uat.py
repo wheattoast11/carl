@@ -149,7 +149,7 @@ class TestConfigJourney:
 
         s = CARLSettings()
         assert s.tier == Tier.FREE
-        assert s.default_model == "Tesslate/OmniCoder-9B"
+        assert s.default_model == ""
         assert s.default_compute == ComputeTarget.L40SX1
         assert s.log_level == "info"
 
@@ -633,7 +633,7 @@ class TestNamingJourney:
         from carl_studio.settings import CARLSettings
 
         s = CARLSettings()
-        assert s.naming_prefix == "il-terminals-carl"
+        assert s.naming_prefix == ""
 
     def test_naming_prefix_settable(self):
         """naming_prefix can be set via set_field."""

@@ -47,9 +47,9 @@ class TrainingMethod(str, Enum):
 
     SFT = "sft"
     GRPO = "grpo"
-    DPO = "dpo"
-    KTO = "kto"
-    ORPO = "orpo"
+    DPO = "dpo"  # Not yet implemented
+    KTO = "kto"  # Not yet implemented
+    ORPO = "orpo"  # Not yet implemented
 
 
 class ScaleWeightProfile(str, Enum):
@@ -216,6 +216,10 @@ class TrainingConfig(BaseModel):
         ge=0,
         le=200,
         description="Top-k for GRPO generation. Safety net against garbage at high temperature.",
+    )
+    fast_inference: bool = Field(
+        default=False,
+        description="Enable vLLM fast inference for Unsloth (GRPO)",
     )
 
     # Adapter

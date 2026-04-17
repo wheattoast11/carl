@@ -179,14 +179,27 @@ class CARLTrainer:
             self.config.method.value,
         )
 
+        _deducted_amount, _credit_jwt, _credit_supabase_url = (
+            self._try_prededuct_credits()
+        )
+
         # Generate self-contained script
         bundler = Bundler()
-        script = bundler.generate(self.config)
+        try:
+            script = bundler.generate(self.config)
+        except Exception:
+            self._refund_credits(
+                _credit_jwt, _credit_supabase_url, _deducted_amount
+            )
+            raise
 
         # Resolve backend + hardware flavor
         backend = get_backend(_REMOTE_BACKEND)
         flavor = _COMPUTE_TO_FLAVOR.get(self.config.compute_target)
         if flavor is None:
+            self._refund_credits(
+                _credit_jwt, _credit_supabase_url, _deducted_amount
+            )
             raise ValueError(
                 f"No hardware flavor mapping for compute target: {self.config.compute_target}"
             )
@@ -194,18 +207,91 @@ class CARLTrainer:
         timeout_seconds = self._parse_timeout(self.config.timeout)
 
         # Provision + execute
-        await backend.provision(hardware=flavor, timeout=timeout_seconds)
-        job_id = await backend.execute(
-            script=script,
-            flavor=flavor,
-            timeout=self.config.timeout,
-            secrets={"HF_TOKEN": "HF_TOKEN"},  # resolved by backend from env
-        )
+        try:
+            await backend.provision(hardware=flavor, timeout=timeout_seconds)
+            job_id = await backend.execute(
+                script=script,
+                flavor=flavor,
+                timeout=self.config.timeout,
+                secrets={"HF_TOKEN": "HF_TOKEN"},  # resolved by backend from env
+            )
+        except Exception:
+            self._refund_credits(
+                _credit_jwt, _credit_supabase_url, _deducted_amount
+            )
+            raise
 
         self.run.hub_job_id = job_id
         self.run.phase = RunPhase.TRAINING
         logger.info("Remote job submitted: %s", job_id)
         return self.run
+
+    def _try_prededuct_credits(self) -> tuple[int, str | None, str | None]:
+        """Best-effort credit pre-deduction for managed compute.
+
+        Returns (deducted_amount, jwt, supabase_url).  All three are zero/None
+        when no deduction occurred (missing deps, no JWT, BYOK, etc.).
+        """
+        try:
+            from carl_studio.camp import (
+                DEFAULT_CARL_CAMP_SUPABASE_URL,
+                load_camp_session,
+            )
+
+            session = load_camp_session()
+            jwt = session.jwt
+            if not jwt:
+                return 0, None, None
+
+            from carl_studio.credits.balance import deduct_credits
+            from carl_studio.credits.estimate import (
+                METHOD_STEP_SECONDS,
+                estimate_job_cost,
+            )
+
+            supabase_url = session.supabase_url or DEFAULT_CARL_CAMP_SUPABASE_URL
+            per_step = METHOD_STEP_SECONDS.get(self.config.method.value, 20.0)
+            estimate = estimate_job_cost(
+                hardware=self.config.compute_target.value,
+                max_steps=self.config.max_steps or 1000,
+                per_step_seconds=per_step,
+            )
+            if estimate.total_with_buffer > 0:
+                deduct_credits(
+                    jwt,
+                    supabase_url,
+                    estimate.total_with_buffer,
+                    self.run.id,
+                    "training_job",
+                )
+                logger.info(
+                    "Pre-deducted %d credits for run %s",
+                    estimate.total_with_buffer,
+                    self.run.id,
+                )
+                return estimate.total_with_buffer, jwt, supabase_url
+        except ImportError:
+            pass  # credits module not installed
+        except Exception as exc:
+            logger.warning("Credit pre-deduction skipped: %s", exc)
+        return 0, None, None
+
+    def _refund_credits(
+        self,
+        jwt: str | None,
+        supabase_url: str | None,
+        amount: int,
+    ) -> None:
+        """Best-effort refund when a job fails before actually running."""
+        if amount <= 0 or not jwt or not supabase_url:
+            return
+        try:
+            from carl_studio.credits.balance import refund_credits
+
+            refund_credits(jwt, supabase_url, amount, self.run.id, "job_failed")
+            logger.info("Refunded %d credits for run %s", amount, self.run.id)
+        except Exception as exc:
+            logger.warning("Credit refund failed for run %s: %s", self.run.id, exc)
 
     # ------------------------------------------------------------------
     # Local mode
@@ -228,7 +314,10 @@ class CARLTrainer:
         elif self.config.method == TrainingMethod.GRPO:
             await self._run_grpo()
         else:
-            raise ValueError(f"Local training not yet supported for method: {self.config.method}")
+            raise ValueError(
+                f"Training method '{self.config.method.value}' is not yet implemented. "
+                "Supported methods: sft, grpo."
+            )
 
         self.run.phase = RunPhase.COMPLETE
         logger.info("Local training complete: run_id=%s", self.run.id)
@@ -295,6 +384,11 @@ class CARLTrainer:
             try:
                 from unsloth import FastLanguageModel
 
+                unsloth_kwargs: dict[str, Any] = {}
+                if cfg.fast_inference:
+                    unsloth_kwargs["fast_inference"] = True
+                    unsloth_kwargs["gpu_memory_utilization"] = 0.6
+
                 self._model, self._tokenizer = FastLanguageModel.from_pretrained(
                     model_name=cfg.base_model,
                     max_seq_length=cfg.max_length,
@@ -302,6 +396,7 @@ class CARLTrainer:
                     load_in_4bit=cfg.quantization.load_in_4bit,
                     load_in_8bit=cfg.quantization.load_in_8bit,
                     token=hf_token,
+                    **unsloth_kwargs,
                 )
                 logger.info("Model loaded via Unsloth FastLanguageModel")
             except ImportError:
@@ -406,6 +501,16 @@ class CARLTrainer:
 
     async def _run_grpo(self) -> None:
         """Run GRPO training with CARL rewards + cascade + callbacks."""
+        # Apply Unsloth optimizations for GRPO if available
+        try:
+            from unsloth import PatchFastRL
+            from unsloth import FastLanguageModel as _FLM
+
+            PatchFastRL(algorithm="grpo", FastLanguageModel=_FLM)
+            logger.info("PatchFastRL applied for GRPO (Unsloth vLLM-backed generation)")
+        except ImportError:
+            pass  # Unsloth not installed; standard TRL path
+
         try:
             from datasets import load_dataset
             from peft import LoraConfig as PeftLoraConfig
@@ -668,8 +773,16 @@ class CARLTrainer:
         return total
 
     @staticmethod
-    def _get_hf_token() -> Optional[str]:
-        """Read HF_TOKEN from environment."""
+    def _get_hf_token() -> str | None:
+        """Resolve HuggingFace token — prefer hub credential store, fall back to env."""
+        try:
+            from huggingface_hub import get_token
+
+            token = get_token()
+            if token:
+                return token
+        except ImportError:
+            pass
         import os
 
         return os.environ.get("HF_TOKEN")

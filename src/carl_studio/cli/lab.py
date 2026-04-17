@@ -196,7 +196,7 @@ def dev(
 
 
 @app.command(name="chat", hidden=True)
-def chat(
+def chat_repl(
     ctx: typer.Context = typer.Option(None, hidden=True),
     model: str = typer.Option("claude-sonnet-4-6", "--model", "-m", help="Claude model for agent"),
     config: str = typer.Option("carl.yaml", "--config", "-c", help="Project config for context"),
@@ -204,7 +204,7 @@ def chat(
         None, "--api-key", envvar="ANTHROPIC_API_KEY", help="Anthropic API key"
     ),
 ) -> None:
-    """Interactive CARL agent chat. Discuss training, get recommendations, dispatch runs."""
+    """[legacy] Simple REPL chat. For the full agentic loop use: carl chat."""
     c = get_console()
     _warn_legacy_command_alias(c, ctx, "carl lab chat")
     if not api_key:

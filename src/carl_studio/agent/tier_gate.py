@@ -1,43 +1,57 @@
-"""Tier gating for PAID-only features."""
+"""Agent tier gating — delegates to carl_studio.tier for subscription truth."""
 from __future__ import annotations
 
 import functools
-import os
-from typing import Any, Callable, TypeVar
+import logging
+from typing import Any, Callable
 
-F = TypeVar("F", bound=Callable[..., Any])
+from carl_studio.tier import (
+    Tier,
+    TierGateError,
+    detect_effective_tier,
+    tier_allows,
+)
+
+logger = logging.getLogger(__name__)
+
+# Backwards-compat alias so existing ``from carl_studio.agent import TierError``
+# continues to work without changes at call sites.
+TierError = TierGateError
 
 
-class TierError(Exception):
-    """Raised when a PAID feature is accessed without subscription."""
+def _effective_tier() -> Tier:
+    """Resolve the current effective tier via the canonical system."""
+    from carl_studio.settings import CARLSettings
 
-    pass
+    settings = CARLSettings.load()
+    return detect_effective_tier(settings.tier)
 
 
 def get_tier() -> str:
-    """Get current subscription tier.
+    """Return the effective tier as a lowercase string.
 
-    In production, this checks the local subscription cache.
-    For now, reads CARL_TIER env var (default: "free").
+    Delegates to :func:`carl_studio.tier.detect_effective_tier` which reads
+    from the canonical SQLite subscription cache — not an env var.
     """
-    return os.environ.get("CARL_TIER", "free").lower()
+    return _effective_tier().value
 
 
-def requires_paid(func: F) -> F:
-    """Decorator that gates a function behind PAID subscription.
+def requires_paid(func: Callable[..., Any]) -> Callable[..., Any]:
+    """Decorator that gates a function behind PAID tier.
 
-    Raises TierError if tier is "free".
-    Set CARL_TIER=paid to bypass for testing.
+    Raises :class:`TierGateError` (aliased as ``TierError``) when the
+    effective tier does not satisfy the ``experiment`` feature gate.
     """
 
     @functools.wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        tier = get_tier()
-        if tier == "free":
-            raise TierError(
-                f"{func.__name__} requires a PAID subscription. "
-                f"Upgrade at: https://carl.camp/upgrade"
+        current = _effective_tier()
+        if not tier_allows(current, "experiment"):
+            raise TierGateError(
+                feature="experiment",
+                required=Tier.PAID,
+                current=current,
             )
         return func(*args, **kwargs)
 
-    return wrapper  # type: ignore[return-value]
+    return wrapper
