@@ -29,8 +29,12 @@ def mcp_serve(
 
     allowed, _, _ = check_tier("mcp.serve")
     if not allowed:
-        c.warn(tier_message("mcp.serve") or "MCP server requires CARL Paid.")
-        c.info("Upgrade: carl camp upgrade  or  https://carl.camp/pricing")
+        c.error_with_hint(
+            tier_message("mcp.serve") or "MCP server requires CARL Paid.",
+            hint="Upgrade with: carl camp upgrade",
+            signup_url="https://carl.camp/pricing",
+            code="tier:mcp.serve",
+        )
         raise typer.Exit(1)
     try:
         from carl_studio.mcp import mcp as mcp_server

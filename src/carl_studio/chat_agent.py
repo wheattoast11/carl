@@ -11,20 +11,27 @@ Features:
   - Cost tracking: per-turn cost accumulation with budget enforcement
   - Context compaction: automatic summarization at token threshold
   - Streaming: real-time token display via text_delta events
+  - Corruption resilience: quarantine bad sessions on load
+  - Budget pre-check: refuse turns that would exceed the budget cap
+  - Tool timeouts: per-tool deadlines, hook isolation
+  - Arg schema validation: typed errors surfaced back to the model
+  - dispatch_cli: agent can invoke registered ``carl <cmd>`` ops
 """
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import os
+import shutil
 import subprocess
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +41,31 @@ logger = logging.getLogger(__name__)
 _COMPACT_THRESHOLD = 140_000
 _TOOL_RESULT_MAX = 8_000
 _KEEP_RECENT = 10
+
+# ---------------------------------------------------------------------------
+# Session persistence schema version
+# ---------------------------------------------------------------------------
+_SESSION_SCHEMA_VERSION = "1"
+
+# ---------------------------------------------------------------------------
+# Tool execution bounds
+# ---------------------------------------------------------------------------
+_DEFAULT_TOOL_TIMEOUT_S = 30.0
+_TOOL_TIMEOUTS_S: dict[str, float] = {
+    "run_analysis": 60.0,
+    "ingest_source": 120.0,
+    "dispatch_cli": 60.0,
+}
+
+# Shell metacharacters forbidden in dispatch_cli args — we never use shell=True
+# but we reject them defensively so operators cannot social-engineer the model
+# into requesting an expansion that carl itself would interpret.
+_FORBIDDEN_SHELL_METAS: tuple[str, ...] = (
+    ";", "&", "|", ">", "<", "`", "$(", "\n", "\r",
+)
+
+# Conservative max output tokens assumed for the budget pre-check.
+_BUDGET_PRECHECK_MAX_OUTPUT_TOKENS = 64000
 
 # ---------------------------------------------------------------------------
 # Model pricing ($/M tokens: input, output)
@@ -63,6 +95,19 @@ def _compute_turn_cost(usage: Any, model: str) -> float:
     )
 
 
+def _estimate_turn_upper_bound_cost(model: str, max_output_tokens: int) -> float:
+    """Conservative USD cost ceiling for a turn using `max_output_tokens`.
+
+    This assumes the model emits the maximum possible output. Input tokens are
+    excluded from the pre-check because they are already counted once the
+    turn lands, and overestimating too aggressively would make any non-trivial
+    budget reject every turn on the first try. The output cap is the dominant
+    runaway vector; that is what we gate on.
+    """
+    _input_rate, output_rate = _MODEL_PRICING.get(model, _DEFAULT_PRICING)
+    return max(0, max_output_tokens) * output_rate / 1_000_000
+
+
 # ---------------------------------------------------------------------------
 # Permission hooks
 # ---------------------------------------------------------------------------
@@ -85,28 +130,60 @@ PostToolHook = Callable[[str, dict[str, Any], str], None]
 # ---------------------------------------------------------------------------
 
 _SESSIONS_DIR = Path.home() / ".carl" / "sessions"
+_QUARANTINE_SUBDIR = ".quarantine"
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _quarantine_stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
+
 class SessionStore:
-    """Save and resume CARLAgent sessions at ~/.carl/sessions/."""
+    """Save and resume CARLAgent sessions at ``~/.carl/sessions/``.
+
+    Corrupted session files (bad JSON, schema mismatch, or validation error)
+    are moved to ``~/.carl/sessions/.quarantine/<id>-<timestamp>.json`` and
+    :meth:`load` returns ``None`` so callers fall through to a fresh session.
+    """
 
     def __init__(self, sessions_dir: Path | str | None = None) -> None:
         self._dir = Path(sessions_dir) if sessions_dir else _SESSIONS_DIR
         self._dir.mkdir(parents=True, exist_ok=True)
+        self._quarantine_dir = self._dir / _QUARANTINE_SUBDIR
+
+    # -- helpers -----------------------------------------------------------
+
+    def _quarantine_path(self, session_id: str, path: Path) -> Path:
+        """Move ``path`` into the quarantine directory. Returns the destination.
+
+        Never raises — quarantine is best-effort. On OS failure we log a
+        warning and the caller still sees a None-load result.
+        """
+        try:
+            self._quarantine_dir.mkdir(parents=True, exist_ok=True)
+            dest = self._quarantine_dir / f"{session_id}-{_quarantine_stamp()}.json"
+            shutil.move(str(path), str(dest))
+            logger.warning("Quarantined corrupted session %s -> %s", session_id, dest)
+            return dest
+        except OSError as exc:
+            logger.warning("Failed to quarantine %s: %s", path, exc)
+            return path
+
+    # -- public API --------------------------------------------------------
 
     def save(self, session_id: str, state: dict[str, Any]) -> Path:
         """Persist session state to JSON."""
         state["updated_at"] = _now_iso()
         if "created_at" not in state:
             state["created_at"] = state["updated_at"]
+        state["schema_version"] = _SESSION_SCHEMA_VERSION
         path = self._dir / f"{session_id}.json"
         # Serialize sets in knowledge entries
         knowledge = state.get("knowledge", [])
-        serializable_knowledge = []
+        serializable_knowledge: list[dict[str, Any]] = []
         for entry in knowledge:
             entry_copy = dict(entry)
             if "words" in entry_copy and isinstance(entry_copy["words"], set):
@@ -117,25 +194,87 @@ class SessionStore:
         return path
 
     def load(self, session_id: str) -> dict[str, Any] | None:
-        """Load session state from JSON. Returns None if not found."""
+        """Load session state from JSON.
+
+        Returns ``None`` when the file is missing, malformed, or of an
+        unsupported schema version. Corrupted files are moved to the
+        quarantine subdirectory.
+        """
         path = self._dir / f"{session_id}.json"
         if not path.is_file():
             return None
-        data = json.loads(path.read_text())
-        # Deserialize word lists back to sets
-        for entry in data.get("knowledge", []):
-            if "words" in entry and isinstance(entry["words"], list):
-                entry["words"] = set(entry["words"])
+
+        try:
+            raw = path.read_text()
+        except OSError as exc:
+            logger.warning("Could not read session %s: %s", session_id, exc)
+            return None
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("Session %s has invalid JSON: %s", session_id, exc)
+            self._quarantine_path(session_id, path)
+            return None
+        except Exception as exc:
+            logger.warning("Session %s load failed: %s", session_id, exc)
+            self._quarantine_path(session_id, path)
+            return None
+
+        if not isinstance(data, dict):
+            logger.warning("Session %s is not a JSON object", session_id)
+            self._quarantine_path(session_id, path)
+            return None
+
+        schema_version = data.get("schema_version")
+        # Unstamped (legacy) sessions default to schema 1 for forward-compat.
+        if schema_version is not None and schema_version != _SESSION_SCHEMA_VERSION:
+            logger.warning(
+                "Session %s has schema_version=%s; expected %s — quarantining",
+                session_id, schema_version, _SESSION_SCHEMA_VERSION,
+            )
+            self._quarantine_path(session_id, path)
+            return None
+
+        try:
+            # Deserialize word lists back to sets
+            for entry in data.get("knowledge", []):
+                if isinstance(entry, dict) and "words" in entry and isinstance(entry["words"], list):
+                    entry["words"] = set(entry["words"])
+        except (TypeError, PydanticValidationError) as exc:
+            logger.warning("Session %s knowledge deserialize failed: %s", session_id, exc)
+            self._quarantine_path(session_id, path)
+            return None
+
         return data
 
     def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
-        """List sessions, most recent first."""
-        sessions = []
-        for p in sorted(self._dir.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+        """List sessions, most recent first. Skips quarantined / corrupt files."""
+        sessions: list[dict[str, Any]] = []
+        try:
+            candidates = sorted(
+                self._dir.glob("*.json"),
+                key=lambda f: f.stat().st_mtime,
+                reverse=True,
+            )
+        except OSError as exc:
+            logger.warning("Could not enumerate sessions: %s", exc)
+            return []
+
+        for p in candidates:
+            # Skip entries inside the quarantine directory. Path.glob("*.json")
+            # on the top-level session dir never recurses, but guard anyway.
+            try:
+                if _QUARANTINE_SUBDIR in p.parts:
+                    continue
+            except Exception:
+                continue
             if len(sessions) >= limit:
                 break
             try:
                 data = json.loads(p.read_text())
+                if not isinstance(data, dict):
+                    continue
                 sessions.append({
                     "id": p.stem,
                     "title": data.get("title", ""),
@@ -144,6 +283,9 @@ class SessionStore:
                     "total_cost_usd": data.get("total_cost_usd", 0.0),
                     "updated_at": data.get("updated_at", ""),
                 })
+            except (json.JSONDecodeError, OSError):
+                # Don't fail the whole list because one file is bad.
+                continue
             except Exception:
                 continue
         return sessions
@@ -247,6 +389,35 @@ TOOLS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "dispatch_cli",
+        "description": (
+            "Run a carl CLI subcommand (e.g. 'doctor', 'train', 'eval'). "
+            "Only commands registered in the ops registry are allowed. "
+            "Returns stdout/stderr + exit code."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "Top-level ops name (doctor, train, eval, ...)",
+                },
+                "args": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "default": [],
+                },
+                "timeout_s": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 600,
+                    "default": 60,
+                },
+            },
+            "required": ["command"],
+        },
+    },
 ]
 
 
@@ -256,12 +427,112 @@ TOOLS: list[dict[str, Any]] = [
 
 
 class AgentEvent(BaseModel):
-    """Event emitted by the agent loop for the caller to render."""
+    """Event emitted by the agent loop for the caller to render.
+
+    ``code`` carries a stable programmatic tag (e.g. ``carl.stream_error``,
+    ``carl.budget``) for error events and empty for everything else.
+    """
 
     kind: str  # "text", "tool_call", "tool_result", "done", "error"
     content: str = ""
     tool_name: str = ""
     tool_args: dict[str, Any] = Field(default_factory=dict)
+    code: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Arg schema validation
+# ---------------------------------------------------------------------------
+
+
+def _validate_tool_args(
+    tool_name: str,
+    tool_args: dict[str, Any],
+) -> str | None:
+    """Return None if args look valid; else a human-readable error string.
+
+    Uses jsonschema when available for a thorough check. Falls back to a
+    manual required-fields-and-type check when jsonschema is not installed.
+    """
+    schema = None
+    for tool in TOOLS:
+        if tool.get("name") == tool_name:
+            schema = tool.get("input_schema")
+            break
+    if schema is None:
+        return None  # unknown tool falls through to the dispatch fallback
+
+    try:
+        import jsonschema  # type: ignore[import-untyped]
+    except ImportError:
+        logger.debug("jsonschema not available; using manual validation for %s", tool_name)
+        return _manual_schema_check(tool_name, schema, tool_args)
+
+    try:
+        jsonschema.validate(instance=tool_args, schema=schema)
+    except jsonschema.ValidationError as exc:
+        # Path points to the offending field; keep the message model-friendly.
+        field_path = ".".join(str(p) for p in exc.absolute_path) or "<root>"
+        return (
+            f"Invalid arguments for '{tool_name}': at '{field_path}': {exc.message}. "
+            f"Re-send with corrected arguments."
+        )
+    except Exception as exc:  # pragma: no cover — defensive
+        return f"Schema validation error for '{tool_name}': {exc}"
+    return None
+
+
+def _manual_schema_check(
+    tool_name: str,
+    schema: dict[str, Any],
+    tool_args: dict[str, Any],
+) -> str | None:
+    """Minimal required-field + type validation when jsonschema is unavailable."""
+    if not isinstance(tool_args, dict):
+        return f"Invalid arguments for '{tool_name}': expected object, got {type(tool_args).__name__}."
+
+    required = schema.get("required", []) or []
+    missing = [f for f in required if f not in tool_args]
+    if missing:
+        return (
+            f"Invalid arguments for '{tool_name}': missing required fields "
+            f"{missing}. Re-send with all required fields."
+        )
+
+    properties: dict[str, Any] = schema.get("properties") or {}
+    type_map: dict[str, tuple[type, ...]] = {
+        "string": (str,),
+        "integer": (int,),
+        "number": (int, float),
+        "boolean": (bool,),
+        "array": (list, tuple),
+        "object": (dict,),
+    }
+    bad: list[str] = []
+    for fname, spec in properties.items():
+        if fname not in tool_args:
+            continue
+        expected = spec.get("type") if isinstance(spec, dict) else None
+        if expected is None:
+            continue
+        allowed = type_map.get(expected)
+        if allowed is None:
+            continue
+        value = tool_args[fname]
+        # bool is a subclass of int — keep the distinction.
+        if expected == "integer" and isinstance(value, bool):
+            bad.append(f"{fname}: expected integer, got boolean")
+        elif expected == "boolean" and not isinstance(value, bool):
+            bad.append(f"{fname}: expected boolean, got {type(value).__name__}")
+        elif not isinstance(value, allowed):
+            bad.append(f"{fname}: expected {expected}, got {type(value).__name__}")
+    if bad:
+        return (
+            f"Invalid arguments for '{tool_name}': "
+            + "; ".join(bad)
+            + ". Re-send with corrected types."
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +547,9 @@ class CARLAgent:
       - **Session persistence**: save/resume via SessionStore
       - **Permission hooks**: pre_tool_use callback can deny tool calls
       - **Cost tracking**: per-turn cost from response.usage, max_budget_usd cap
+      - **Streaming resilience**: partial state preserved on mid-stream errors
+      - **Tool timeouts**: per-tool deadlines; hook exceptions never kill loop
+      - **Arg validation**: malformed tool args become typed error results
     """
 
     def __init__(
@@ -350,6 +624,14 @@ class CARLAgent:
         # Session
         self._session_id = session_id
 
+        # Interaction chain — lazily constructed by dispatch_cli.
+        self._chain: Any | None = None
+
+        # Tier — resolved lazily from settings; FREE by default for safety.
+        # Use a distinct sentinel so a failed resolution doesn't re-run each call.
+        self._tier: Any | None = None
+        self._tier_resolved: bool = False
+
         # Project context (cached at construction)
         self._project_line = ""
         try:
@@ -360,6 +642,51 @@ class CARLAgent:
         except Exception:
             pass
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _get_chain(self) -> Any:
+        """Return the InteractionChain for this agent session, creating if needed."""
+        if self._chain is not None:
+            return self._chain
+        try:
+            from carl_core.interaction import InteractionChain
+
+            self._chain = InteractionChain()
+        except Exception:  # pragma: no cover — optional
+            self._chain = None
+        return self._chain
+
+    def _resolve_tier(self) -> Any:
+        """Resolve effective tier once, cached on the instance."""
+        if self._tier_resolved:
+            return self._tier
+        try:
+            from carl_core.tier import Tier
+
+            try:
+                from carl_studio.tier import detect_effective_tier
+                from carl_studio.settings import CARLSettings
+
+                settings = CARLSettings.load()
+                configured = getattr(settings, "tier", None)
+                if isinstance(configured, Tier):
+                    self._tier = detect_effective_tier(configured)
+                elif isinstance(configured, str):
+                    try:
+                        self._tier = detect_effective_tier(Tier(configured))
+                    except Exception:
+                        self._tier = Tier.FREE
+                else:
+                    self._tier = Tier.FREE
+            except Exception:
+                self._tier = Tier.FREE
+        except Exception:
+            self._tier = None
+        self._tier_resolved = True
+        return self._tier
+
     @property
     def provider_info(self) -> dict[str, str]:
         """Return provider resolution info for display."""
@@ -369,31 +696,82 @@ class CARLAgent:
             "api_key_source": self._api_key_source,
         }
 
+    # ------------------------------------------------------------------
+    # Chat loop
+    # ------------------------------------------------------------------
+
     def chat(self, user_input: str) -> Iterator[AgentEvent]:
         """Send message, handle tool calls, yield events.
 
         Uses streaming to prevent HTTP timeouts on long responses.
         Yields text_delta events for real-time token display.
-        Enforces max_budget_usd if set. Runs pre/post tool hooks.
+
+        Resilience contract:
+          * Streaming exceptions never propagate out — the generator always
+            completes. Mid-stream errors yield an ``error`` event with a
+            stable ``code`` attribute (e.g. ``carl.stream_error``), attribute
+            partial cost for consumed tokens, and persist emitted text so
+            session save captures what the user saw.
+          * A budget pre-check runs before every API call. When the upper-bound
+            estimate would push total cost above ``max_budget_usd``, a
+            ``BudgetError`` event is yielded and the API is not called.
+          * Hook exceptions (pre/post tool use) yield a ``carl.hook_failed``
+            error event and the loop continues.
         """
         self._messages.append({"role": "user", "content": user_input})
         self._turn_count += 1
 
         while True:
-            # Budget check before API call
-            if self._max_budget_usd > 0 and self._total_cost_usd >= self._max_budget_usd:
-                yield AgentEvent(
-                    kind="error",
-                    content=f"Budget exceeded: ${self._total_cost_usd:.4f} >= ${self._max_budget_usd:.2f}",
+            # ------- Budget pre-check (upper-bound ceiling) -----------------
+            if self._max_budget_usd > 0:
+                est = _estimate_turn_upper_bound_cost(
+                    self._model, _BUDGET_PRECHECK_MAX_OUTPUT_TOKENS,
                 )
-                return
+                projected = self._total_cost_usd + est
+                if projected > self._max_budget_usd:
+                    msg = (
+                        f"Budget pre-check blocked turn: projected "
+                        f"${projected:.4f} (current ${self._total_cost_usd:.4f} + "
+                        f"estimated ${est:.4f}) exceeds cap ${self._max_budget_usd:.4f}"
+                    )
+                    code = "carl.budget"
+                    # Best-effort carl_core.errors.BudgetError marker in logs.
+                    try:
+                        from carl_core.errors import BudgetError
+
+                        logger.warning(
+                            "BudgetError: %s",
+                            BudgetError(msg, context={
+                                "current": self._total_cost_usd,
+                                "estimated": est,
+                                "cap": self._max_budget_usd,
+                            }),
+                        )
+                    except Exception:  # pragma: no cover — carl_core optional
+                        pass
+                    yield AgentEvent(kind="error", content=msg, code=code)
+                    return
+                if self._total_cost_usd >= self._max_budget_usd:
+                    # Hard floor — we already spent the whole budget.
+                    yield AgentEvent(
+                        kind="error",
+                        content=(
+                            f"Budget exceeded: ${self._total_cost_usd:.4f} "
+                            f">= ${self._max_budget_usd:.2f}"
+                        ),
+                        code="carl.budget",
+                    )
+                    return
 
             system = self._build_system_prompt()
 
+            response: Any = None
+            partial_text_parts: list[str] = []
+            stream: Any = None
             try:
                 kwargs: dict[str, Any] = {
                     "model": self._model,
-                    "max_tokens": 64000,
+                    "max_tokens": _BUDGET_PRECHECK_MAX_OUTPUT_TOKENS,
                     "system": system,
                     "messages": self._messages,
                     "tools": TOOLS,
@@ -402,19 +780,78 @@ class CARLAgent:
                 if any(fam in self._model for fam in ("opus-4-6", "sonnet-4-6")):
                     kwargs["thinking"] = {"type": "adaptive"}
 
-                with self._client.messages.stream(**kwargs) as stream:
-                    for event in stream:
-                        if event.type == "content_block_delta":
-                            if event.delta.type == "text_delta":
-                                yield AgentEvent(
-                                    kind="text_delta", content=event.delta.text
-                                )
-                    response = stream.get_final_message()
-            except Exception as exc:
-                yield AgentEvent(kind="error", content=f"API error: {exc}")
+                try:
+                    stream_cm = self._client.messages.stream(**kwargs)
+                except Exception as exc:
+                    # API call could not even be issued.
+                    yield AgentEvent(
+                        kind="error",
+                        content=f"API error: {exc}",
+                        code="carl.api_error",
+                    )
+                    return
+
+                with stream_cm as stream:
+                    try:
+                        for event in stream:
+                            if event.type == "content_block_delta":
+                                if event.delta.type == "text_delta":
+                                    partial_text_parts.append(event.delta.text)
+                                    yield AgentEvent(
+                                        kind="text_delta",
+                                        content=event.delta.text,
+                                    )
+                    except (KeyboardInterrupt, BaseException) as exc:
+                        # Baseexception catches KeyboardInterrupt/SystemExit.
+                        # We still want to best-effort finalize + persist state.
+                        code = (
+                            "carl.interrupted"
+                            if isinstance(exc, KeyboardInterrupt)
+                            else "carl.stream_error"
+                        )
+                        response = self._safe_finalize_stream(stream)
+                        self._attribute_partial_cost(response, partial_text_parts)
+                        self._persist_partial_turn(response, partial_text_parts)
+                        yield AgentEvent(
+                            kind="error",
+                            content=f"Stream interrupted: {exc}",
+                            code=code,
+                        )
+                        return
+
+                    # Clean exit — collect the final message.
+                    try:
+                        response = stream.get_final_message()
+                    except Exception as exc:
+                        self._attribute_partial_cost(None, partial_text_parts)
+                        self._persist_partial_turn(None, partial_text_parts)
+                        yield AgentEvent(
+                            kind="error",
+                            content=f"Failed to finalize stream: {exc}",
+                            code="carl.stream_error",
+                        )
+                        return
+            except BaseException as exc:
+                # Catchall for exceptions while entering/exiting the ctx-mgr.
+                try:
+                    response = self._safe_finalize_stream(stream)
+                except Exception:
+                    response = None
+                self._attribute_partial_cost(response, partial_text_parts)
+                self._persist_partial_turn(response, partial_text_parts)
+                code = (
+                    "carl.interrupted"
+                    if isinstance(exc, KeyboardInterrupt)
+                    else "carl.stream_error"
+                )
+                yield AgentEvent(
+                    kind="error",
+                    content=f"Stream error: {exc}",
+                    code=code,
+                )
                 return
 
-            # Track cost
+            # Track cost (full accounting path on clean turns).
             usage = getattr(response, "usage", None)
             if usage is not None:
                 turn_cost = _compute_turn_cost(usage, self._model)
@@ -422,14 +859,17 @@ class CARLAgent:
                 self._total_input_tokens += getattr(usage, "input_tokens", 0) or 0
                 self._total_output_tokens += getattr(usage, "output_tokens", 0) or 0
 
-            self._token_count = getattr(usage, "input_tokens", self._token_count) if usage else self._token_count
+            self._token_count = (
+                getattr(usage, "input_tokens", self._token_count)
+                if usage else self._token_count
+            )
 
             # Context pressure
             if self._token_count > _COMPACT_THRESHOLD:
                 self._compact()
 
             # pause_turn: server-side tool iteration limit
-            if response.stop_reason == "pause_turn":
+            if getattr(response, "stop_reason", None) == "pause_turn":
                 self._messages = [
                     {"role": "user", "content": user_input},
                     {"role": "assistant", "content": self._content_to_dicts(response.content)},
@@ -440,12 +880,13 @@ class CARLAgent:
             assistant_content: list[dict[str, Any]] = []
             tool_use_blocks: list[Any] = []
 
-            for block in response.content:
-                if block.type == "text":
+            for block in getattr(response, "content", []) or []:
+                btype = getattr(block, "type", None)
+                if btype == "text":
                     assistant_content.append({"type": "text", "text": block.text})
-                elif block.type == "thinking":
+                elif btype == "thinking":
                     pass
-                elif block.type == "tool_use":
+                elif btype == "tool_use":
                     tool_input: dict[str, Any] = block.input if isinstance(block.input, dict) else {}
                     assistant_content.append({
                         "type": "tool_use",
@@ -472,37 +913,138 @@ class CARLAgent:
             for block in tool_use_blocks:
                 tool_input = block.input if isinstance(block.input, dict) else {}
 
-                # Pre-tool hook
+                # Pre-tool hook — never let an exception kill the loop.
+                permission: ToolPermission = ToolPermission.ALLOW
                 if self._pre_tool_use is not None:
-                    permission = self._pre_tool_use(block.name, tool_input)
-                    if permission == ToolPermission.DENY:
-                        result = f"Blocked by permission policy: {block.name}"
-                        yield AgentEvent(kind="tool_blocked", tool_name=block.name, content=result)
-                        tool_results.append({
-                            "type": "tool_result",
-                            "tool_use_id": block.id,
-                            "content": result,
-                            "is_error": True,
-                        })
-                        continue
+                    try:
+                        permission = self._pre_tool_use(block.name, tool_input)
+                    except Exception as exc:
+                        logger.warning(
+                            "pre_tool_use hook failed for %s: %s", block.name, exc,
+                        )
+                        yield AgentEvent(
+                            kind="error",
+                            content=f"pre_tool_use hook failed for {block.name}: {exc}",
+                            code="carl.hook_failed",
+                        )
+                        permission = ToolPermission.ALLOW
 
-                result = self._dispatch_tool(block.name, tool_input)
+                if permission == ToolPermission.DENY:
+                    result = f"Blocked by permission policy: {block.name}"
+                    yield AgentEvent(kind="tool_blocked", tool_name=block.name, content=result)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": result,
+                        "is_error": True,
+                    })
+                    continue
+
+                # Validate args against the tool schema.
+                schema_err = _validate_tool_args(block.name, tool_input)
+                if schema_err is not None:
+                    yield AgentEvent(
+                        kind="tool_result",
+                        tool_name=block.name,
+                        content=schema_err,
+                        code="carl.tool_schema",
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": schema_err,
+                        "is_error": True,
+                    })
+                    continue
+
+                # Dispatch — dispatch_tool already contains the timeout wrapper
+                # and its own failure -> is_error policy.
+                result, is_error = self._dispatch_tool_safe(block.name, tool_input)
                 yield AgentEvent(kind="tool_result", tool_name=block.name, content=result)
-                tool_results.append({
+                tool_result_entry: dict[str, Any] = {
                     "type": "tool_result",
                     "tool_use_id": block.id,
                     "content": result,
-                })
+                }
+                if is_error:
+                    tool_result_entry["is_error"] = True
+                tool_results.append(tool_result_entry)
 
-                # Post-tool hook
+                # Post-tool hook — isolated from loop lifetime.
                 if self._post_tool_use is not None:
-                    self._post_tool_use(block.name, tool_input, result)
+                    try:
+                        self._post_tool_use(block.name, tool_input, result)
+                    except Exception as exc:
+                        logger.warning(
+                            "post_tool_use hook failed for %s: %s", block.name, exc,
+                        )
+                        yield AgentEvent(
+                            kind="error",
+                            content=(
+                                f"post_tool_use hook failed for {block.name}: {exc}"
+                            ),
+                            code="carl.hook_failed",
+                        )
 
             self._messages.append({"role": "user", "content": tool_results})
 
-            if response.stop_reason == "end_turn":
+            if getattr(response, "stop_reason", None) == "end_turn":
                 yield AgentEvent(kind="done", content=f"${self._total_cost_usd:.4f}")
                 return
+
+    # ------------------------------------------------------------------
+    # Streaming helpers
+    # ------------------------------------------------------------------
+
+    def _safe_finalize_stream(self, stream: Any) -> Any:
+        """Best-effort ``get_final_message()`` on a stream that raised mid-iter."""
+        if stream is None:
+            return None
+        try:
+            return stream.get_final_message()
+        except Exception as exc:  # pragma: no cover — rare SDK path
+            logger.debug("get_final_message failed: %s", exc)
+            return None
+
+    def _attribute_partial_cost(self, response: Any, partial_text_parts: list[str]) -> None:
+        """Attribute whatever cost we can for the partial/failed turn."""
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            try:
+                cost = _compute_turn_cost(usage, self._model)
+                self._total_cost_usd += cost
+                self._total_input_tokens += getattr(usage, "input_tokens", 0) or 0
+                self._total_output_tokens += getattr(usage, "output_tokens", 0) or 0
+            except Exception as exc:
+                logger.debug("cost attribution failed: %s", exc)
+            return
+
+        # No usage from the SDK — charge for what we emitted to keep budget honest.
+        if partial_text_parts:
+            output_tokens_est = max(1, sum(len(p) for p in partial_text_parts) // 4)
+            _input_rate, output_rate = _MODEL_PRICING.get(self._model, _DEFAULT_PRICING)
+            self._total_cost_usd += output_tokens_est * output_rate / 1_000_000
+            self._total_output_tokens += output_tokens_est
+
+    def _persist_partial_turn(self, response: Any, partial_text_parts: list[str]) -> None:
+        """Append whatever the assistant emitted so session.save captures it."""
+        # Prefer the full SDK response if available.
+        if response is not None and getattr(response, "content", None):
+            try:
+                dicts = self._content_to_dicts(response.content)
+                if dicts:
+                    self._messages.append({"role": "assistant", "content": dicts})
+                    return
+            except Exception as exc:
+                logger.debug("persist partial: content_to_dicts failed: %s", exc)
+
+        # Fall back to reconstructed text from the delta stream.
+        text = "".join(partial_text_parts).strip()
+        if text:
+            self._messages.append({
+                "role": "assistant",
+                "content": [{"type": "text", "text": text}],
+            })
 
     # ------------------------------------------------------------------
     # System prompt
@@ -573,9 +1115,10 @@ class CARLAgent:
         """Convert SDK content blocks to dicts for message history."""
         result: list[dict[str, Any]] = []
         for block in content:
-            if getattr(block, "type", None) == "text":
+            btype = getattr(block, "type", None)
+            if btype == "text":
                 result.append({"type": "text", "text": block.text})
-            elif getattr(block, "type", None) == "tool_use":
+            elif btype == "tool_use":
                 result.append({
                     "type": "tool_use",
                     "id": block.id,
@@ -589,24 +1132,70 @@ class CARLAgent:
     # ------------------------------------------------------------------
 
     def _dispatch_tool(self, name: str, args: dict[str, Any]) -> str:
-        try:
-            if name == "ingest_source":
-                return self._tool_ingest(args.get("path", ""))
-            if name == "query_knowledge":
-                return self._tool_query(args.get("question", ""))
-            if name == "run_analysis":
-                return self._tool_run(args.get("code", ""))
-            if name == "create_file":
-                return self._tool_create(args.get("path", ""), args.get("content", ""))
-            if name == "read_file":
-                return self._tool_read(args.get("path", ""))
-            if name == "set_frame":
-                return self._tool_frame(args)
-            if name == "list_files":
-                return self._tool_list(args.get("path", "."), args.get("pattern", "*"))
-            return f"Unknown tool: {name}"
-        except Exception as exc:
-            return f"Error: {exc}"
+        """Public dispatch (back-compat).
+
+        Retained for tests and callers that don't need the ``is_error`` flag.
+        The return value is the raw tool output string; when a tool errors,
+        the string is prefixed with ``"Error:"`` or the tool's own error text.
+        """
+        result, _is_error = self._dispatch_tool_safe(name, args)
+        return result
+
+    def _dispatch_tool_safe(
+        self, name: str, args: dict[str, Any]
+    ) -> tuple[str, bool]:
+        """Run a tool with per-tool timeout + error handling.
+
+        Returns ``(content, is_error)`` so the caller can flag the API
+        ``tool_result`` as erroring so the model can self-correct.
+        """
+        timeout_s = _TOOL_TIMEOUTS_S.get(name, _DEFAULT_TOOL_TIMEOUT_S)
+
+        def _run() -> tuple[str, bool]:
+            try:
+                if name == "ingest_source":
+                    return self._tool_ingest(args.get("path", "")), False
+                if name == "query_knowledge":
+                    return self._tool_query(args.get("question", "")), False
+                if name == "run_analysis":
+                    return self._tool_run(args.get("code", "")), False
+                if name == "create_file":
+                    return self._tool_create(args.get("path", ""), args.get("content", "")), False
+                if name == "read_file":
+                    return self._tool_read(args.get("path", "")), False
+                if name == "set_frame":
+                    return self._tool_frame(args), False
+                if name == "list_files":
+                    return self._tool_list(args.get("path", "."), args.get("pattern", "*")), False
+                if name == "dispatch_cli":
+                    return self._tool_dispatch_cli(args)
+                return f"Unknown tool: {name}", True
+            except subprocess.TimeoutExpired:
+                return f"Tool {name} timed out after {timeout_s:.0f}s", True
+            except TimeoutError:
+                return f"Tool {name} timed out after {timeout_s:.0f}s", True
+            except Exception as exc:
+                return f"Error: {exc}", True
+
+        # Wrap synchronous tool invocation in a bounded worker so we can enforce
+        # a wall-clock timeout even for CPU-bound tools. subprocess-based tools
+        # (run_analysis) already have their own subprocess timeout, but this
+        # guards everything else uniformly.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_run)
+            try:
+                return future.result(timeout=timeout_s)
+            except concurrent.futures.TimeoutError:
+                # Cancel best-effort; the worker will continue running until
+                # it naturally returns, but its result is dropped.
+                future.cancel()
+                return f"Tool {name} timed out after {timeout_s:.0f}s", True
+            except Exception as exc:
+                return f"Error: {exc}", True
+
+    # ------------------------------------------------------------------
+    # Tool handlers
+    # ------------------------------------------------------------------
 
     def _tool_ingest(self, path: str) -> str:
         from carl_studio.learn.ingest import SourceIngester
@@ -645,10 +1234,12 @@ class CARLAgent:
         return "\n\n---\n\n".join(parts)
 
     def _tool_run(self, code: str) -> str:
+        # TimeoutExpired here bubbles up to _dispatch_tool_safe which maps it
+        # to a model-recoverable is_error tool_result. Do not swallow here.
         result = subprocess.run(
             ["python", "-c", code],
             capture_output=True,
-            timeout=30,
+            timeout=_TOOL_TIMEOUTS_S["run_analysis"],
             cwd=self._workdir,
             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
         )
@@ -660,11 +1251,20 @@ class CARLAgent:
 
     def _resolve_safe_path(self, path: str) -> Path | None:
         """Resolve path against workdir and reject traversal attempts."""
-        resolved = Path(path).resolve()
-        workdir = Path(self._workdir).resolve()
-        if resolved == workdir or str(resolved).startswith(str(workdir) + os.sep):
-            return resolved
-        return None
+        try:
+            from carl_core.safepath import PathEscape, safe_resolve
+
+            try:
+                return safe_resolve(path, self._workdir, follow_symlinks=True)
+            except PathEscape:
+                return None
+        except Exception:
+            # Fallback if carl_core is unavailable — keep legacy behavior.
+            resolved = Path(path).resolve()
+            workdir = Path(self._workdir).resolve()
+            if resolved == workdir or str(resolved).startswith(str(workdir) + os.sep):
+                return resolved
+            return None
 
     def _tool_create(self, path: str, content: str) -> str:
         p = self._resolve_safe_path(path)
@@ -719,6 +1319,143 @@ class CARLAgent:
             else:
                 lines.append(f"  {f.name}/")
         return "\n".join(lines)
+
+    def _tool_dispatch_cli(self, args: dict[str, Any]) -> tuple[str, bool]:
+        """Run a registered ``carl <command>`` subprocess.
+
+        Returns ``(serialized_output, is_error)``. Records a CLI_CMD step in
+        the agent's InteractionChain with the (redacted) args + exit code.
+        """
+        command = args.get("command", "")
+        subcommand_args = args.get("args", []) or []
+        timeout_s = int(args.get("timeout_s", 60) or 60)
+        if not isinstance(command, str) or not command.strip():
+            return self._cli_error("missing 'command' argument"), True
+        if not isinstance(subcommand_args, list):
+            return self._cli_error("'args' must be a list"), True
+        timeout_s = max(1, min(timeout_s, 600))
+
+        # Whitelist lookup.
+        try:
+            from carl_studio.cli.operations import OPERATIONS
+        except Exception as exc:
+            return self._cli_error(f"Ops registry unavailable: {exc}"), True
+
+        if command not in OPERATIONS:
+            allowed = ", ".join(sorted(OPERATIONS.keys()))
+            return self._cli_error(
+                f"Unknown carl command '{command}'. Allowed: {allowed}"
+            ), True
+
+        # Shell-metachar scan (pure string values only).
+        stringified: list[str] = []
+        for idx, value in enumerate(subcommand_args):
+            if not isinstance(value, str):
+                return self._cli_error(
+                    f"args[{idx}] is not a string (got {type(value).__name__})"
+                ), True
+            for meta in _FORBIDDEN_SHELL_METAS:
+                if meta in value:
+                    return self._cli_error(
+                        f"args[{idx}] contains forbidden metacharacter "
+                        f"{meta!r}"
+                    ), True
+            stringified.append(value)
+
+        # Tier gate — check whether the current tier permits this feature.
+        tier = self._resolve_tier()
+        if tier is not None:
+            try:
+                from carl_core.tier import feature_tier, tier_allows
+
+                required = feature_tier(command)
+                if not tier_allows(tier, command):
+                    msg = (
+                        f"Command '{command}' requires tier "
+                        f"{required.value!r}; current tier is {tier.value!r}."
+                    )
+                    chain = self._get_chain()
+                    if chain is not None:
+                        try:
+                            from carl_core.interaction import ActionType
+
+                            chain.record(
+                                ActionType.CLI_CMD,
+                                f"dispatch_cli:{command}",
+                                input={
+                                    "command": command,
+                                    "args": stringified,
+                                },
+                                output={"tier_block": tier.value, "required": required.value},
+                                success=False,
+                            )
+                        except Exception:
+                            pass
+                    return self._cli_error(msg, code="carl.permission"), True
+            except Exception:
+                # Tier module not available — do not gate.
+                pass
+
+        cmd = ["carl", command, *stringified]
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                cwd=self._workdir,
+                env=os.environ.copy(),
+            )
+        except subprocess.TimeoutExpired:
+            chain = self._get_chain()
+            if chain is not None:
+                try:
+                    from carl_core.interaction import ActionType
+
+                    chain.record(
+                        ActionType.CLI_CMD,
+                        f"dispatch_cli:{command}",
+                        input={"command": command, "args": stringified},
+                        output={"error": "timeout", "timeout_s": timeout_s},
+                        success=False,
+                    )
+                except Exception:
+                    pass
+            return self._cli_error(
+                f"carl {command} timed out after {timeout_s}s"
+            ), True
+        except FileNotFoundError:
+            return self._cli_error(
+                "'carl' binary not found on PATH — is carl-studio installed?"
+            ), True
+        except Exception as exc:
+            return self._cli_error(f"subprocess failed: {exc}"), True
+
+        stdout = (proc.stdout or "")[:6000]
+        stderr = (proc.stderr or "")[:2000]
+        exit_code = int(proc.returncode)
+        payload = {"stdout": stdout, "stderr": stderr, "exit_code": exit_code}
+
+        chain = self._get_chain()
+        if chain is not None:
+            try:
+                from carl_core.interaction import ActionType
+
+                chain.record(
+                    ActionType.CLI_CMD,
+                    f"dispatch_cli:{command}",
+                    input={"command": command, "args": stringified, "timeout_s": timeout_s},
+                    output={"exit_code": exit_code, "stdout_len": len(stdout), "stderr_len": len(stderr)},
+                    success=(exit_code == 0),
+                )
+            except Exception:
+                pass
+
+        return json.dumps(payload), exit_code != 0
+
+    def _cli_error(self, message: str, *, code: str = "carl.validation") -> str:
+        """Serialize a dispatch_cli error as JSON the model can parse."""
+        return json.dumps({"error": message, "code": code})
 
     # ------------------------------------------------------------------
     # Context compaction
@@ -806,9 +1543,12 @@ class CARLAgent:
 
         frame_data = state.get("frame")
         if frame_data:
-            from carl_studio.frame import WorkFrame
+            try:
+                from carl_studio.frame import WorkFrame
 
-            self._frame = WorkFrame.model_validate(frame_data)
+                self._frame = WorkFrame.model_validate(frame_data)
+            except Exception as exc:
+                logger.warning("Could not rebuild WorkFrame from session: %s", exc)
 
         return True
 

@@ -62,6 +62,9 @@ def _make_stub(
 
 app.command(name="init")(init_cmd)
 app.command(name="flow")(flow_cmd)
+# Also expose init/flow under `camp` so both `carl init` and `carl camp init` resolve.
+camp_app.command(name="init")(init_cmd)
+camp_app.command(name="flow")(flow_cmd)
 camp_app.command(name="login")(login)
 camp_app.command(name="logout")(logout)
 app.command(name="logout", hidden=True)(logout)
@@ -124,9 +127,9 @@ except ImportError:
 try:
     from .billing import account_status, billing_portal, subscription_status, upgrade
 
-    app.command(name="upgrade", hidden=True)(upgrade)
-    app.command(name="billing", hidden=True)(billing_portal)
-    app.command(name="subscription", hidden=True)(subscription_status)
+    # WS-D4: canonical paths are `carl camp account|upgrade|billing|subscription`.
+    # The hidden top-level aliases (carl upgrade / carl billing / carl subscription)
+    # were removed to end the duplicate registration.
     camp_app.command(name="account")(account_status)
     camp_app.command(name="upgrade")(upgrade)
     camp_app.command(name="billing")(billing_portal)

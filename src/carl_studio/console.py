@@ -117,6 +117,40 @@ class CampConsole:
         icon = self.theme.icons.fail
         self._console.print(f"  [{icon}] {message}", style="camp.warning")
 
+    def error_with_hint(
+        self,
+        title: str,
+        *,
+        detail: str | None = None,
+        hint: str | None = None,
+        signup_url: str | None = None,
+        code: str | None = None,
+    ) -> None:
+        """Render a structured error: title + optional detail + hint + URL + code.
+
+        ``title`` is always emitted as a bold error line; ``detail`` is a single
+        indented sentence explaining what happened; ``hint`` is a secondary
+        indented line (usually an install or signup instruction); ``signup_url``
+        is rendered as a clickable Rich link; ``code`` is a machine-readable
+        identifier rendered in the trailing ``muted`` style.
+        """
+        if not title or not title.strip():
+            raise ValueError("error_with_hint: title is required")
+
+        icon = self.theme.icons.fail
+        self._console.print(f"  [{icon}] {title}", style="camp.warning")
+        if detail:
+            self._console.print(f"      {detail}", style="camp.muted")
+        if hint:
+            self._console.print(f"      [camp.value]Hint:[/] {hint}", style="camp.key")
+        if signup_url:
+            self._console.print(
+                f"      [camp.value]URL:[/]  [link={signup_url}]{signup_url}[/link]",
+                style="camp.key",
+            )
+        if code:
+            self._console.print(f"      [camp.dim]({code})[/]", style="camp.muted")
+
     def gate(self, passed: bool, detail: str = "") -> None:
         """PASS/FAIL gate result."""
         if passed:

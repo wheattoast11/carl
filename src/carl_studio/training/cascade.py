@@ -11,10 +11,19 @@ The adaptive gate fires when:
 
 This replaces hardcoded thresholds with a self-calibrating gate that
 adapts to any model, dataset, and reward scale.
+
+Production hardening:
+  - WS-T3: every reward value flowing through wrap_reward is clamped via
+    ``_clamp_reward`` so NaN / inf / runaway magnitudes cannot poison the
+    optimizer.
+  - WS-T4: ``_compute_adaptive_threshold`` returns +inf BEFORE indexing into
+    an empty history (previously the indexing still ran when ``_gate_history``
+    was empty via other entry points).
 """
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Any, Callable
 
@@ -26,6 +35,21 @@ except Exception:
         """Fallback base when transformers is unavailable."""
 
         pass
+
+
+from carl_studio.training.rewards.multiscale import _clamp_reward
+
+
+logger = logging.getLogger(__name__)
+
+
+def _clamp_reward_scalar(v: float) -> float:
+    """Module-local alias exposing the shared clamp helper.
+
+    Kept as a named helper at this level so callers of the cascade module
+    (tests, downstream trainers) don't have to reach across package lines.
+    """
+    return _clamp_reward(v)
 
 
 class CascadeRewardManager:
@@ -70,12 +94,14 @@ class CascadeRewardManager:
             self._mode = "fixed"
             self.carl_start = carl_start
             self._gate_metric = None
+            self._gate_history = []
             self._gate_fired = False
             self._gate_fired_at = None
         else:
             self._mode = "fixed"
             self.carl_start = 50
             self._gate_metric = None
+            self._gate_history = []
             self._gate_fired = False
             self._gate_fired_at = None
 
@@ -83,11 +109,20 @@ class CascadeRewardManager:
         self._step: int = 0
 
     def _compute_adaptive_threshold(self) -> float:
-        """Compute threshold from running distribution at the configured percentile."""
+        """Compute threshold from running distribution at the configured percentile.
+
+        WS-T4: the empty-history guard runs BEFORE any indexing, and returns
+        ``+inf`` so callers short-circuit the gate-fire condition (``>= +inf``
+        is never satisfied for finite metrics).
+        """
         if not self._gate_history:
             return float("inf")
         sorted_vals = sorted(self._gate_history)
         idx = min(int(len(sorted_vals) * self._gate_percentile), len(sorted_vals) - 1)
+        # idx is already bounded to [0, len-1] by the min() above,
+        # but re-check in case the caller mutated history mid-call.
+        if idx < 0 or idx >= len(sorted_vals):
+            return float("inf")
         return sorted_vals[idx]
 
     def record_metric(self, value: float) -> None:
@@ -95,13 +130,19 @@ class CascadeRewardManager:
         if self._mode != "adaptive" or self._gate_fired:
             return
 
-        self._gate_history.append(value)
+        # WS-T3: clamp incoming metric so a NaN from a blown-up reward can't
+        # contaminate the gate's own distribution.
+        clamped = _clamp_reward_scalar(value)
+        self._gate_history.append(clamped)
 
         # Need minimum history before gating
         if len(self._gate_history) < self._gate_min_steps:
             return
 
         threshold = self._compute_adaptive_threshold()
+        if not math.isfinite(threshold):
+            # Empty/degenerate history — gate cannot fire yet.
+            return
 
         # Gate condition: metric >= adaptive threshold for min_above of last window steps
         # AND the threshold itself is nonzero (model is actually succeeding sometimes)
@@ -131,17 +172,45 @@ class CascadeRewardManager:
         reward_fn: Callable[..., list[float]],
         active_in_stages: set[str],
     ) -> Callable[..., list[float]]:
-        """Wrap a reward function with cascade staging and warmup scaling."""
+        """Wrap a reward function with cascade staging and warmup scaling.
+
+        Every reward value returned is passed through ``_clamp_reward`` so
+        that NaN/inf/runaway rewards produced by an upstream function cannot
+        propagate to the optimizer.
+        """
         manager = self
 
         def wrapped(completions: list, **kwargs: Any) -> list[float]:
             weight = manager.get_stage_weight(active_in_stages)
             if weight <= 0.0:
                 return [0.0] * len(completions)
-            raw = reward_fn(completions, **kwargs)
+            try:
+                raw = reward_fn(completions, **kwargs)
+            except Exception as exc:
+                # Isolate reward-function failures — training must not die
+                # because one reward raised. Log and return zeros.
+                logger.warning(
+                    "cascade: reward fn %s raised %s; substituting zeros",
+                    getattr(reward_fn, "__name__", repr(reward_fn)),
+                    exc,
+                )
+                return [0.0] * len(completions)
+
+            if not isinstance(raw, list):
+                logger.warning(
+                    "cascade: reward fn returned non-list (%s); coercing",
+                    type(raw).__name__,
+                )
+                try:
+                    raw = list(raw)
+                except TypeError:
+                    return [0.0] * len(completions)
+
+            # WS-T3: clamp every reward; apply warmup scaling on the clean value.
+            clamped = [_clamp_reward_scalar(r) for r in raw]
             if weight >= 1.0:
-                return raw
-            return [r * weight for r in raw]
+                return clamped
+            return [_clamp_reward_scalar(r * weight) for r in clamped]
 
         wrapped.__name__ = getattr(reward_fn, "__name__", "wrapped_reward")
 
@@ -161,7 +230,10 @@ class CascadeCallback(TrainerCallback):
         self.cascade = cascade_manager
 
     def on_step_begin(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
-        self.cascade._step = state.global_step
+        try:
+            self.cascade._step = state.global_step
+        except Exception as exc:
+            logger.warning("CascadeCallback.on_step_begin failed: %s", exc)
 
     def on_log(
         self,
@@ -171,11 +243,13 @@ class CascadeCallback(TrainerCallback):
         logs: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
-        if logs is not None:
+        try:
+            if logs is None:
+                return
             # Feed gate metric if adaptive gating is active
             if self.cascade._mode == "adaptive" and not self.cascade._gate_fired:
                 metric_key = self.cascade._gate_metric
-                if metric_key in logs:
+                if metric_key is not None and metric_key in logs:
                     self.cascade.record_metric(logs[metric_key])
 
             stage = self.cascade.get_stage()
@@ -183,5 +257,7 @@ class CascadeCallback(TrainerCallback):
             logs["cascade/step"] = state.global_step
             if self.cascade._gate_fired_at is not None:
                 logs["cascade/gate_fired_at"] = self.cascade._gate_fired_at
-            if hasattr(self.cascade, "_gate_history") and self.cascade._gate_history:
+            if getattr(self.cascade, "_gate_history", None):
                 logs["cascade/adaptive_threshold"] = self.cascade._compute_adaptive_threshold()
+        except Exception as exc:
+            logger.warning("CascadeCallback.on_log failed: %s", exc)

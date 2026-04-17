@@ -505,8 +505,12 @@ def sync_push_cmd(
 
     allowed, _, _ = check_tier("sync.cloud")
     if not allowed:
-        c.warn(tier_message("sync.cloud") or "Cloud sync requires CARL Paid.")
-        c.info("Upgrade: carl camp upgrade  or  https://carl.camp/pricing")
+        c.error_with_hint(
+            tier_message("sync.cloud") or "Cloud sync requires CARL Paid.",
+            hint="Upgrade with: carl camp upgrade",
+            signup_url="https://carl.camp/pricing",
+            code="tier:sync.cloud",
+        )
         raise typer.Exit(1)
     c.blank()
     c.header("CARL Sync", "Push")
@@ -540,8 +544,12 @@ def sync_pull_cmd(
 
     allowed, _, _ = check_tier("sync.cloud")
     if not allowed:
-        c.warn(tier_message("sync.cloud") or "Cloud sync requires CARL Paid.")
-        c.info("Upgrade: carl camp upgrade  or  https://carl.camp/pricing")
+        c.error_with_hint(
+            tier_message("sync.cloud") or "Cloud sync requires CARL Paid.",
+            hint="Upgrade with: carl camp upgrade",
+            signup_url="https://carl.camp/pricing",
+            code="tier:sync.cloud",
+        )
         raise typer.Exit(1)
     c.blank()
     c.header("CARL Sync", "Pull")

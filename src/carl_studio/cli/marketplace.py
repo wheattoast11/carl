@@ -235,10 +235,12 @@ def publish_cmd(
     # Tier gate: publishing requires PAID
     allowed, effective, _required = check_tier("marketplace.publish")
     if not allowed:
-        c.error(
-            f"Publishing requires CARL Paid. "
-            f"Current tier: {effective.value}. "
-            f"Upgrade at https://carl.camp/pricing"
+        c.error_with_hint(
+            "Publishing requires CARL Paid.",
+            detail=f"Current tier: {effective.value}.",
+            hint="Upgrade with: carl camp upgrade",
+            signup_url="https://carl.camp/pricing",
+            code="tier:marketplace.publish",
         )
         raise typer.Exit(1)
 

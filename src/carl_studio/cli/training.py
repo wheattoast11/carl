@@ -416,6 +416,18 @@ def train(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what --send-it would do without executing"
     ),
+    skip_credits: bool = typer.Option(
+        False,
+        "--skip-credits",
+        help="Skip credit pre-deduction (BYOK / dev mode). Required when the "
+        "credits subsystem is unavailable or unreachable.",
+    ),
+    resume_from_checkpoint: str | None = typer.Option(
+        None,
+        "--resume-from-checkpoint",
+        help="Resume training from a checkpoint directory. Use 'auto' to pick the "
+        "newest checkpoint in output_dir, or provide an explicit path.",
+    ),
 ) -> None:
     """Start a CARL training run. Use --send-it for full autonomous pipeline."""
     import yaml
@@ -470,15 +482,29 @@ def train(
 
             allowed, _, _ = check_tier("train.send_it")
             if not allowed:
-                c.warn(tier_message("train.send_it") or "--send-it requires CARL Paid.")
-                c.info("Upgrade: carl camp upgrade  or  https://carl.camp/pricing")
+                c.error_with_hint(
+                    tier_message("train.send_it") or "--send-it requires CARL Paid.",
+                    hint="Upgrade with: carl camp upgrade",
+                    signup_url="https://carl.camp/pricing",
+                    code="tier:train.send_it",
+                )
                 raise typer.Exit(1)
         from carl_studio.training.pipeline import SendItPipeline
 
         c.banner(f"v{__version__}")
         c.voice("send_it")
 
-        pipeline = SendItPipeline(training_config, on_event=lambda e: _render_pipeline_event(c, e))
+        # Resolve resume-from-checkpoint arg for the pipeline stages.
+        resume_arg: bool | str | None = None
+        if resume_from_checkpoint is not None:
+            resume_arg = True if resume_from_checkpoint == "auto" else resume_from_checkpoint
+
+        pipeline = SendItPipeline(
+            training_config,
+            on_event=lambda e: _render_pipeline_event(c, e),
+            skip_credits=skip_credits,
+            resume_from_checkpoint=resume_arg,
+        )
 
         if dry_run:
             plan = pipeline.plan()
@@ -545,12 +571,28 @@ def train(
         _render_extra_install_hint(c, "training", "Training dependencies are not installed.", exc)
         raise typer.Exit(1)
 
-    trainer = CARLTrainer(training_config)
+    # Resolve resume-from-checkpoint arg for the trainer.
+    resume_arg: bool | str | None = None
+    if resume_from_checkpoint is not None:
+        resume_arg = True if resume_from_checkpoint == "auto" else resume_from_checkpoint
+
+    trainer = CARLTrainer(
+        training_config,
+        skip_credits=skip_credits,
+        resume_from_checkpoint=resume_arg,
+    )
     try:
         run = anyio.run(trainer.train)
     except ImportError as exc:
         _render_extra_install_hint(c, "training", "Training dependencies are not installed.", exc)
         raise typer.Exit(1)
+    except Exception as exc:
+        from carl_core.errors import CARLError
+
+        if isinstance(exc, CARLError):
+            c.error(f"{exc.code}: {exc}")
+            raise typer.Exit(1)
+        raise
 
     try:
         _persist_training_run(training_config, run, mode=f"train:{training_config.method.value}")

@@ -54,13 +54,14 @@ class TestToolSchemas:
             assert tool["input_schema"]["type"] == "object"
 
     def test_tool_count(self) -> None:
-        assert len(TOOLS) == 7
+        assert len(TOOLS) == 8
 
     def test_tool_names(self) -> None:
         names = {t["name"] for t in TOOLS}
         expected = {
             "ingest_source", "query_knowledge", "run_analysis",
             "create_file", "read_file", "set_frame", "list_files",
+            "dispatch_cli",
         }
         assert names == expected
 

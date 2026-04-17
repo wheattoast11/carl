@@ -19,6 +19,8 @@ import re
 import uuid
 from typing import Any, Optional
 
+from carl_core.retry import RetryPolicy
+
 from carl_studio.types.config import ComputeTarget, TrainingConfig, TrainingMethod
 from carl_studio.types.run import RunPhase, TrainingRun
 
@@ -26,6 +28,8 @@ logger = logging.getLogger(__name__)
 
 
 TRAINING_EXTRA_HINT = "Install training dependencies with: pip install 'carl-studio[training]'"
+
+CARL_CHECKPOINT_FILE = ".carl_checkpoint.pt"
 
 
 # ---------------------------------------------------------------------------
@@ -61,8 +65,16 @@ class CARLTrainer:
         print(run.id, run.phase, run.hub_job_id)
     """
 
-    def __init__(self, config: TrainingConfig) -> None:
+    def __init__(
+        self,
+        config: TrainingConfig,
+        *,
+        skip_credits: bool = False,
+        resume_from_checkpoint: bool | str | None = None,
+    ) -> None:
         self.config = config
+        self.skip_credits = bool(skip_credits)
+        self.resume_from_checkpoint = resume_from_checkpoint
         self.run = TrainingRun(
             id=uuid.uuid4().hex[:12],
             config=config,
@@ -98,48 +110,165 @@ class CARLTrainer:
             logger.error("Training failed: %s", exc, exc_info=True)
             return self.run
 
-    async def watch(self, poll_interval: float = 60.0) -> TrainingRun:
+    async def watch(
+        self,
+        poll_interval: float = 60.0,
+        *,
+        max_consecutive_failures: int = 5,
+        poll_interval_s: float | None = None,
+        timeout_s: float | None = None,
+    ) -> TrainingRun:
         """Monitor a submitted job until completion. Returns final state.
 
-        The watch loop embodies the gate pattern:
-          observe (poll status) → measure (check metrics) → gate (completion?) → act (report/chain)
+        Status checks are retried with exponential backoff via
+        carl_core.retry. After ``max_consecutive_failures`` consecutive
+        retry-exhausted failures, aborts with CARLError(code="carl.watch_exhausted").
         """
         if not self.run.hub_job_id:
             raise ValueError("No job to watch — call train() first")
 
+        interval = float(poll_interval_s) if poll_interval_s is not None else float(poll_interval)
+        if interval <= 0:
+            raise ValueError(f"poll interval must be > 0, got {interval}")
+        if max_consecutive_failures < 1:
+            raise ValueError(
+                f"max_consecutive_failures must be >= 1, got {max_consecutive_failures}"
+            )
+
+        if timeout_s is None:
+            try:
+                timeout_s = float(self._parse_timeout(self.config.timeout))
+            except Exception:
+                timeout_s = 86400.0
+        if timeout_s <= 0:
+            raise ValueError(f"timeout_s must be > 0, got {timeout_s}")
+
         from carl_studio.compute import get_backend
 
         backend = get_backend(_REMOTE_BACKEND)
+        self.run.phase = RunPhase.TRAINING
+        logger.info(
+            "Watching job: %s (interval=%.1fs, timeout=%.0fs, max_failures=%d)",
+            self.run.hub_job_id,
+            interval,
+            timeout_s,
+            max_consecutive_failures,
+        )
+
+        return await self._watch_loop(
+            backend=backend,
+            interval_s=interval,
+            timeout_s=timeout_s,
+            max_consecutive_failures=max_consecutive_failures,
+        )
+
+    async def _watch_loop(
+        self,
+        *,
+        backend: Any,
+        interval_s: float,
+        timeout_s: float,
+        max_consecutive_failures: int,
+    ) -> TrainingRun:
+        """Inner watch loop — retry + backoff + consecutive-failure abort."""
         import asyncio
 
-        self.run.phase = RunPhase.TRAINING
-        logger.info("Watching job: %s", self.run.hub_job_id)
+        from carl_core.errors import CARLError, CARLTimeoutError, NetworkError
+        from carl_core.retry import async_retry
+
+        policy = RetryPolicy(
+            max_attempts=3,
+            backoff_base=2.0,
+            max_delay=30.0,
+            retryable=(NetworkError, IOError, ConnectionError, TimeoutError),
+        )
+
+        consecutive_failures = 0
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout_s
 
         while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise CARLTimeoutError(
+                    f"watch timed out after {timeout_s:.0f}s",
+                    context={
+                        "job_id": self.run.hub_job_id,
+                        "timeout_s": timeout_s,
+                        "interval_s": interval_s,
+                    },
+                )
+
+            async def _check() -> str:
+                return await backend.status(self.run.hub_job_id)
+
             try:
-                status = await backend.status(self.run.hub_job_id)
+                status = await async_retry(_check, policy=policy)
+            except policy.retryable as exc:
+                consecutive_failures += 1
+                logger.warning(
+                    "Status check failed (%d/%d consecutive): %s",
+                    consecutive_failures,
+                    max_consecutive_failures,
+                    exc,
+                )
+                if consecutive_failures >= max_consecutive_failures:
+                    raise CARLError(
+                        f"watch exhausted after {consecutive_failures} consecutive failures",
+                        code="carl.watch_exhausted",
+                        context={
+                            "job_id": self.run.hub_job_id,
+                            "consecutive_failures": consecutive_failures,
+                            "last_error_type": type(exc).__name__,
+                            "last_error_message": str(exc),
+                        },
+                        cause=exc,
+                    ) from exc
+                await asyncio.sleep(min(interval_s, max(0.0, deadline - loop.time())))
+                continue
+            except CARLError:
+                raise
             except Exception as exc:
-                logger.warning("Status check failed: %s", exc)
-                await asyncio.sleep(poll_interval)
+                consecutive_failures += 1
+                logger.warning(
+                    "Status check raised non-retryable (%d/%d consecutive): %s",
+                    consecutive_failures,
+                    max_consecutive_failures,
+                    exc,
+                )
+                if consecutive_failures >= max_consecutive_failures:
+                    raise CARLError(
+                        f"watch exhausted after {consecutive_failures} consecutive failures",
+                        code="carl.watch_exhausted",
+                        context={
+                            "job_id": self.run.hub_job_id,
+                            "consecutive_failures": consecutive_failures,
+                            "last_error_type": type(exc).__name__,
+                            "last_error_message": str(exc),
+                        },
+                        cause=exc,
+                    ) from exc
+                await asyncio.sleep(min(interval_s, max(0.0, deadline - loop.time())))
                 continue
 
-            # Normalize to lowercase for comparison (protocol returns lowercase)
-            status_lower = status.lower()
+            consecutive_failures = 0
+
+            status_lower = (status or "").lower()
             if status_lower == "completed":
                 self.run.phase = RunPhase.COMPLETE
                 logger.info("Job completed: %s", self.run.hub_job_id)
                 return self.run
-            elif status_lower in ("error", "failed"):
+            if status_lower in ("error", "failed"):
                 self.run.phase = RunPhase.FAILED
                 self.run.error_message = f"Remote job failed: {status}"
                 logger.error("Job failed: %s", self.run.hub_job_id)
                 return self.run
-            elif status_lower == "canceled":
+            if status_lower == "canceled":
                 self.run.phase = RunPhase.FAILED
                 self.run.error_message = "Job canceled"
                 return self.run
 
-            await asyncio.sleep(poll_interval)
+            await asyncio.sleep(min(interval_s, max(0.0, deadline - loop.time())))
 
     async def train_and_watch(self, poll_interval: float = 60.0) -> TrainingRun:
         """Submit job and monitor until completion. The full lifecycle."""
@@ -179,119 +308,231 @@ class CARLTrainer:
             self.config.method.value,
         )
 
-        _deducted_amount, _credit_jwt, _credit_supabase_url = (
-            self._try_prededuct_credits()
-        )
+        deducted_amount, credit_jwt, credit_supabase_url = self._prededuct_credits()
+        submitted = False
 
-        # Generate self-contained script
-        bundler = Bundler()
         try:
+            bundler = Bundler()
             script = bundler.generate(self.config)
-        except Exception:
-            self._refund_credits(
-                _credit_jwt, _credit_supabase_url, _deducted_amount
-            )
-            raise
 
-        # Resolve backend + hardware flavor
-        backend = get_backend(_REMOTE_BACKEND)
-        flavor = _COMPUTE_TO_FLAVOR.get(self.config.compute_target)
-        if flavor is None:
-            self._refund_credits(
-                _credit_jwt, _credit_supabase_url, _deducted_amount
-            )
-            raise ValueError(
-                f"No hardware flavor mapping for compute target: {self.config.compute_target}"
-            )
+            backend = get_backend(_REMOTE_BACKEND)
+            flavor = _COMPUTE_TO_FLAVOR.get(self.config.compute_target)
+            if flavor is None:
+                raise ValueError(
+                    f"No hardware flavor mapping for compute target: {self.config.compute_target}"
+                )
 
-        timeout_seconds = self._parse_timeout(self.config.timeout)
+            timeout_seconds = self._parse_timeout(self.config.timeout)
 
-        # Provision + execute
-        try:
             await backend.provision(hardware=flavor, timeout=timeout_seconds)
             job_id = await backend.execute(
                 script=script,
                 flavor=flavor,
                 timeout=self.config.timeout,
-                secrets={"HF_TOKEN": "HF_TOKEN"},  # resolved by backend from env
+                secrets={"HF_TOKEN": "HF_TOKEN"},
             )
-        except Exception:
-            self._refund_credits(
-                _credit_jwt, _credit_supabase_url, _deducted_amount
-            )
+            submitted = True
+
+            self.run.hub_job_id = job_id
+            self.run.phase = RunPhase.TRAINING
+            logger.info("Remote job submitted: %s", job_id)
+            return self.run
+        except BaseException:
+            if not submitted:
+                self._refund_credits(
+                    credit_jwt,
+                    credit_supabase_url,
+                    deducted_amount,
+                    reason="job_failed_pre_submit",
+                )
+            else:
+                self._refund_credits(
+                    credit_jwt,
+                    credit_supabase_url,
+                    deducted_amount,
+                    reason="job_failed_post_submit",
+                )
             raise
 
-        self.run.hub_job_id = job_id
-        self.run.phase = RunPhase.TRAINING
-        logger.info("Remote job submitted: %s", job_id)
-        return self.run
+    def _prededuct_credits(self) -> tuple[int, str | None, str | None]:
+        """Synchronous credit pre-deduction for managed compute.
 
-    def _try_prededuct_credits(self) -> tuple[int, str | None, str | None]:
-        """Best-effort credit pre-deduction for managed compute.
-
-        Returns (deducted_amount, jwt, supabase_url).  All three are zero/None
-        when no deduction occurred (missing deps, no JWT, BYOK, etc.).
+        Returns (deducted_amount, jwt, supabase_url). Raises
+        CARLError(code="carl.credits_failed") when a deduction was required
+        but failed — unless ``skip_credits`` was set on the trainer, in which
+        case a warning is logged and (0, None, None) is returned.
         """
+        from carl_core.errors import CARLError
+
         try:
             from carl_studio.camp import (
                 DEFAULT_CARL_CAMP_SUPABASE_URL,
                 load_camp_session,
             )
-
-            session = load_camp_session()
-            jwt = session.jwt
-            if not jwt:
+        except ImportError as exc:
+            if self.skip_credits:
+                logger.info("Credits module unavailable; --skip-credits honored")
                 return 0, None, None
+            raise CARLError(
+                "credits module unavailable — install carl-studio[camp] or pass skip_credits=True",
+                code="carl.credits_failed",
+                context={"run_id": self.run.id},
+                cause=exc,
+            ) from exc
 
+        try:
+            session = load_camp_session()
+        except Exception as exc:
+            if self.skip_credits:
+                logger.warning("camp session unavailable; --skip-credits honored: %s", exc)
+                return 0, None, None
+            raise CARLError(
+                "failed to load camp session for credit deduction",
+                code="carl.credits_failed",
+                context={"run_id": self.run.id},
+                cause=exc,
+            ) from exc
+
+        jwt = session.jwt
+        if not jwt:
+            logger.debug("No camp JWT; skipping credit pre-deduction (BYOK mode)")
+            return 0, None, None
+
+        try:
             from carl_studio.credits.balance import deduct_credits
             from carl_studio.credits.estimate import (
                 METHOD_STEP_SECONDS,
                 estimate_job_cost,
             )
+        except ImportError as exc:
+            if self.skip_credits:
+                logger.info("Credits submodule unavailable; --skip-credits honored")
+                return 0, None, None
+            raise CARLError(
+                "credits submodule unavailable — install carl-studio[camp]",
+                code="carl.credits_failed",
+                context={"run_id": self.run.id},
+                cause=exc,
+            ) from exc
 
-            supabase_url = session.supabase_url or DEFAULT_CARL_CAMP_SUPABASE_URL
-            per_step = METHOD_STEP_SECONDS.get(self.config.method.value, 20.0)
+        supabase_url = session.supabase_url or DEFAULT_CARL_CAMP_SUPABASE_URL
+        per_step = METHOD_STEP_SECONDS.get(self.config.method.value, 20.0)
+        try:
             estimate = estimate_job_cost(
                 hardware=self.config.compute_target.value,
                 max_steps=self.config.max_steps or 1000,
                 per_step_seconds=per_step,
             )
-            if estimate.total_with_buffer > 0:
-                deduct_credits(
-                    jwt,
-                    supabase_url,
-                    estimate.total_with_buffer,
-                    self.run.id,
-                    "training_job",
-                )
-                logger.info(
-                    "Pre-deducted %d credits for run %s",
-                    estimate.total_with_buffer,
-                    self.run.id,
-                )
-                return estimate.total_with_buffer, jwt, supabase_url
-        except ImportError:
-            pass  # credits module not installed
         except Exception as exc:
-            logger.warning("Credit pre-deduction skipped: %s", exc)
-        return 0, None, None
+            if self.skip_credits:
+                logger.warning("cost estimate failed; --skip-credits honored: %s", exc)
+                return 0, None, None
+            raise CARLError(
+                "failed to estimate credit cost",
+                code="carl.credits_failed",
+                context={
+                    "run_id": self.run.id,
+                    "hardware": self.config.compute_target.value,
+                    "max_steps": self.config.max_steps,
+                },
+                cause=exc,
+            ) from exc
+
+        if estimate.total_with_buffer <= 0:
+            logger.debug("Credit estimate is zero; no deduction needed")
+            return 0, None, None
+
+        try:
+            ok = deduct_credits(
+                jwt,
+                supabase_url,
+                estimate.total_with_buffer,
+                self.run.id,
+                "training_job",
+            )
+        except Exception as exc:
+            if self.skip_credits:
+                logger.warning(
+                    "credit deduction failed but --skip-credits is set; proceeding: %s",
+                    exc,
+                )
+                return 0, None, None
+            raise CARLError(
+                f"credit pre-deduction failed: {exc}",
+                code="carl.credits_failed",
+                context={
+                    "run_id": self.run.id,
+                    "amount": estimate.total_with_buffer,
+                    "hardware": self.config.compute_target.value,
+                },
+                cause=exc,
+            ) from exc
+
+        if not ok:
+            if self.skip_credits:
+                logger.warning("credit deduction returned False; --skip-credits honored")
+                return 0, None, None
+            raise CARLError(
+                "credit pre-deduction rejected by server",
+                code="carl.credits_failed",
+                context={
+                    "run_id": self.run.id,
+                    "amount": estimate.total_with_buffer,
+                },
+            )
+
+        logger.info(
+            "Pre-deducted %d credits for run %s",
+            estimate.total_with_buffer,
+            self.run.id,
+        )
+        return estimate.total_with_buffer, jwt, supabase_url
+
+    def _try_prededuct_credits(self) -> tuple[int, str | None, str | None]:
+        """Deprecated — use _prededuct_credits. Kept for API stability."""
+        return self._prededuct_credits()
 
     def _refund_credits(
         self,
         jwt: str | None,
         supabase_url: str | None,
         amount: int,
+        *,
+        reason: str = "job_failed",
     ) -> None:
-        """Best-effort refund when a job fails before actually running."""
+        """Best-effort refund. Safe to call with zero/None inputs (no-op).
+
+        Refund failures are logged but never raised — we do not want to
+        mask the original exception that triggered the refund.
+        """
         if amount <= 0 or not jwt or not supabase_url:
             return
         try:
             from carl_studio.credits.balance import refund_credits
 
-            refund_credits(jwt, supabase_url, amount, self.run.id, "job_failed")
-            logger.info("Refunded %d credits for run %s", amount, self.run.id)
+            refund_credits(jwt, supabase_url, amount, self.run.id, reason)
+            logger.info(
+                "Refunded %d credits for run %s (reason=%s)",
+                amount,
+                self.run.id,
+                reason,
+            )
         except Exception as exc:
-            logger.warning("Credit refund failed for run %s: %s", self.run.id, exc)
+            logger.warning(
+                "Credit refund failed for run %s (reason=%s): %s",
+                self.run.id,
+                reason,
+                exc,
+            )
+
+    def _try_refund_credits(
+        self,
+        jwt: str | None,
+        supabase_url: str | None,
+        amount: int,
+    ) -> None:
+        """Deprecated alias — use _refund_credits."""
+        self._refund_credits(jwt, supabase_url, amount)
 
     # ------------------------------------------------------------------
     # Local mode
@@ -420,6 +661,143 @@ class CARLTrainer:
             gen_config.do_sample = True
 
     # ------------------------------------------------------------------
+    # Checkpoint helpers (WS-T1)
+    # ------------------------------------------------------------------
+
+    def _resolve_resume_arg(self, output_dir: str) -> bool | str | None:
+        """Resolve the resume_from_checkpoint argument for trainer.train()."""
+        if self.resume_from_checkpoint in (False, None):
+            return None
+        return self.resume_from_checkpoint
+
+    def _announce_existing_checkpoint(self, output_dir: str) -> None:
+        """Log a warning if a previous crash-checkpoint exists."""
+        try:
+            from pathlib import Path
+
+            ckpt_path = Path(output_dir) / CARL_CHECKPOINT_FILE
+            if not ckpt_path.exists():
+                return
+        except Exception:
+            return
+
+        try:
+            import torch
+
+            payload = torch.load(str(ckpt_path), map_location="cpu", weights_only=False)
+        except Exception as exc:
+            logger.warning(
+                "Found existing %s but could not parse: %s",
+                CARL_CHECKPOINT_FILE,
+                exc,
+            )
+            return
+
+        step = payload.get("step") if isinstance(payload, dict) else None
+        exc_type = payload.get("exception_type") if isinstance(payload, dict) else None
+        exc_msg = payload.get("exception_message") if isinstance(payload, dict) else None
+        saved_at = payload.get("saved_at") if isinstance(payload, dict) else None
+        logger.warning(
+            "Prior crash-checkpoint found in %s: step=%s exception=%s msg=%r saved_at=%s "
+            "— pass --resume-from-checkpoint to resume, or delete the file to start fresh.",
+            output_dir,
+            step,
+            exc_type,
+            exc_msg,
+            saved_at,
+        )
+
+    @staticmethod
+    def _save_carl_checkpoint(trainer: Any, output_dir: str, exc: BaseException) -> None:
+        """Persist a crash-checkpoint beside the HF Trainer checkpoints.
+
+        Writes ``output_dir/.carl_checkpoint.pt`` with step, optimizer and
+        scheduler state dicts, RNG states, recent metrics, exception_type,
+        exception_message, saved_at.
+
+        Guarantee: any failure inside this function is logged but NEVER
+        raised — masking the caller's original exception would be worse
+        than losing the crash-state snapshot.
+        """
+        try:
+            import random as _random
+            from datetime import datetime, timezone
+            from pathlib import Path
+
+            import torch
+
+            out_dir = Path(output_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            ckpt_path = out_dir / CARL_CHECKPOINT_FILE
+
+            step: int | None = None
+            metrics: list[Any] = []
+            state = getattr(trainer, "state", None)
+            if state is not None:
+                step = getattr(state, "global_step", None)
+                log_history = getattr(state, "log_history", None)
+                if isinstance(log_history, list):
+                    metrics = list(log_history[-50:])
+
+            optimizer_state = None
+            try:
+                opt = getattr(trainer, "optimizer", None)
+                if opt is not None and hasattr(opt, "state_dict"):
+                    optimizer_state = opt.state_dict()
+            except Exception as opt_exc:
+                logger.warning("Failed to snapshot optimizer state: %s", opt_exc)
+
+            scheduler_state = None
+            try:
+                sched = getattr(trainer, "lr_scheduler", None)
+                if sched is not None and hasattr(sched, "state_dict"):
+                    scheduler_state = sched.state_dict()
+            except Exception as sched_exc:
+                logger.warning("Failed to snapshot scheduler state: %s", sched_exc)
+
+            rng_state: dict[str, Any] = {}
+            try:
+                rng_state["torch"] = torch.get_rng_state()
+            except Exception as rng_exc:
+                logger.debug("Could not capture torch RNG state: %s", rng_exc)
+            try:
+                rng_state["python"] = _random.getstate()
+            except Exception as rng_exc:
+                logger.debug("Could not capture python RNG state: %s", rng_exc)
+            try:
+                import numpy as _np
+
+                rng_state["numpy"] = _np.random.get_state()
+            except Exception as rng_exc:
+                logger.debug("Could not capture numpy RNG state: %s", rng_exc)
+
+            payload = {
+                "step": step,
+                "optimizer_state_dict": optimizer_state,
+                "scheduler_state_dict": scheduler_state,
+                "rng_state": rng_state,
+                "metrics": metrics,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc),
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+            }
+
+            torch.save(payload, str(ckpt_path))
+            logger.warning(
+                "Crash-checkpoint saved: %s (step=%s exception=%s)",
+                ckpt_path,
+                step,
+                type(exc).__name__,
+            )
+        except Exception as save_exc:
+            logger.error(
+                "Failed to save crash-checkpoint to %s: %s",
+                output_dir,
+                save_exc,
+                exc_info=True,
+            )
+
+    # ------------------------------------------------------------------
     # SFT training
     # ------------------------------------------------------------------
 
@@ -450,8 +828,11 @@ class CARLTrainer:
             task_type="CAUSAL_LM",
         )
 
+        output_dir = f"carl-sft-{self.run.id}"
+        self._announce_existing_checkpoint(output_dir)
+
         training_args = SFTConfig(
-            output_dir=f"carl-sft-{self.run.id}",
+            output_dir=output_dir,
             push_to_hub=cfg.push_to_hub,
             hub_model_id=cfg.output_repo,
             hub_strategy=cfg.hub_strategy,
@@ -489,7 +870,15 @@ class CARLTrainer:
             peft_config=peft_config,
         )
 
-        trainer.train()
+        resume = self._resolve_resume_arg(output_dir)
+        try:
+            if resume is None:
+                trainer.train()
+            else:
+                trainer.train(resume_from_checkpoint=resume)
+        except (Exception, KeyboardInterrupt) as exc:
+            self._save_carl_checkpoint(trainer, output_dir, exc)
+            raise
 
         if cfg.push_to_hub:
             self.run.phase = RunPhase.PUSHING
@@ -542,8 +931,11 @@ class CARLTrainer:
             task_type="CAUSAL_LM",
         )
 
+        output_dir = f"carl-grpo-{self.run.id}"
+        self._announce_existing_checkpoint(output_dir)
+
         training_args = GRPOConfig(
-            output_dir=f"carl-grpo-{self.run.id}",
+            output_dir=output_dir,
             push_to_hub=cfg.push_to_hub,
             hub_model_id=cfg.output_repo,
             hub_strategy=cfg.hub_strategy,
@@ -585,7 +977,15 @@ class CARLTrainer:
             callbacks=callbacks,
         )
 
-        trainer.train()
+        resume = self._resolve_resume_arg(output_dir)
+        try:
+            if resume is None:
+                trainer.train()
+            else:
+                trainer.train(resume_from_checkpoint=resume)
+        except (Exception, KeyboardInterrupt) as exc:
+            self._save_carl_checkpoint(trainer, output_dir, exc)
+            raise
 
         if cfg.push_to_hub:
             self.run.phase = RunPhase.PUSHING

@@ -155,13 +155,16 @@ def require(
         _record(chain, key_name, resolved="config", success=True, started=started)
         return val
 
-    # 3. Inline prompt
+    # 3. Inline prompt — use the unified error_with_hint formatter so credential
+    # prompts look structurally identical to tier/install errors across the CLI.
     c.blank()
-    c.warn(f"{key_name} needed for this step.")
-    if resolved_hint:
-        c.info(f"  {resolved_hint}")
-    if resolved_signup:
-        c.info(f"  Sign up: {resolved_signup}")
+    c.error_with_hint(
+        f"{key_name} needed for this step.",
+        detail=resolved_hint or None,
+        hint=None,
+        signup_url=resolved_signup or None,
+        code=f"require:{key_name}",
+    )
 
     if resolved_login:
         if confirm_fn("Open carl.camp login in browser now?", default=True):

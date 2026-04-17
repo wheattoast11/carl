@@ -5,6 +5,8 @@ Usage::
     carl flow "/doctor /freshness"
     carl flow "/ask 'train a small model on gsm8k'"
     carl flow "/echo hello /echo world"
+    carl flow "/doctor /freshness" --json
+    carl flow "/nope /echo after" --no-continue-on-failure
 
 Parsing rules:
   - Tokens starting with ``/`` are operation names.
@@ -14,9 +16,16 @@ Parsing rules:
 Each executed step appends to an ``InteractionChain``. On completion the
 chain is persisted to ``~/.carl/interactions/<chain_id>.jsonl`` so it can
 be replayed, inspected, or fed back as training signal.
+
+Exit codes:
+  - 0 if every step in the chain recorded ``success=True``.
+  - 1 if any step failed (unknown ops, ops that raise ``SystemExit(!=0)``, or
+    ops that raise any other exception). Chain execution continues through
+    remaining ops unless ``--no-continue-on-failure`` is passed.
 """
 from __future__ import annotations
 
+import json as _json
 import shlex
 from pathlib import Path
 
@@ -37,64 +46,157 @@ def flow_cmd(
     list_ops: bool = typer.Option(False, "--list", help="List registered operations and exit"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Parse and print the plan, don't execute"),
     no_persist: bool = typer.Option(False, "--no-persist", help="Don't write the chain trace to disk"),
+    json_output: bool = typer.Option(False, "--json", help="Emit chain + results as JSON"),
+    no_continue_on_failure: bool = typer.Option(
+        False,
+        "--no-continue-on-failure",
+        help="Abort the chain on first failure instead of running remaining ops",
+    ),
 ) -> None:
     """Chain operations in sequence. Each step appends to a shared trace."""
     c = get_console()
 
     if list_ops:
-        c.blank()
-        c.header("Registered flow ops")
-        for name in list_operations():
-            c.info(f"  /{name}")
-        c.blank()
+        if json_output:
+            typer.echo(_json.dumps({"ops": list_operations()}, indent=2))
+        else:
+            c.blank()
+            c.header("Registered flow ops")
+            for name in list_operations():
+                c.info(f"  /{name}")
+            c.blank()
         raise typer.Exit(0)
 
     if not chain:
-        c.error("Missing chain. Example: carl flow '/doctor /freshness'")
-        c.info("See registered ops with: carl flow --list")
+        if json_output:
+            typer.echo(
+                _json.dumps(
+                    {
+                        "error": "missing chain",
+                        "hint": "See registered ops with: carl flow --list",
+                    },
+                    indent=2,
+                )
+            )
+        else:
+            c.error("Missing chain. Example: carl flow '/doctor /freshness'")
+            c.info("See registered ops with: carl flow --list")
         raise typer.Exit(1)
 
     try:
         steps = parse_chain(chain)
     except ValueError as exc:
-        c.error(str(exc))
+        if json_output:
+            typer.echo(_json.dumps({"error": str(exc)}, indent=2))
+        else:
+            c.error(str(exc))
         raise typer.Exit(1) from exc
 
     if not steps:
-        c.warn("No operations to run.")
+        if json_output:
+            typer.echo(_json.dumps({"ops": [], "note": "no operations to run"}, indent=2))
+        else:
+            c.warn("No operations to run.")
         raise typer.Exit(0)
 
     if dry_run:
-        c.blank()
-        c.header("flow plan")
-        for op, args in steps:
-            arg_preview = " ".join(args) if args else ""
-            c.info(f"  /{op} {arg_preview}".rstrip())
-        c.blank()
+        if json_output:
+            typer.echo(
+                _json.dumps(
+                    {"plan": [{"op": op, "args": list(args)} for op, args in steps]},
+                    indent=2,
+                )
+            )
+        else:
+            c.blank()
+            c.header("flow plan")
+            for op, args in steps:
+                arg_preview = " ".join(args) if args else ""
+                c.info(f"  /{op} {arg_preview}".rstrip())
+            c.blank()
         raise typer.Exit(0)
 
     trace = InteractionChain()
     trace.context["flow"] = chain
+    aborted = False
 
-    c.blank()
+    if not json_output:
+        c.blank()
+
     for op, args in steps:
         handler = get_operation(op)
         if handler is None:
-            c.error(f"Unknown op: /{op}")
-            trace.record(ActionType.CLI_CMD, f"unknown:/{op}", input={"args": args}, success=False)
+            if not json_output:
+                c.error(f"Unknown op: /{op}")
+            trace.record(
+                ActionType.CLI_CMD,
+                f"unknown:/{op}",
+                input={"args": args},
+                success=False,
+                output={"error": f"no such op: /{op}"},
+            )
+            if no_continue_on_failure:
+                aborted = True
+                break
             continue
-        c.info(f"[flow] /{op}")
+
+        if not json_output:
+            c.info(f"[flow] /{op}")
+
         try:
             handler(trace, args)
-        except Exception as exc:  # pragma: no cover - defensive
-            c.error(f"  /{op} raised: {exc}")
-            trace.record(ActionType.CLI_CMD, f"error:/{op}", input={"args": args},
-                         output={"error": str(exc)}, success=False)
-    c.blank()
+        except BaseException as exc:  # noqa: BLE001 — cross-op isolation
+            # Well-behaved ops never escape with an exception: ``_run`` wraps
+            # invocation and records failure on the chain. This branch covers
+            # ops that bypass ``_run`` (e.g. the inline-echo op).
+            if not json_output:
+                c.error(f"  /{op} raised: {exc}")
+            trace.record(
+                ActionType.CLI_CMD,
+                f"error:/{op}",
+                input={"args": args},
+                output={
+                    "error": str(exc),
+                    "type": exc.__class__.__name__,
+                },
+                success=False,
+            )
 
+        last = trace.last()
+        if last is not None and not last.success and no_continue_on_failure:
+            aborted = True
+            break
+
+    if not json_output:
+        c.blank()
+
+    saved_path: Path | None = None
     if not no_persist:
-        saved = _persist_trace(trace)
-        c.info(f"Trace saved: {saved}")
+        saved_path = _persist_trace(trace)
+
+    failed_steps = sum(1 for s in trace.steps if not s.success)
+    exit_code = 0 if failed_steps == 0 else 1
+
+    if json_output:
+        payload = trace.to_dict()
+        payload["summary"] = {
+            "total": len(trace),
+            "failed": failed_steps,
+            "success_rate": trace.success_rate(),
+            "aborted": aborted,
+            "exit_code": exit_code,
+        }
+        if saved_path is not None:
+            payload["trace_path"] = str(saved_path)
+        typer.echo(_json.dumps(payload, indent=2, default=str))
+    else:
+        if saved_path is not None:
+            c.info(f"Trace saved: {saved_path}")
+        if failed_steps > 0:
+            c.warn(f"{failed_steps}/{len(trace)} step(s) failed.")
+
+    if exit_code != 0:
+        raise typer.Exit(exit_code)
 
 
 # ---------------------------------------------------------------------------

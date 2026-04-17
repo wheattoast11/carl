@@ -76,10 +76,15 @@ class SendItPipeline:
         config: TrainingConfig,
         on_event: Callable[[PipelineEvent], None] | None = None,
         poll_interval: float = 60.0,
+        *,
+        skip_credits: bool = False,
+        resume_from_checkpoint: bool | str | None = None,
     ) -> None:
         self.config = config
         self._on_event = on_event or (lambda e: None)
         self._poll_interval = poll_interval
+        self.skip_credits = bool(skip_credits)
+        self.resume_from_checkpoint = resume_from_checkpoint
         self._sft_job_id: str | None = None
         self._grpo_job_id: str | None = None
 
@@ -172,7 +177,11 @@ class SendItPipeline:
         sft_config = copy.deepcopy(self.config)
         sft_config.method = TrainingMethod.SFT
 
-        sft_trainer = CARLTrainer(sft_config)
+        sft_trainer = CARLTrainer(
+            sft_config,
+            skip_credits=self.skip_credits,
+            resume_from_checkpoint=self.resume_from_checkpoint,
+        )
         sft_run = await sft_trainer.train()
 
         if sft_run.phase == RunPhase.FAILED:
@@ -206,7 +215,11 @@ class SendItPipeline:
         # Stage 4: GRPO
         self._emit(PipelineStage.GRPO, "Starting GRPO...", 0.0)
 
-        grpo_trainer = CARLTrainer(self.config)
+        grpo_trainer = CARLTrainer(
+            self.config,
+            skip_credits=self.skip_credits,
+            resume_from_checkpoint=self.resume_from_checkpoint,
+        )
         grpo_run = await grpo_trainer.train()
 
         if grpo_run.phase == RunPhase.FAILED:
@@ -251,7 +264,11 @@ class SendItPipeline:
         stage = PipelineStage.SFT  # Use SFT stage for any single-stage
         self._emit(stage, f"Starting {self.config.method.value.upper()}...", 0.0)
 
-        trainer = CARLTrainer(self.config)
+        trainer = CARLTrainer(
+            self.config,
+            skip_credits=self.skip_credits,
+            resume_from_checkpoint=self.resume_from_checkpoint,
+        )
         run = await trainer.train_and_watch(poll_interval=self._poll_interval)
 
         if run.phase == RunPhase.FAILED:

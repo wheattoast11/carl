@@ -411,7 +411,7 @@ def test_train_persists_local_run_and_prints_run_guidance(monkeypatch, tmp_path:
     )
 
     class FakeTrainer:
-        def __init__(self, config):
+        def __init__(self, config, *args, **kwargs):
             self.config = config
 
         async def train(self):

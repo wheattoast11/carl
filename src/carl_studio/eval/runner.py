@@ -21,6 +21,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from carl_core.errors import CARLError
+from carl_core.safepath import PathEscape, safe_resolve
+
 from carl_studio import __version__
 
 logger = logging.getLogger(__name__)
@@ -244,12 +247,16 @@ class EvalSandbox:
         self.tool_failures: int = 0
 
     def _safe_path(self, path: str) -> str:
-        if os.path.isabs(path):
-            path = path.lstrip("/")
-        resolved = os.path.normpath(os.path.join(self.workdir, path))
-        if not (resolved == self.workdir or resolved.startswith(self.workdir + os.sep)):
-            raise ValueError(f"Path escapes sandbox: {path}")
-        return resolved
+        rel = path.lstrip("/") if os.path.isabs(path) else path
+        try:
+            resolved = safe_resolve(rel, self.workdir, follow_symlinks=False, must_exist=False)
+        except PathEscape as exc:
+            raise CARLError(
+                f"Path escapes sandbox: {path}",
+                code="carl.eval.sandbox_escape",
+                context={"input_path": path, **exc.context},
+            ) from exc
+        return str(resolved)
 
     def execute_tool(self, name: str, args: dict[str, Any]) -> str:
         """Execute a tool call and return the result string."""
@@ -786,14 +793,46 @@ class EvalRunner:
                 )
 
         elapsed = time.time() - t0
-        total = len(results) or 1
+        n = len(results)
 
-        task_completion = sum(1 for r in results if r["task_completed"]) / total
-        tool_format_compliance = sum(1 for r in results if r["has_tool_call"]) / total
-        mean_tool_calls = sum(r["tool_calls"] for r in results) / total
+        if n == 0:
+            logger.warning("Phase 2' eval produced no results (zero samples or all skipped)")
+            return EvalReport(
+                checkpoint=self.config.checkpoint,
+                phase="2prime",
+                n_samples=0,
+                metrics={
+                    "task_completion_rate": 0.0,
+                    "task_completion": 0.0,
+                    "tool_format_compliance": 0.0,
+                    "mean_tool_calls": 0.0,
+                    "failure_rate": 0.0,
+                    "mean_tokens": 0.0,
+                    "zero_calls": 1.0,
+                },
+                primary_metric="task_completion_rate",
+                primary_value=0.0,
+                threshold=self.config.threshold,
+                passed=False,
+                coherence=None,
+            )
+
+        task_completion = sum(1 for r in results if r["task_completed"]) / n
+        tool_format_compliance = sum(1 for r in results if r["has_tool_call"]) / n
+        mean_tool_calls = sum(r["tool_calls"] for r in results) / n
         total_tool_calls = sum(r["tool_calls"] for r in results)
-        failure_rate = sum(r["tool_failures"] for r in results) / max(total_tool_calls, 1)
-        mean_tokens = sum(r["tokens"] for r in results) / total
+        mean_tokens = sum(r["tokens"] for r in results) / n
+
+        if total_tool_calls > 0:
+            failure_rate = sum(r["tool_failures"] for r in results) / total_tool_calls
+            zero_calls_flag = 0.0
+        else:
+            logger.warning(
+                "Phase 2' eval: no tool calls across %d samples — failure_rate undefined, reporting 0.0",
+                n,
+            )
+            failure_rate = 0.0
+            zero_calls_flag = 1.0
 
         metrics = {
             "task_completion_rate": round(task_completion, 4),
@@ -802,6 +841,7 @@ class EvalRunner:
             "mean_tool_calls": round(mean_tool_calls, 2),
             "failure_rate": round(failure_rate, 4),
             "mean_tokens": round(mean_tokens, 0),
+            "zero_calls": zero_calls_flag,
         }
 
         primary_metric = "task_completion_rate"
@@ -809,7 +849,7 @@ class EvalRunner:
 
         logger.info(
             "Phase 2' eval complete: %d samples, %.1fs, task_completion=%.2f%%",
-            total,
+            n,
             elapsed,
             task_completion * 100,
         )
@@ -817,7 +857,7 @@ class EvalRunner:
         return EvalReport(
             checkpoint=self.config.checkpoint,
             phase="2prime",
-            n_samples=total,
+            n_samples=n,
             metrics=metrics,
             primary_metric=primary_metric,
             primary_value=primary_value,
