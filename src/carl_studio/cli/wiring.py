@@ -24,6 +24,7 @@ from .lab import (
     mcp_serve,
     paper_app,
 )
+from .flow import flow_cmd
 from .init import init_cmd
 from .platform import login, logout, sync_app
 
@@ -60,6 +61,7 @@ def _make_stub(
 # ---------------------------------------------------------------------------
 
 app.command(name="init")(init_cmd)
+app.command(name="flow")(flow_cmd)
 camp_app.command(name="login")(login)
 camp_app.command(name="logout")(logout)
 app.command(name="logout", hidden=True)(logout)
