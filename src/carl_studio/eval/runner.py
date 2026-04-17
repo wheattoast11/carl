@@ -22,6 +22,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from carl_core.errors import CARLError
+from carl_core.interaction import ActionType, InteractionChain
 from carl_core.safepath import PathEscape, safe_resolve
 
 from carl_studio import __version__
@@ -605,16 +606,89 @@ class EvalRunner:
         print(report.passed)
     """
 
-    def __init__(self, config: EvalConfig) -> None:
+    def __init__(
+        self,
+        config: EvalConfig,
+        *,
+        interaction_chain: InteractionChain | None = None,
+    ) -> None:
         self.config = config
         self.phase = config.phase if config.phase != "auto" else _detect_phase(config.checkpoint)
+        self.chain: InteractionChain | None = interaction_chain
+
+    # ------------------------------------------------------------------
+    # InteractionChain helpers
+    # ------------------------------------------------------------------
+
+    def _record(
+        self,
+        name: str,
+        *,
+        input: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
+        success: bool = True,
+        duration_ms: float | None = None,
+    ) -> None:
+        if self.chain is None:
+            return
+        try:
+            self.chain.record(
+                ActionType.EVAL_PHASE,
+                name,
+                input=input,
+                output=output,
+                success=success,
+                duration_ms=duration_ms,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("eval chain record failed: %s", exc)
 
     def run(self) -> EvalReport:
         """Load model, run dataset, compute metrics, return report."""
-        if self.phase == "2prime":
-            return self._run_phase2prime()
+        started = time.time()
+        self._record(
+            f"eval.phase{self.phase}.start",
+            input={
+                "checkpoint": self.config.checkpoint,
+                "dataset": self.config.dataset,
+                "threshold": self.config.threshold,
+                "max_samples": self.config.max_samples,
+            },
+        )
 
-        # Phase 1 and 2: single-turn generation
+        try:
+            if self.phase == "2prime":
+                report = self._run_phase2prime()
+            else:
+                report = self._run_single_turn_phase()
+        except Exception as exc:
+            self._record(
+                f"eval.phase{self.phase}.error",
+                input={"checkpoint": self.config.checkpoint},
+                output={"error": str(exc), "type": type(exc).__name__},
+                success=False,
+                duration_ms=(time.time() - started) * 1000,
+            )
+            raise
+
+        self._record(
+            f"eval.phase{self.phase}.end",
+            input={"checkpoint": self.config.checkpoint},
+            output={
+                "n_samples": report.n_samples,
+                "primary_metric": report.primary_metric,
+                "primary_value": report.primary_value,
+                "threshold": report.threshold,
+                "passed": report.passed,
+                "metrics": dict(report.metrics),
+            },
+            success=report.passed,
+            duration_ms=(time.time() - started) * 1000,
+        )
+        return report
+
+    def _run_single_turn_phase(self) -> EvalReport:
+        """Phase 1 / Phase 2 single-turn generation path."""
         samples = self._load_dataset()
         model, tokenizer = self._load_model_simple()
         completions = self._generate_single_turn(model, tokenizer, samples)

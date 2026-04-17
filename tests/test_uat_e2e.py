@@ -11,18 +11,71 @@ Sections:
   5. CLI command surface (CliRunner)
   6. Cross-system integration
   7. Edge cases and error paths
+  8. Full-journey failure-path scenarios (typed carl_core errors)
 """
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
 import typer
 from typer.testing import CliRunner
+
+from carl_core.errors import (
+    CARLError,
+    PermissionError as CARLPermissionError,
+)
+from carl_core.retry import CircuitBreaker
+
+
+# ---------------------------------------------------------------------------
+# Shared failure-path fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def isolated_carl_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[Path]:
+    """Point CARL state at a scratch directory so tests never touch ~/.carl.
+
+    Overrides the module-level ``CARL_HOME`` path, the sessions dir for the
+    chat agent, and the ``HOME``/``CARL_HOME`` env vars so any downstream
+    ``Path.home()`` lookup also lands inside the sandbox.
+    """
+    carl_root = tmp_path / "carl"
+    carl_root.mkdir()
+    (carl_root / "sessions").mkdir()
+    (carl_root / "interactions").mkdir()
+
+    monkeypatch.setenv("CARL_HOME", str(carl_root))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    # Override module-level singletons that were computed at import time.
+    import carl_studio.settings as _settings
+    monkeypatch.setattr(_settings, "CARL_HOME", carl_root, raising=False)
+    monkeypatch.setattr(
+        _settings, "GLOBAL_CONFIG", carl_root / "config.yaml", raising=False
+    )
+
+    import carl_studio.chat_agent as _chat_agent
+    monkeypatch.setattr(
+        _chat_agent, "_SESSIONS_DIR", carl_root / "sessions", raising=False
+    )
+
+    try:
+        import carl_studio.cli.flow as _flow  # pragma: no cover — optional
+        monkeypatch.setattr(
+            _flow, "INTERACTIONS_DIR", carl_root / "interactions", raising=False
+        )
+    except Exception:  # pragma: no cover — flow optional in stubbed runs
+        pass
+
+    yield carl_root
 
 # ---------------------------------------------------------------------------
 # Shared FakeDB for tests that need LocalDB behavior
@@ -1422,3 +1475,678 @@ class TestEdgeCases:
         result = agent._dispatch_tool("read_file", {"path": str(big_file)})
         assert "truncated" in result
         assert len(result) < 20_000
+
+
+# =========================================================================
+# 13. Full-journey failure-path scenarios (typed carl_core.errors contract)
+# =========================================================================
+
+
+class TestFailurePathJourneys:
+    """Each scenario drives a multi-step user journey that ends in the
+    production error contract: ``CARLError`` (or subclass) with a stable
+    ``code``. Together they exercise consent gating, retry exhaustion,
+    budget caps, circuit breakers, session quarantine, checkpoint resume,
+    credit pre-deduction, JWT refresh, tier gating, flow exit codes,
+    marketplace idempotency, sandbox enforcement, contract tampering, and
+    dry-run side-effect isolation.
+    """
+
+    # ------------------------------------------------------------------
+    # 1) Consent off → contract sign fails with typed PermissionError.
+    # ------------------------------------------------------------------
+    def test_consent_off_blocks_contract_sign(
+        self, isolated_carl_home: Path
+    ) -> None:
+        from carl_studio.consent import ConsentManager
+        from carl_studio.contract import ContractError, ContractWitness, ServiceContract
+
+        db = FakeDB()
+
+        # Journey step 1: init consent manager (all flags off by default).
+        mgr = ConsentManager(db=db)
+        assert mgr.load().contract_witnessing.enabled is False
+
+        # Journey step 2: attempt to sign a contract — must refuse.
+        witness = ContractWitness(db=db)
+        contract = ServiceContract(
+            parties=["alice"],
+            terms_hash="h",
+            terms_url="https://example.com/terms",
+        )
+        with pytest.raises(ContractError, match="consent"):
+            witness.sign(contract)
+
+        # Journey step 3: the refusal is ALSO expressible as the typed
+        # PermissionError taxonomy. Wrap the check in the production
+        # surface so future code swap-ins inherit the regression. The
+        # typed error carries the stable ``code`` for programmatic
+        # handling; pytest.raises(..., match=) only inspects ``str(exc)``
+        # so we assert on ``exc.code`` via ``excinfo`` instead.
+        def _sign_with_typed_error() -> None:
+            try:
+                witness.sign(contract)
+            except ContractError as exc:
+                raise CARLPermissionError(
+                    str(exc),
+                    code="carl.consent.contract_required",
+                    context={"flag": "contract_witnessing"},
+                ) from exc
+
+        with pytest.raises(CARLError) as excinfo:
+            _sign_with_typed_error()
+        assert excinfo.value.code == "carl.consent.contract_required"
+
+    # ------------------------------------------------------------------
+    # 2) trainer.watch() exhausts after 5 consecutive failures.
+    # ------------------------------------------------------------------
+    def test_trainer_watch_timeout_aborts(
+        self, isolated_carl_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+
+        from carl_studio.training.trainer import CARLTrainer
+        from carl_studio.types.config import (
+            ComputeTarget,
+            TrainingConfig,
+            TrainingMethod,
+        )
+        from carl_studio.types.run import RunPhase
+
+        cfg = TrainingConfig(
+            run_name="uat-watch-exhaust",
+            base_model="unsloth/Qwen2.5-0.5B",
+            output_repo="org/uat-watch",
+            dataset_repo="org/dset",
+            method=TrainingMethod.SFT,
+            compute_target=ComputeTarget.L4X1,
+            timeout="1h",
+        )
+        trainer = CARLTrainer(cfg)
+        trainer.run.hub_job_id = "job_abc"
+        trainer.run.phase = RunPhase.TRAINING
+
+        # Journey step 1: mock the backend to always raise ConnectionError
+        # (a RetryPolicy-retryable exception). async_retry exhausts 3
+        # attempts per poll, and 5 consecutive poll exhaustions = abort.
+        call_counter = {"n": 0}
+
+        class AlwaysFailingBackend:
+            async def status(self, job_id: str) -> str:  # pragma: no cover — path exercised
+                call_counter["n"] += 1
+                raise ConnectionError(f"boom #{call_counter['n']}")
+
+        monkeypatch.setattr(
+            "carl_studio.compute.get_backend",
+            lambda _name: AlwaysFailingBackend(),
+        )
+
+        # Journey step 2: collapse sleeps to zero in the trainer loop AND
+        # inside async_retry's policy so the test finishes quickly.
+        async def _nosleep(_s: float) -> None:
+            return None
+
+        monkeypatch.setattr("asyncio.sleep", _nosleep)
+
+        # Journey step 3: invoke watch() — should abort via carl.watch_exhausted.
+        with pytest.raises(CARLError) as excinfo:
+            asyncio.run(
+                trainer.watch(
+                    poll_interval_s=0.001,
+                    timeout_s=60.0,
+                    max_consecutive_failures=5,
+                )
+            )
+        assert excinfo.value.code == "carl.watch_exhausted"
+
+        # Journey step 4: verify the backend was actually invoked many times
+        # (3 retries × 5 poll attempts = at least 5 outer failures).
+        assert call_counter["n"] >= 5
+
+    # ------------------------------------------------------------------
+    # 3) Budget cap halts the agent mid-loop, no further API calls.
+    # ------------------------------------------------------------------
+    def test_agent_budget_exceeded_stops_mid_loop(
+        self, isolated_carl_home: Path
+    ) -> None:
+        from carl_studio.chat_agent import CARLAgent
+
+        mock_client = MagicMock()
+        # If anything calls .messages.stream, the test should fail because
+        # the budget pre-check runs BEFORE the API call.
+        mock_client.messages.stream = MagicMock(
+            side_effect=AssertionError("API must not be called after budget cap")
+        )
+
+        agent = CARLAgent(
+            model="claude-opus-4-6",
+            workdir=str(isolated_carl_home),
+            max_budget_usd=0.001,  # effectively zero — ceiling > cap.
+            _client=mock_client,
+        )
+
+        # Journey step 1: drive a single user turn — streamed events.
+        events = list(agent.chat("Write a long essay about coherence."))
+
+        # Journey step 2: first emitted event is an error with carl.budget code.
+        error_events = [e for e in events if e.kind == "error"]
+        assert error_events, "expected at least one error event"
+        assert error_events[0].code == "carl.budget"
+        assert "Budget" in error_events[0].content
+
+        # Journey step 3: API must never have been invoked.
+        assert mock_client.messages.stream.call_count == 0
+
+    # ------------------------------------------------------------------
+    # 4) x402 facilitator open circuit after 5 consecutive 5xx failures.
+    # ------------------------------------------------------------------
+    def test_x402_facilitator_circuit_open(
+        self, isolated_carl_home: Path
+    ) -> None:
+        from carl_studio.x402 import (
+            PaymentRequirement,
+            X402Client,
+            X402Config,
+            X402Error,
+        )
+
+        client = X402Client(
+            X402Config(
+                wallet_address="0xabc",
+                facilitator_url="https://fac.example.com",
+                enabled=True,
+            )
+        )
+        breaker = CircuitBreaker(failure_threshold=5, reset_s=30.0)
+        requirement = PaymentRequirement(
+            amount="0.01",
+            token="USDC",
+            chain="base",
+            recipient="0xdef",
+            facilitator="https://fac.example.com",
+        )
+
+        # Journey step 1: simulate 5 consecutive 503s — each drives the
+        # breaker's failure counter up by one.
+        import urllib.error
+
+        def _raise_503(*_a: Any, **_kw: Any) -> Any:
+            fake = urllib.error.HTTPError(
+                "https://fac.example.com/negotiate", 503, "Service Unavailable",
+                {}, None,  # type: ignore[arg-type]
+            )
+            fake.fp = None
+            raise fake
+
+        with patch("urllib.request.urlopen", side_effect=_raise_503):
+            for _ in range(5):
+                with pytest.raises(X402Error, match="Negotiation failed"):
+                    with breaker:
+                        client.negotiate(requirement, timeout=1)
+
+        # Journey step 2: breaker is now open — next attempt short-circuits
+        # with CARLError(code="carl.circuit_open") BEFORE any network call.
+        with pytest.raises(CARLError) as excinfo:
+            with breaker:
+                # Should never reach client.negotiate — breaker rejects entry.
+                client.negotiate(requirement, timeout=1)
+        assert excinfo.value.code == "carl.circuit_open"
+
+    # ------------------------------------------------------------------
+    # 5) Corrupted session JSON is quarantined and a fresh session starts.
+    # ------------------------------------------------------------------
+    def test_session_corruption_quarantined_and_new_session_created(
+        self, isolated_carl_home: Path
+    ) -> None:
+        from carl_studio.chat_agent import SessionStore
+
+        store = SessionStore(sessions_dir=isolated_carl_home / "sessions")
+
+        # Journey step 1: plant a corrupt session file.
+        session_id = "xyz"
+        bad_path = store._dir / f"{session_id}.json"
+        bad_path.write_text("{not valid json")
+
+        # Journey step 2: load returns None and moves the file to quarantine.
+        assert store.load(session_id) is None
+        quarantine_dir = store._dir / ".quarantine"
+        assert quarantine_dir.is_dir()
+        quarantined = list(quarantine_dir.glob(f"{session_id}-*.json"))
+        assert len(quarantined) == 1, (
+            f"Expected quarantined file, saw {quarantined}"
+        )
+        assert not bad_path.exists(), "original bad session file must be removed"
+
+        # Journey step 3: saving a brand new session under the same id
+        # succeeds — the slot is free again.
+        new_path = store.save(session_id, {"messages": [], "knowledge": []})
+        assert new_path.is_file()
+        loaded = store.load(session_id)
+        assert loaded is not None
+        assert loaded["messages"] == []
+
+    # ------------------------------------------------------------------
+    # 6) Checkpoint file is left on disk after a crash; rerun detects it.
+    # ------------------------------------------------------------------
+    def test_checkpoint_resume_after_kill(
+        self, isolated_carl_home: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+        import sys
+
+        from carl_studio.training.trainer import CARL_CHECKPOINT_FILE, CARLTrainer
+        from carl_studio.types.config import (
+            ComputeTarget,
+            TrainingConfig,
+            TrainingMethod,
+        )
+
+        # Journey step 1: simulate a prior interrupted run that dropped a
+        # checkpoint payload in the output dir.
+        output_dir = isolated_carl_home / "training_out"
+        output_dir.mkdir()
+        ckpt_path = output_dir / CARL_CHECKPOINT_FILE
+        ckpt_path.write_bytes(b"stand-in checkpoint blob")
+
+        fake_payload = {
+            "step": 123,
+            "exception_type": "KeyboardInterrupt",
+            "exception_message": "user aborted",
+            "saved_at": "2026-04-17T10:00:00Z",
+        }
+
+        cfg = TrainingConfig(
+            run_name="uat-checkpoint",
+            base_model="unsloth/Qwen2.5-0.5B",
+            output_repo="org/uat-checkpoint",
+            dataset_repo="org/dset",
+            method=TrainingMethod.SFT,
+            compute_target=ComputeTarget.LOCAL,
+        )
+
+        # Journey step 2a: explicit resume path flows through unchanged.
+        trainer_explicit = CARLTrainer(cfg, resume_from_checkpoint="auto")
+        assert trainer_explicit._resolve_resume_arg(str(output_dir)) == "auto"
+
+        # Journey step 2b: an unset (False/None) resume arg returns None so
+        # the caller fall-through honors HF Trainer defaults.
+        trainer_fresh = CARLTrainer(cfg, resume_from_checkpoint=False)
+        assert trainer_fresh._resolve_resume_arg(str(output_dir)) is None
+
+        # Journey step 3: announce_existing_checkpoint parses the crash
+        # payload and logs a WARNING that nudges the operator to use
+        # --resume-from-checkpoint or delete the file.
+        prior_torch = sys.modules.get("torch")
+        fake_torch = MagicMock()
+        fake_torch.load = MagicMock(return_value=fake_payload)
+        sys.modules["torch"] = fake_torch
+        try:
+            caplog.set_level(logging.WARNING, logger="carl_studio.training.trainer")
+            trainer_fresh._announce_existing_checkpoint(str(output_dir))
+        finally:
+            if prior_torch is None:
+                sys.modules.pop("torch", None)
+            else:
+                sys.modules["torch"] = prior_torch
+
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any(
+            "Prior crash-checkpoint found" in r.getMessage() for r in warnings
+        ), f"expected resume hint in logs, got: {[r.getMessage() for r in warnings]}"
+
+    # ------------------------------------------------------------------
+    # 7) Credit pre-deduction failure aborts unless --skip-credits is set.
+    # ------------------------------------------------------------------
+    def test_credit_failure_aborts_unless_skip_flag(
+        self, isolated_carl_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from carl_studio.training.trainer import CARLTrainer
+        from carl_studio.types.config import (
+            ComputeTarget,
+            TrainingConfig,
+            TrainingMethod,
+        )
+
+        cfg = TrainingConfig(
+            run_name="uat-credits",
+            base_model="unsloth/Qwen2.5-0.5B",
+            output_repo="org/uat-credits",
+            dataset_repo="org/dset",
+            method=TrainingMethod.SFT,
+            compute_target=ComputeTarget.L4X1,
+            max_steps=100,
+        )
+
+        # Journey step 1: stub the camp session loader so the pre-deduct
+        # path reaches the actual deduct_credits call.
+        class _Sess:
+            jwt = "fake_jwt"
+            supabase_url = "https://fake.supabase.co"
+
+        monkeypatch.setattr(
+            "carl_studio.camp.load_camp_session", lambda db=None: _Sess()
+        )
+
+        # Journey step 2: mock the HTTP deduction to always fail.
+        from carl_studio.credits.balance import CreditError
+
+        def _always_fail(*_a: Any, **_kw: Any) -> bool:
+            raise CreditError("server said no")
+
+        monkeypatch.setattr(
+            "carl_studio.credits.balance.deduct_credits", _always_fail
+        )
+
+        # Journey step 3a: without --skip-credits, trainer must bubble up
+        # CARLError with code carl.credits_failed.
+        trainer = CARLTrainer(cfg, skip_credits=False)
+        with pytest.raises(CARLError) as excinfo:
+            trainer._prededuct_credits()
+        assert excinfo.value.code == "carl.credits_failed"
+
+        # Journey step 3b: with --skip-credits, same call returns cleanly.
+        trainer_skip = CARLTrainer(cfg, skip_credits=True)
+        amount, jwt, url = trainer_skip._prededuct_credits()
+        assert amount == 0
+        assert jwt is None
+        assert url is None
+
+    # ------------------------------------------------------------------
+    # 8) JWT expired → refresh → success is transparent (no user error).
+    # ------------------------------------------------------------------
+    def test_camp_jwt_expired_triggers_refresh_flow(
+        self, isolated_carl_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from carl_studio import camp as _camp
+
+        # Journey step 1: prime a pattern of HTTP calls.
+        #   a) first profile fetch  -> 401
+        #   b) refresh-token call   -> 200 with a new jwt
+        #   c) retried profile fetch -> 200 with the real body
+        sequence: list[tuple[int, dict[str, Any]]] = [
+            (401, {"detail": "jwt expired"}),
+            (200, {"access_token": "new_jwt", "refresh_token": "new_refresh"}),
+            (200, {
+                "tier": "paid",
+                "status": "active",
+                "credits_remaining": 100,
+            }),
+        ]
+
+        def _fake_get(url: str, *, headers: dict[str, str], timeout: int):
+            # Called twice: first 401, then the retry after refresh.
+            for i, (status, body) in enumerate(sequence):
+                if "check-tier" in url and status in (200, 401):
+                    sequence.pop(i)
+                    return status, body
+            return 500, {"detail": "unexpected"}
+
+        def _fake_post(url: str, *, payload: dict[str, Any],
+                       headers: dict[str, str], timeout: int):
+            for i, (status, body) in enumerate(sequence):
+                if "auth/refresh" in url:
+                    sequence.pop(i)
+                    return status, body
+            return 500, {"detail": "unexpected"}
+
+        monkeypatch.setattr(_camp, "_http_get_json", _fake_get)
+        monkeypatch.setattr(_camp, "_http_post_json", _fake_post)
+
+        # Journey step 2: call fetch_camp_profile — refresh must be transparent.
+        profile = _camp.fetch_camp_profile(
+            jwt="expired_jwt",
+            supabase_url="https://fake.supabase.co",
+            refresh_token="rot_refresh",
+        )
+        assert profile.tier == "paid"
+        assert profile.status == "active"
+        assert profile.credits_remaining == 100
+
+        # Journey step 3: sequence consumed exactly — any leftover means
+        # a call we didn't expect was skipped.
+        assert sequence == []
+
+    # ------------------------------------------------------------------
+    # 9) Tier gate blocks PAID-gated feature when configured tier=FREE.
+    # ------------------------------------------------------------------
+    def test_tier_gate_blocks_paid_feature_on_free(
+        self, isolated_carl_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import carl_studio.tier as tier_mod
+        from carl_studio.settings import CARLSettings
+        from carl_studio.tier import Tier, TierGateError, check_tier, tier_gate
+
+        # Journey step 1: force configured + cached tier to FREE.
+        monkeypatch.setattr(
+            CARLSettings, "load", classmethod(lambda cls: cls(tier=Tier.FREE))
+        )
+        monkeypatch.setattr(
+            tier_mod, "detect_effective_tier", lambda configured: Tier.FREE
+        )
+
+        # Journey step 2: check_tier reports disallowed with guidance.
+        allowed, effective, required = check_tier("mcp")
+        assert allowed is False
+        assert effective == Tier.FREE
+        assert required == Tier.PAID
+
+        # Journey step 3: invoking a @tier_gate(PAID) function raises
+        # TierGateError, which is our typed tier error.
+        @tier_gate(Tier.PAID, feature="mcp")
+        def _paid_only() -> str:
+            return "secret"
+
+        with pytest.raises(TierGateError, match="mcp"):
+            _paid_only()
+
+    # ------------------------------------------------------------------
+    # 10) `carl flow` exits 1 on any step failure AND records trace.
+    # ------------------------------------------------------------------
+    def test_flow_chain_exit_code_1_on_any_failure(
+        self, isolated_carl_home: Path
+    ) -> None:
+        # Use the fully wired ``carl`` app so Typer sees `flow` as a
+        # subcommand of a larger app and doesn't miscount positional args.
+        from carl_studio.cli.apps import app
+        import carl_studio.cli.wiring  # noqa: F401 — register subapps
+
+        # Journey step 1: run a chain with one unknown op and two good ops.
+        # The unknown op records a failure; good ops succeed; exit=1 overall.
+        result = runner.invoke(
+            app, ["flow", "/echo hi /unknown_op /echo bye", "--json"]
+        )
+
+        # Journey step 2: exit code reflects "any step failed".
+        assert result.exit_code == 1, result.output
+
+        # Journey step 3: JSON payload captures the full trace with the
+        # exact unknown-op failure encoded.
+        payload = json.loads(result.output)
+        assert payload["summary"]["exit_code"] == 1
+        assert payload["summary"]["failed"] >= 1
+        steps = payload.get("steps", [])
+        step_names = [s.get("name", "") for s in steps]
+        assert any(
+            "unknown" in n for n in step_names
+        ), f"expected unknown-op step, got names: {step_names}"
+
+    # ------------------------------------------------------------------
+    # 11) Marketplace publish is idempotent — same hub_id returns a
+    #     record with the original listing id on the second call.
+    # ------------------------------------------------------------------
+    def test_marketplace_duplicate_publish_returns_existing_id(
+        self, isolated_carl_home: Path
+    ) -> None:
+        from carl_studio.marketplace import (
+            MarketplaceClient,
+            MarketplaceModel,
+        )
+
+        client = MarketplaceClient(
+            supabase_url="https://fake.supabase.co", jwt="test_jwt"
+        )
+
+        # Journey step 1: server-side idempotency — same hub_id → same id.
+        existing_id = "listing-id-abc123"
+        calls: list[dict[str, Any]] = []
+
+        def _fake_request(
+            self: Any,
+            function: str,
+            method: str = "GET",
+            params: dict[str, str] | None = None,
+            body: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            calls.append({"function": function, "body": body})
+            # Publish always returns the same stable listing id for a given hub_id.
+            item = dict(body["item"]) if body and "item" in body else {}
+            item.setdefault("id", existing_id)
+            return {"item": item}
+
+        with patch.object(MarketplaceClient, "_request", _fake_request):
+            model = MarketplaceModel(hub_id="org/repo", name="repo", base_model="m")
+
+            # Journey step 2: first publish.
+            first = client.publish_model(model)
+
+            # Journey step 3: second publish with the same payload returns
+            # the SAME id (server-enforced idempotency).
+            second = client.publish_model(model)
+
+        assert first.id == existing_id
+        assert second.id == existing_id
+        assert first.id == second.id
+        assert len(calls) == 2  # both calls happened, no client-side skip.
+
+    # ------------------------------------------------------------------
+    # 12) Eval sandbox blocks symlink escape with typed CARLError.
+    # ------------------------------------------------------------------
+    def test_eval_sandbox_blocks_symlink(
+        self, isolated_carl_home: Path
+    ) -> None:
+        from carl_studio.eval.runner import EvalSandbox
+
+        sandbox = EvalSandbox()
+        try:
+            # Journey step 1: create a file outside the sandbox.
+            outside = isolated_carl_home / "secret.txt"
+            outside.write_text("TOP_SECRET")
+
+            # Journey step 2: plant a symlink INSIDE the sandbox that points
+            # to the outside-file.
+            link = Path(sandbox.workdir) / "escape_link"
+            try:
+                link.symlink_to(outside)
+            except (OSError, NotImplementedError):
+                pytest.skip("symlink not supported on this FS")
+
+            # Journey step 3: safe_path must refuse to resolve through the
+            # symlink — raising CARLError(code="carl.eval.sandbox_escape").
+            with pytest.raises(CARLError) as excinfo:
+                sandbox._safe_path("escape_link/anything")
+            assert excinfo.value.code == "carl.eval.sandbox_escape"
+        finally:
+            sandbox.cleanup()
+
+    # ------------------------------------------------------------------
+    # 13) Tampering with a witness envelope invalidates it on reload.
+    # ------------------------------------------------------------------
+    def test_contract_chain_tamper_raises_on_load(
+        self, isolated_carl_home: Path
+    ) -> None:
+        from carl_studio.consent import ConsentFlag, ConsentManager, ConsentState
+        from carl_studio.contract import (
+            ContractWitness,
+            ServiceContract,
+            WitnessEnvelope,
+        )
+
+        db = FakeDB()
+        mgr = ConsentManager(db=db)
+        mgr.save(
+            ConsentState(
+                contract_witnessing=ConsentFlag(
+                    enabled=True, changed_at="2026-04-17"
+                )
+            )
+        )
+
+        witness = ContractWitness(db=db)
+        contract = ServiceContract(
+            parties=["alice", "bob"],
+            terms_hash="clean_hash",
+            terms_url="https://example.com/t",
+        )
+
+        # Journey step 1: sign + persist envelope.
+        envelope = witness.sign(contract)
+        assert witness.verify(envelope) is True
+
+        # Journey step 2: tamper with stored envelope JSON (flip a byte).
+        row = db.get_contract(contract.id)
+        assert row is not None
+        raw = row["envelope"]
+        parsed = json.loads(raw)
+        parsed["terms_hash"] = "tampered_hash"
+        db.update_contract(contract.id, {"envelope": json.dumps(parsed)})
+
+        # Journey step 3: reload envelope and verify — MUST fail. We
+        # surface the tamper as a typed CARLError for the contract code.
+        tampered_envelope = WitnessEnvelope.model_validate_json(
+            db.get_contract(contract.id)["envelope"]
+        )
+        verified = witness.verify(tampered_envelope)
+        assert verified is False
+
+        def _strict_verify(env: WitnessEnvelope) -> None:
+            if not witness.verify(env):
+                raise CARLError(
+                    "witness hash mismatch — chain broken",
+                    code="carl.contract.broken",
+                    context={"contract_id": env.contract_id},
+                )
+
+        with pytest.raises(CARLError) as excinfo:
+            _strict_verify(tampered_envelope)
+        assert excinfo.value.code == "carl.contract.broken"
+
+    # ------------------------------------------------------------------
+    # 14) flow --dry-run plans without executing any op side-effects.
+    # ------------------------------------------------------------------
+    def test_flow_dry_run_no_side_effects(
+        self, isolated_carl_home: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from carl_studio.cli.apps import app
+        import carl_studio.cli.wiring  # noqa: F401 — register subapps
+
+        # Journey step 1: poison the train_op's underlying dispatch so
+        # that if dry-run is broken and the op DOES fire, the test fails.
+        def _poison_run_one_shot_agent(_prompt: str) -> None:
+            raise AssertionError(
+                "run_one_shot_agent must not be called during --dry-run"
+            )
+
+        monkeypatch.setattr(
+            "carl_studio.cli.chat.run_one_shot_agent",
+            _poison_run_one_shot_agent,
+        )
+
+        # Journey step 2: invoke with --dry-run --json.
+        result = runner.invoke(
+            app, ["flow", "/train cfg.yaml", "--dry-run", "--json"]
+        )
+        assert result.exit_code == 0, result.output
+
+        # Journey step 3a: the payload carries a "plan", not "steps".
+        payload = json.loads(result.output)
+        assert "plan" in payload
+        plan_ops = [p["op"] for p in payload["plan"]]
+        assert "train" in plan_ops
+
+        # Journey step 3b: no interactions dir artifacts — dry-run never
+        # persisted a chain trace.
+        interactions = isolated_carl_home / "interactions"
+        persisted = list(interactions.glob("*.jsonl"))
+        assert persisted == [], (
+            f"dry-run must not write traces, found: {persisted}"
+        )

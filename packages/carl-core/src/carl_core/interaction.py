@@ -29,6 +29,11 @@ class ActionType(str, Enum):
     CLI_CMD = "cli_cmd"               # top-level CLI command dispatch
     GATE = "gate"                     # credential / permission prompt
     EXTERNAL = "external"             # HTTP request, file write, subprocess
+    PAYMENT = "payment"               # x402 / wallet payment flow
+    TRAINING_STEP = "training_step"   # periodic training progress marker
+    EVAL_PHASE = "eval_phase"         # eval phase start/end boundary
+    REWARD = "reward"                 # reward-aggregation snapshot
+    CHECKPOINT = "checkpoint"         # trainer checkpoint / model save
 
 
 def _utcnow() -> datetime:
@@ -74,6 +79,8 @@ class Step:
     duration_ms: float | None = None
     parent_id: str | None = None
     step_id: str = field(default_factory=_new_id)
+    session_id: str | None = None
+    trace_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -86,6 +93,8 @@ class Step:
             "started_at": self.started_at.isoformat(),
             "duration_ms": self.duration_ms,
             "parent_id": self.parent_id,
+            "session_id": self.session_id,
+            "trace_id": self.trace_id,
         }
 
 
@@ -121,6 +130,8 @@ class InteractionChain:
         success: bool = True,
         duration_ms: float | None = None,
         parent_id: str | None = None,
+        session_id: str | None = None,
+        trace_id: str | None = None,
     ) -> Step:
         """Build and append a step in one call — the common case."""
         step = Step(
@@ -131,6 +142,8 @@ class InteractionChain:
             success=success,
             duration_ms=duration_ms,
             parent_id=parent_id,
+            session_id=session_id,
+            trace_id=trace_id,
         )
         self.steps.append(step)
         return step
@@ -188,6 +201,8 @@ class InteractionChain:
                     duration_ms=raw.get("duration_ms"),
                     parent_id=raw.get("parent_id"),
                     step_id=raw.get("step_id", _new_id()),
+                    session_id=raw.get("session_id"),
+                    trace_id=raw.get("trace_id"),
                 )
             )
         return chain

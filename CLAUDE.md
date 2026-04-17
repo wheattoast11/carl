@@ -27,18 +27,25 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 
 ## Architecture snapshot
 
+- `packages/carl-core/` — primitive layer (own pyproject, own tests). Owns
+  `errors`, `retry`, `safepath`, `hashing`, `tier`, coherence math, interaction
+  chain. `py.typed` marker published; pyright needs the editable install.
 - `src/carl_studio/__init__.py` keeps top-level imports light and lazy-loads heavy modules.
-- `src/carl_studio/primitives/` — coherence math, traces, probes, observers.
+- `src/carl_studio/primitives/` — thin shim re-exporting from `carl_core` for back-compat.
+- `src/carl_studio/freshness.py` — typed `FreshnessReport`/`FreshnessIssue` with stable issue codes under `carl.freshness.*`.
 - `src/carl_studio/types/config.py` — Pydantic training config surface.
 - `src/carl_studio/training/` — trainer, pipeline, rewards, cascade.
 - `src/carl_studio/eval/runner.py` — eval runner and sandbox.
 - `src/carl_studio/compute/` — backend registry and compute backends.
 - `src/carl_studio/cli/` — modular Typer CLI package entrypoint.
+- `src/carl_studio/cli/init.py` — `carl init` / `carl camp init` one-shot wizard. First-run marker `~/.carl/.initialized`.
+- `src/carl_studio/cli/flow.py` — `carl flow "/a /b /c"` operation chainer (trace → `~/.carl/interactions/<id>.jsonl`).
+- `src/carl_studio/cli/operations.py` — flow op registry (doctor, start, init, ask, chat, flow, ship, review, simplify, train, eval, infer, publish, push, diagnose).
 - `src/carl_studio/mcp/server.py` — FastMCP server.
 - `src/carl_studio/db.py` — local SQLite state under `~/.carl`.
 - `src/carl_studio/settings.py` — layered config from env, `~/.carl/config.yaml`, and `carl.yaml`.
 - `src/carl_studio/admin.py` — hardware-gated access to the private runtime.
-- `src/carl_studio/chat_agent.py` — CARLAgent agentic loop (streaming, tools, sessions, cost, permissions).
+- `src/carl_studio/chat_agent.py` — CARLAgent agentic loop (streaming, tools, sessions, cost, permissions). Sessions persist with `schema_version=1`.
 - `src/carl_studio/frame.py` — WorkFrame analytical lens (domain/function/role/objectives).
 - `src/carl_studio/contract.py` — service contract witnessing (SHA-256 hash chain).
 - `src/carl_studio/consent.py` — privacy-first consent state machine (all flags off by default).
@@ -104,7 +111,31 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - `python -m build` works.
 - Single pytest node IDs work from the repo root.
 - Repo-wide Ruff and Pyright currently have pre-existing noise; validate touched files first.
-- Test baseline: 1103 tests, ~4s. `tests/test_uat_e2e.py` is the E2E UAT suite.
+- Test baseline: 1556 tests in `tests/` (`~40s` full run) plus the `carl-core` suite under `packages/carl-core/tests/`. `tests/test_uat_e2e.py` is the E2E UAT suite.
+- Pytest uses `importlib` import mode; `tests/` and `packages/carl-core/tests/` coexist without `__init__.py` collisions.
+
+## Production hardening patterns (post-v0.3.0)
+
+- All fatal paths route to `carl_core.errors.CARLError` subclasses with stable
+  `code` values under the `carl.<namespace>` convention (`carl.config`,
+  `carl.validation`, `carl.credential`, `carl.network`, `carl.budget`,
+  `carl.permission`, `carl.timeout`, `carl.freshness.*`). `to_dict()` auto-redacts
+  secret-shaped keys.
+- `InteractionChain` threads through training (`training/pipeline.py`), eval
+  (`eval/runner.py`), x402 (`x402.py`), and the chat agent
+  (`chat_agent.py`) — every durable operation records a step with action type,
+  input snapshot, output, success flag, and duration.
+- `carl_core` is the primitive boundary: import from `carl_core.errors`,
+  `carl_core.retry`, `carl_core.safepath`, `carl_core.hashing`,
+  `carl_core.tier`, and `carl_core.interaction` rather than reaching into
+  `carl_studio.primitives` (which is a shim).
+- `py.typed` marker ships on `carl-core`. Pyright will not see the package
+  unless it has the editable install (`pip install -e packages/carl-core`),
+  which `pip install -e ".[dev]"` handles transitively via the workspace.
+- Freshness issues use a structured primitive (`FreshnessReport` /
+  `FreshnessIssue`) with stable `code` and `severity`/`category`/`remediation`
+  fields. Legacy string-list views (`stale_packages`, `config_warnings`,
+  `credential_warnings`) remain for back-compat.
 
 ## Claude API integration (chat_agent.py)
 
@@ -116,15 +147,25 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - CLI commands lazy-import from source modules inside function bodies. Patch at
   `carl_studio.<module>.<Class>`, not `carl_studio.cli.<module>.<Class>`.
 - `SourceIngester.ingest()` on an empty directory raises `ValueError`, not empty list.
-- Sessions persist at `~/.carl/sessions/`. Knowledge `words` are sets — serialize as sorted lists.
+- Sessions persist at `~/.carl/sessions/` with `schema_version=1`. Knowledge `words` are sets — serialize as sorted lists.
 - Anthropic SDK: >=0.95.0 required for `cache_control` top-level param and streaming.
 
-## CLI routing (as of 2026-04-16)
+## CLI routing (as of 2026-04-17)
 
-- `carl chat` → `cli/chat.py:chat_cmd` → full CARLAgent agentic loop (correct path).
-- `carl lab repl` → `cli/lab.py:chat_repl` → simple REPL (no tool use, legacy).
-- `carl lab chat` no longer exists — renamed to `carl lab repl` to avoid confusion.
-- `carl lab curriculum` and `carl lab carlito` are the canonical paths (not top-level).
+| User invocation | Routes to | Behavior |
+|---|---|---|
+| `carl` (bare) | `cli/chat.py:chat_cmd` via `_default_to_chat` callback | Full CARLAgent loop. |
+| `carl chat` | `cli/chat.py:chat_cmd` | Full CARLAgent loop (same as bare). |
+| `carl "<prompt>"` | `cli/chat.py:ask_cmd` → `run_one_shot_agent` | One-shot agent — single Anthropic call with tools. |
+| `carl ask "<prompt>"` | same as `carl "<prompt>"` | Alias. |
+| `carl flow "/a /b /c"` | `cli/flow.py:flow_cmd` → `cli/operations.OPERATIONS` | Chains ops; trace persisted to `~/.carl/interactions/<id>.jsonl`. |
+| `carl init` | `cli/init.py:init_cmd` | One-shot wizard. First-run marker `~/.carl/.initialized`. |
+| `carl camp init` | `cli/init.py:init_cmd` (same callable) | Wired under `camp_app` as alias. |
+| `carl doctor` | `cli/startup.py:doctor` | Readiness + typed freshness report. |
+| `carl lab repl` | `cli/lab.py:chat_repl` | Simple REPL, no tool use (legacy). |
+| `carl lab curriculum` / `carl lab carlito` | `cli/lab.py` | Canonical paths (not top-level). |
+
+- `carl lab chat` no longer exists — it was renamed to `carl lab repl`.
 - `settings.py` defaults: `default_model=""`, `naming_prefix=""` — user must configure.
 - CLI `wiring.py` stubs print install hints when extras are missing (not silent `pass`).
 

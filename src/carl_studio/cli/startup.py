@@ -113,13 +113,13 @@ def doctor(
     if check_freshness or needs_check():
         freshness = run_freshness_check(force=check_freshness)
         if freshness.has_issues:
-            c.print(f"[yellow]Freshness: {freshness.summary}[/yellow]")
-            for w in freshness.stale_packages:
-                c.print(f"  [dim]- {w}[/dim]")
-            for w in freshness.config_warnings:
-                c.print(f"  [dim]- {w}[/dim]")
-            for w in freshness.credential_warnings:
-                c.print(f"  [dim]- {w}[/dim]")
+            tone = "red" if freshness.has_errors else "yellow"
+            c.print(f"[{tone}]Freshness: {freshness.summary}[/{tone}]")
+            for issue in freshness.issues:
+                c.print(
+                    f"  [dim]- [{issue.severity}] {issue.detail}"
+                    f" (fix: {issue.remediation})[/dim]"
+                )
             c.blank()
 
     raise typer.Exit(0 if readiness["guided_workbench"] else 1)
@@ -257,13 +257,13 @@ def start(
     if needs_check():
         freshness = run_freshness_check()
         if freshness.has_issues:
-            c.print(f"[yellow]Freshness: {freshness.summary}[/yellow]")
-            for w in freshness.stale_packages:
-                c.print(f"  [dim]- {w}[/dim]")
-            for w in freshness.config_warnings:
-                c.print(f"  [dim]- {w}[/dim]")
-            for w in freshness.credential_warnings:
-                c.print(f"  [dim]- {w}[/dim]")
+            tone = "red" if freshness.has_errors else "yellow"
+            c.print(f"[{tone}]Freshness: {freshness.summary}[/{tone}]")
+            for issue in freshness.issues:
+                c.print(
+                    f"  [dim]- [{issue.severity}] {issue.detail}"
+                    f" (fix: {issue.remediation})[/dim]"
+                )
             c.blank()
 
     c.print("  [camp.primary]Next steps[/]")

@@ -25,6 +25,7 @@ except Exception:
 
 
 from carl_core.constants import KAPPA, SIGMA
+from carl_core.interaction import ActionType, InteractionChain
 
 from carl_studio.training.rewards.multiscale import clamp_counts, reset_clamp_counts
 
@@ -63,8 +64,16 @@ class CoherenceMonitorCallback(TrainerCallback):
                                     -- per-period clamp-telemetry counts
     """
 
-    def __init__(self, carl_reward_fn: Any) -> None:
+    def __init__(
+        self,
+        carl_reward_fn: Any,
+        *,
+        chain: InteractionChain | None = None,
+        session_id: str | None = None,
+    ) -> None:
         self.carl_fn = carl_reward_fn
+        self.chain = chain
+        self.session_id = session_id
 
     def on_log(
         self,
@@ -99,6 +108,29 @@ class CoherenceMonitorCallback(TrainerCallback):
                     counts.get("nonfinite", 0),
                     counts.get("overflow", 0),
                 )
+
+            # Record REWARD step with aggregated clamp counts on the attached chain.
+            if self.chain is not None:
+                epoch = getattr(state, "epoch", None)
+                global_step = getattr(state, "global_step", None)
+                try:
+                    self.chain.record(
+                        ActionType.REWARD,
+                        "coherence.epoch_end",
+                        input={
+                            "epoch": epoch,
+                            "global_step": global_step,
+                        },
+                        output={
+                            "clamp_total": int(counts.get("total", 0)),
+                            "clamp_nonfinite": int(counts.get("nonfinite", 0)),
+                            "clamp_overflow": int(counts.get("overflow", 0)),
+                        },
+                        session_id=self.session_id,
+                    )
+                except Exception as chain_exc:  # pragma: no cover - defensive
+                    logger.debug("REWARD chain record failed: %s", chain_exc)
+
             reset_clamp_counts()
         except Exception as exc:
             logger.warning(
@@ -219,3 +251,200 @@ class CoherenceMonitorCallback(TrainerCallback):
         logs["coherence/reward_clamp_total"] = counts.get("total", 0)
         logs["coherence/reward_clamp_nonfinite"] = counts.get("nonfinite", 0)
         logs["coherence/reward_clamp_overflow"] = counts.get("overflow", 0)
+
+
+class InteractionChainCallback(TrainerCallback):
+    """Forwards HF Trainer events into an :class:`InteractionChain`.
+
+    Emits:
+
+    - ``TRAINING_STEP`` every ``step_interval`` global steps (or whenever the
+      HF Trainer emits a log record, whichever is coarser).
+    - ``CHECKPOINT`` on every ``on_save`` event.
+    - ``TRAINING_STEP`` at ``on_epoch_end`` with the epoch index.
+
+    Never raises: the training loop must survive a buggy or disconnected
+    chain. Per-callback exceptions go to the module logger at WARNING.
+    """
+
+    def __init__(
+        self,
+        chain: InteractionChain,
+        *,
+        run_id: str | None = None,
+        step_interval: int = 100,
+    ) -> None:
+        if chain is None:
+            raise ValueError("InteractionChainCallback requires a non-None chain")
+        if step_interval < 1:
+            raise ValueError(f"step_interval must be >= 1, got {step_interval}")
+        self.chain = chain
+        self.run_id = run_id
+        self.step_interval = int(step_interval)
+        self._last_logged_step: int = 0
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
+
+    def _record_step(
+        self,
+        name: str,
+        *,
+        input: dict[str, Any] | None = None,
+        output: dict[str, Any] | None = None,
+        action: ActionType = ActionType.TRAINING_STEP,
+        success: bool = True,
+    ) -> None:
+        try:
+            self.chain.record(
+                action,
+                name,
+                input=input,
+                output=output,
+                success=success,
+                session_id=self.run_id,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("chain record failed: %s", exc)
+
+    # ------------------------------------------------------------------
+    # Hooks
+    # ------------------------------------------------------------------
+
+    def on_train_begin(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        **kwargs: Any,
+    ) -> None:
+        try:
+            self._record_step(
+                "train.begin",
+                input={"run_id": self.run_id},
+                output={"max_steps": getattr(state, "max_steps", None)},
+            )
+        except Exception as exc:
+            logger.warning(
+                "callback %s.on_train_begin failed: %s", type(self).__name__, exc
+            )
+
+    def on_log(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        logs: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        try:
+            if logs is None:
+                return
+            global_step = int(getattr(state, "global_step", 0) or 0)
+            if global_step <= 0:
+                return
+            if global_step - self._last_logged_step < self.step_interval:
+                return
+            self._last_logged_step = global_step
+
+            # Capture a compact subset of metrics — don't flood the chain.
+            metrics = {
+                k: float(v)
+                for k, v in logs.items()
+                if isinstance(v, (int, float)) and not _is_skipped_key(k)
+            }
+            loss = metrics.get("loss")
+            lr = metrics.get("learning_rate")
+            self._record_step(
+                "train.step",
+                input={
+                    "global_step": global_step,
+                    "epoch": getattr(state, "epoch", None),
+                },
+                output={
+                    "loss": loss,
+                    "learning_rate": lr,
+                    "metrics_keys": sorted(metrics.keys())[:16],
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "callback %s.on_log failed: %s", type(self).__name__, exc
+            )
+
+    def on_save(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        **kwargs: Any,
+    ) -> None:
+        try:
+            global_step = int(getattr(state, "global_step", 0) or 0)
+            output_dir = getattr(args, "output_dir", None)
+            self._record_step(
+                "train.checkpoint",
+                input={"output_dir": output_dir, "global_step": global_step},
+                output={"epoch": getattr(state, "epoch", None)},
+                action=ActionType.CHECKPOINT,
+            )
+        except Exception as exc:
+            logger.warning(
+                "callback %s.on_save failed: %s", type(self).__name__, exc
+            )
+
+    def on_epoch_end(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        **kwargs: Any,
+    ) -> None:
+        try:
+            self._record_step(
+                "train.epoch_end",
+                input={
+                    "epoch": getattr(state, "epoch", None),
+                    "global_step": getattr(state, "global_step", None),
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "callback %s.on_epoch_end failed: %s", type(self).__name__, exc
+            )
+
+    def on_train_end(
+        self,
+        args: Any,
+        state: Any,
+        control: Any,
+        **kwargs: Any,
+    ) -> None:
+        try:
+            self._record_step(
+                "train.end",
+                input={"run_id": self.run_id},
+                output={
+                    "global_step": getattr(state, "global_step", None),
+                    "epoch": getattr(state, "epoch", None),
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "callback %s.on_train_end failed: %s", type(self).__name__, exc
+            )
+
+
+_SKIPPED_METRIC_KEYS: frozenset[str] = frozenset(
+    {
+        "total_flos",
+        "step",
+        "epoch",
+    }
+)
+
+
+def _is_skipped_key(key: str) -> bool:
+    """Filter out boilerplate keys we do not want in trace output."""
+    return key in _SKIPPED_METRIC_KEYS or key.startswith("eval_runtime")

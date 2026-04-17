@@ -37,13 +37,16 @@ python -m build
 ## Test
 ```bash
 pytest tests/ -q --tb=short
+pytest packages/carl-core/tests/ -q --tb=short
 pytest tests/test_release_version.py -q --tb=short
 pytest tests/test_release_version.py::test_manual_release_tag_wins_when_higher -q --tb=short
 pytest tests/ -k "marketplace and not network" -q --tb=short
 pytest --lf -q --tb=short
 ```
 - Run pytest from repo root. `tests/conftest.py` reads `src/carl_studio/__init__.py` via repo-relative path.
+- Pytest is configured with `importlib` import mode (in `pyproject.toml`) — tests under `packages/carl-core/tests/` and `tests/` both resolve without `__init__.py` collisions.
 - For fast feedback, run a single file or node ID first, then broaden if needed.
+- Test baseline: 1556 tests in `tests/` plus the `carl-core` suite under `packages/carl-core/tests/`.
 
 ## Lint and format
 ```bash
@@ -65,9 +68,16 @@ pyright src/carl_studio/<changed_module>.py
 - Treat those as pre-existing debt unless your change is in that area.
 
 ## High-value repo map
+- `packages/carl-core/src/carl_core/` — primitive layer: errors, retry/backoff,
+  safepath sandbox, content hashing, tier gating, coherence math, interaction chains.
+  `py.typed` marker present; pyright needs the editable install to resolve the package.
 - `src/carl_studio/cli/` — modular Typer CLI package entrypoint.
+- `src/carl_studio/cli/init.py` — `carl init` / `carl camp init` wizard. First-run
+  marker lives at `~/.carl/.initialized`.
+- `src/carl_studio/cli/flow.py` — `carl flow "/a /b /c"` operation chainer.
+- `src/carl_studio/cli/operations.py` — flow op registry.
 - `src/carl_studio/settings.py` — layered settings from env, `~/.carl/config.yaml`, and `carl.yaml`.
-- `src/carl_studio/tier.py` — FREE/PAID feature gating.
+- `src/carl_studio/tier.py` — FREE/PAID feature gating (thin shim over `carl_core.tier`).
 - `src/carl_studio/types/config.py` — Pydantic training config.
 - `src/carl_studio/training/` — trainer, pipeline, rewards, cascade.
 - `src/carl_studio/eval/runner.py` — eval runner and eval sandbox.
@@ -75,7 +85,33 @@ pyright src/carl_studio/<changed_module>.py
 - `src/carl_studio/mcp/server.py` — FastMCP server.
 - `src/carl_studio/db.py` — SQLite persistence under `~/.carl/carl.db`.
 - `src/carl_studio/admin.py` — hardware-gated private runtime access.
+- `src/carl_studio/freshness.py` — typed `FreshnessReport` / `FreshnessIssue` primitive.
 - `src/carl_studio/skills/`, `a2a/`, `credits/`, `marketplace.py`, and `curriculum.py` are live modules.
+
+## carl-core primitive surface
+- `from carl_core.errors import CARLError, ValidationError, NetworkError,
+  ConfigError, CredentialError, BudgetError, PermissionError, CARLTimeoutError`
+  — all fatal paths use these; each carries a stable `code` under the
+  `carl.<namespace>` convention. `to_dict()` auto-redacts secret-shaped keys.
+- `from carl_core.retry import retry, async_retry, RetryPolicy,
+  CircuitBreaker, CircuitState, poll` — exponential backoff with circuit-breaker
+  state machine.
+- `from carl_core.safepath import safe_resolve, within, SandboxedPath,
+  PathEscape` — enforces `resolved == workdir or startswith(workdir + os.sep)`.
+- `from carl_core.hashing import canonical_json, content_hash,
+  content_hash_bytes` — deterministic SHA-256 content hashing.
+- `from carl_core.tier import Tier, FEATURE_TIERS, tier_allows,
+  feature_tier, TierGateError` — canonical FREE/PAID enum.
+- `from carl_core.interaction import InteractionChain, Step, ActionType`
+  — structured interaction trace primitive threading through training, eval,
+  x402, and the agent loop.
+
+## Session surface
+- Chat sessions persist at `~/.carl/sessions/<id>.json` with `schema_version=1`.
+  Older payloads without `schema_version` are treated as v1 for
+  back-compat; mismatched versions are quarantined.
+- First-run marker: `~/.carl/.initialized`. `carl init` creates it on success;
+  `carl init --force` ignores it.
 
 ## Product and architecture constraints
 - CARL means **Coherence-Aware Reinforcement Learning**; never rewrite it as “Crystal-Aligned.”
@@ -129,6 +165,10 @@ pyright src/carl_studio/<changed_module>.py
 - Keep tests CPU-only and offline-safe when possible.
 - `tests/conftest.py` stubs heavy imports so lightweight modules can run without torch/transformers; do not break that bootstrap path.
 - When changing packaging or release logic, always run `pytest tests/test_release_version.py -q --tb=short` and `python -m build`.
+- Pytest uses `importlib` mode; tests under `tests/` and `packages/carl-core/tests/` coexist without `__init__.py` hacks.
+- `carl-core` primitive changes should run `pytest packages/carl-core/tests/ -q --tb=short`
+  plus the dependent studio surface (errors → `test_primitives.py`, retry/backoff → `test_integration_seams.py`,
+  safepath → `test_eval.py`, hashing → `test_interaction_chain.py`, tier → `test_gate.py`).
 
 ## Deterministic agent procedure
 1. Classify the request: docs, config, CLI, core math, platform I/O, packaging, or optional-dependency boundary.

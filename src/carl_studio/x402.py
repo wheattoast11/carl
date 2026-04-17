@@ -7,11 +7,14 @@ with x402 headers. No web3.py dependency — stdlib urllib only.
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from carl_core.interaction import ActionType, InteractionChain
 
 _X402_CONFIG_KEY = "x402_config"
 
@@ -65,10 +68,54 @@ def _parse_x_payment_header(header: str) -> PaymentRequirement:
 
 
 class X402Client:
-    """Lightweight x402 payment rail client using stdlib urllib."""
+    """Lightweight x402 payment rail client using stdlib urllib.
 
-    def __init__(self, config: X402Config) -> None:
+    Pass an ``InteractionChain`` to ``chain`` to have every check / negotiate
+    / execute call recorded as a ``PAYMENT`` step with the facilitator URL,
+    amount, token, and success/failure state. When ``chain`` is ``None`` the
+    client behaves exactly as before and records nothing.
+    """
+
+    def __init__(
+        self,
+        config: X402Config,
+        *,
+        chain: InteractionChain | None = None,
+    ) -> None:
         self._config = config
+        self._chain = chain
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _record(
+        self,
+        name: str,
+        *,
+        input: dict[str, Any] | None = None,
+        output: Any = None,
+        success: bool = True,
+        duration_ms: float | None = None,
+    ) -> None:
+        if self._chain is None:
+            return
+        try:
+            self._chain.record(
+                ActionType.PAYMENT,
+                name,
+                input=input,
+                output=output,
+                success=success,
+                duration_ms=duration_ms,
+            )
+        except Exception:
+            # Never let trace recording propagate into the payment flow.
+            pass
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def check_x402(self, url: str, timeout: int = 10) -> PaymentRequirement | None:
         """HEAD request; parse x-payment header from 402 response.
@@ -76,17 +123,58 @@ class X402Client:
         Returns None if the URL does not support x402.
         """
         req = urllib.request.Request(url, method="HEAD")
+        started = time.monotonic()
         try:
             urllib.request.urlopen(req, timeout=timeout)
+            self._record(
+                "x402.check:no_payment",
+                input={"url": url},
+                output={"status": 200},
+                success=True,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
             return None  # 200 OK — no payment required
         except urllib.error.HTTPError as exc:
             if exc.code != 402:
+                self._record(
+                    "x402.check:unsupported",
+                    input={"url": url},
+                    output={"status": exc.code},
+                    success=False,
+                    duration_ms=(time.monotonic() - started) * 1000,
+                )
                 return None
             header = exc.headers.get("x-payment", "")
             if not header:
+                self._record(
+                    "x402.check:402_no_header",
+                    input={"url": url},
+                    output={"status": 402},
+                    success=False,
+                    duration_ms=(time.monotonic() - started) * 1000,
+                )
                 return None
-            return _parse_x_payment_header(header)
-        except urllib.error.URLError:
+            requirement = _parse_x_payment_header(header)
+            self._record(
+                "x402.check:402_requirement",
+                input={"url": url},
+                output={
+                    "amount": requirement.amount,
+                    "token": requirement.token,
+                    "chain": requirement.chain,
+                },
+                success=True,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
+            return requirement
+        except urllib.error.URLError as exc:
+            self._record(
+                "x402.check:network_error",
+                input={"url": url},
+                output={"error": str(exc)},
+                success=False,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
             return None
 
     def negotiate(
@@ -95,6 +183,14 @@ class X402Client:
         """POST to facilitator to get a payment authorization token."""
         facilitator = requirement.facilitator or self._config.facilitator_url
         if not facilitator:
+            self._record(
+                "x402.negotiate:missing_facilitator",
+                input={
+                    "amount": requirement.amount,
+                    "token": requirement.token,
+                },
+                success=False,
+            )
             raise X402Error("No facilitator URL configured or in payment requirement.")
 
         body = json.dumps({
@@ -111,13 +207,41 @@ class X402Client:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
+        started = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return json.loads(resp.read())
+                raw = resp.read()
+            result = json.loads(raw)
+            self._record(
+                "x402.negotiate",
+                input={
+                    "facilitator": facilitator,
+                    "amount": requirement.amount,
+                    "token": requirement.token,
+                },
+                output={"token_issued": bool(result)},
+                success=True,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
+            return result
         except urllib.error.HTTPError as exc:
             msg = exc.read().decode(errors="replace") if exc.fp else str(exc)
+            self._record(
+                "x402.negotiate:failed",
+                input={"facilitator": facilitator},
+                output={"status": exc.code, "message": msg[:200]},
+                success=False,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
             raise X402Error(f"Negotiation failed ({exc.code}): {msg}") from exc
         except urllib.error.URLError as exc:
+            self._record(
+                "x402.negotiate:network_error",
+                input={"facilitator": facilitator},
+                output={"error": str(exc.reason)},
+                success=False,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
             raise X402Error(f"Network error: {exc.reason}") from exc
 
     def execute(
@@ -129,13 +253,36 @@ class X402Client:
             headers={"X-Payment-Token": payment_token},
             method="GET",
         )
+        started = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.read()
+                body = resp.read()
+            self._record(
+                "x402.execute",
+                input={"url": url},
+                output={"bytes": len(body)},
+                success=True,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
+            return body
         except urllib.error.HTTPError as exc:
             msg = exc.read().decode(errors="replace") if exc.fp else str(exc)
+            self._record(
+                "x402.execute:failed",
+                input={"url": url},
+                output={"status": exc.code, "message": msg[:200]},
+                success=False,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
             raise X402Error(f"Payment execution failed ({exc.code}): {msg}") from exc
         except urllib.error.URLError as exc:
+            self._record(
+                "x402.execute:network_error",
+                input={"url": url},
+                output={"error": str(exc.reason)},
+                success=False,
+                duration_ms=(time.monotonic() - started) * 1000,
+            )
             raise X402Error(f"Network error: {exc.reason}") from exc
 
 

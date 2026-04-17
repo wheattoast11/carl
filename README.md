@@ -48,6 +48,7 @@ pip install 'carl-studio[training]'        # local train/eval
 pip install 'carl-studio[hf]'              # status/logs/stop/push/HF Jobs
 pip install 'carl-studio[tui]'             # observe --live
 pip install 'carl-studio[observe]'         # observe --diagnose
+pip install 'carl-studio[wallet]'          # x402 / Coinbase wallet
 pip install 'carl-studio[all]'             # everything
 ```
 
@@ -56,6 +57,17 @@ Most users should start with:
 ```bash
 pip install 'carl-studio[training,hf]'
 ```
+
+## Quickstart
+
+```bash
+pip install carl-studio
+carl init                  # one-shot setup: account, provider, extras, project, consent
+carl "train a small model on gsm8k"   # agent — one-shot prompt
+carl chat                  # agent — interactive loop
+```
+
+`carl init` is idempotent: re-running it after setup does nothing unless you pass `--force`. A first-run marker lives at `~/.carl/.initialized`.
 
 ## Auth
 
@@ -85,13 +97,46 @@ carl start
 
 Full auth details: [`docs/auth.md`](docs/auth.md)
 
+## Primary commands
+
+| Command | What it does |
+|---|---|
+| `carl init` | One-shot setup: account, provider, extras, project, consent. |
+| `carl chat` | Interactive agent loop with tools, sessions, cost tracking. |
+| `carl "<prompt>"` / `carl ask "<prompt>"` | One-shot agent invocation. |
+| `carl flow "/a /b /c"` | Chain named operations, emit a shared interaction trace. |
+| `carl doctor` | Readiness audit. Prints blocking issues and freshness findings. |
+| `carl train` | Local training with coherence rewards (`carl-studio[training]`). |
+
+Run `carl start --inventory` for the full installed command map, or `carl flow --list` for every chainable op.
+
+## Architecture
+
+- **`carl-core`** — primitive layer. Typed errors, retry/backoff, safepath sandboxing, content hashing, tier gating, coherence math, interaction chains. Zero training deps.
+- **`carl-studio`** — the CLI, agent loop, training pipeline, MCP server, camp client, eval sandbox. Everything above builds on `carl-core`.
+
+`carl-core` is installed alongside `carl-studio`; public callers should import from `carl_core.*` rather than reach into `carl_studio.primitives`.
+
+## Error contract
+
+Fatal paths raise `carl_core.errors.CARLError` subclasses with stable codes you can match programmatically. Top codes:
+
+| Code | Meaning |
+|---|---|
+| `carl.error` | Base class. Generic failure. |
+| `carl.config` | Invalid or missing configuration. |
+| `carl.validation` | Input failed schema / value validation. |
+| `carl.credential` | Missing or expired credential. |
+| `carl.network` | Transient or persistent network failure. |
+| `carl.budget` | Spend cap exceeded. |
+| `carl.permission` | Permission / consent gate failed. |
+| `carl.timeout` | Operation exceeded its deadline. |
+| `carl.freshness.stale_pkg` | Installed package older than recommended floor. |
+| `carl.freshness.camp_session_expired` | `carl.camp` session needs `carl camp login`. |
+
+`CARLError.to_dict()` produces a secrets-redacted, telemetry-safe payload. See `packages/carl-core/src/carl_core/errors.py` for the full hierarchy.
+
 ## Use
-
-Start each new machine or repo with a quick readiness check:
-
-```bash
-carl start
-```
 
 **See inside a Trackio run** (no GPU required, base install):
 ```bash

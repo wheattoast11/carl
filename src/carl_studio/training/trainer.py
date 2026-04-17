@@ -19,6 +19,7 @@ import re
 import uuid
 from typing import Any, Optional
 
+from carl_core.interaction import ActionType, InteractionChain
 from carl_core.retry import RetryPolicy
 
 from carl_studio.types.config import ComputeTarget, TrainingConfig, TrainingMethod
@@ -71,6 +72,8 @@ class CARLTrainer:
         *,
         skip_credits: bool = False,
         resume_from_checkpoint: bool | str | None = None,
+        interaction_chain: InteractionChain | None = None,
+        training_step_interval: int = 100,
     ) -> None:
         self.config = config
         self.skip_credits = bool(skip_credits)
@@ -84,6 +87,40 @@ class CARLTrainer:
         self._tokenizer: Any = None
         self._cascade_manager: Any = None
         self._reward_fns: list[Any] = []
+        # --- InteractionChain plumbing -------------------------------------
+        # When a chain is provided, the trainer emits TRAINING_STEP (every
+        # ``training_step_interval`` global steps), CHECKPOINT (on save) and
+        # a bracketing ``training.start``/``training.complete`` step pair.
+        self.chain: InteractionChain | None = interaction_chain
+        if training_step_interval < 1:
+            raise ValueError(
+                f"training_step_interval must be >= 1, got {training_step_interval}"
+            )
+        self._step_interval = int(training_step_interval)
+
+    def _record(
+        self,
+        action: ActionType,
+        name: str,
+        *,
+        input: Any = None,
+        output: Any = None,
+        success: bool = True,
+    ) -> None:
+        """Append a step to self.chain iff one is attached. Never raises."""
+        if self.chain is None:
+            return
+        try:
+            self.chain.record(
+                action,
+                name,
+                input=input,
+                output=output,
+                success=success,
+                session_id=self.run.id,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("interaction chain record failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Public API
@@ -335,6 +372,16 @@ class CARLTrainer:
 
             self.run.hub_job_id = job_id
             self.run.phase = RunPhase.TRAINING
+            self._record(
+                ActionType.TRAINING_STEP,
+                "training.submitted",
+                input={
+                    "flavor": flavor,
+                    "method": self.config.method.value,
+                    "run_id": self.run.id,
+                },
+                output={"hub_job_id": job_id},
+            )
             logger.info("Remote job submitted: %s", job_id)
             return self.run
         except BaseException:
@@ -546,21 +593,48 @@ class CARLTrainer:
             self.config.base_model,
         )
 
+        self._record(
+            ActionType.TRAINING_STEP,
+            "training.start",
+            input={
+                "method": self.config.method.value,
+                "base_model": self.config.base_model,
+                "run_id": self.run.id,
+                "max_steps": self.config.max_steps,
+            },
+        )
+
         self.run.phase = RunPhase.LOADING_MODEL
         self._load_model_and_tokenizer()
 
         self.run.phase = RunPhase.TRAINING
-        if self.config.method == TrainingMethod.SFT:
-            await self._run_sft()
-        elif self.config.method == TrainingMethod.GRPO:
-            await self._run_grpo()
-        else:
-            raise ValueError(
-                f"Training method '{self.config.method.value}' is not yet implemented. "
-                "Supported methods: sft, grpo."
+        try:
+            if self.config.method == TrainingMethod.SFT:
+                await self._run_sft()
+            elif self.config.method == TrainingMethod.GRPO:
+                await self._run_grpo()
+            else:
+                raise ValueError(
+                    f"Training method '{self.config.method.value}' is not yet implemented. "
+                    "Supported methods: sft, grpo."
+                )
+        except BaseException as exc:
+            self._record(
+                ActionType.TRAINING_STEP,
+                "training.failed",
+                input={"method": self.config.method.value},
+                output={"error": str(exc), "type": type(exc).__name__},
+                success=False,
             )
+            raise
 
         self.run.phase = RunPhase.COMPLETE
+        self._record(
+            ActionType.TRAINING_STEP,
+            "training.complete",
+            input={"method": self.config.method.value},
+            output={"run_id": self.run.id},
+        )
         logger.info("Local training complete: run_id=%s", self.run.id)
         return self.run
 
@@ -878,7 +952,21 @@ class CARLTrainer:
                 trainer.train(resume_from_checkpoint=resume)
         except (Exception, KeyboardInterrupt) as exc:
             self._save_carl_checkpoint(trainer, output_dir, exc)
+            self._record(
+                ActionType.CHECKPOINT,
+                "sft.crash_checkpoint",
+                input={"output_dir": output_dir},
+                output={"exception_type": type(exc).__name__},
+                success=False,
+            )
             raise
+
+        self._record(
+            ActionType.CHECKPOINT,
+            "sft.save",
+            input={"output_dir": output_dir},
+            output={"run_id": self.run.id},
+        )
 
         if cfg.push_to_hub:
             self.run.phase = RunPhase.PUSHING
@@ -985,7 +1073,21 @@ class CARLTrainer:
                 trainer.train(resume_from_checkpoint=resume)
         except (Exception, KeyboardInterrupt) as exc:
             self._save_carl_checkpoint(trainer, output_dir, exc)
+            self._record(
+                ActionType.CHECKPOINT,
+                "grpo.crash_checkpoint",
+                input={"output_dir": output_dir},
+                output={"exception_type": type(exc).__name__},
+                success=False,
+            )
             raise
+
+        self._record(
+            ActionType.CHECKPOINT,
+            "grpo.save",
+            input={"output_dir": output_dir},
+            output={"run_id": self.run.id},
+        )
 
         if cfg.push_to_hub:
             self.run.phase = RunPhase.PUSHING
@@ -1095,7 +1197,10 @@ class CARLTrainer:
 
     def _build_callbacks(self) -> list[Any]:
         """Build training callbacks: CascadeCallback + CoherenceMonitorCallback."""
-        from carl_studio.training.callbacks import CoherenceMonitorCallback
+        from carl_studio.training.callbacks import (
+            CoherenceMonitorCallback,
+            InteractionChainCallback,
+        )
         from carl_studio.training.cascade import CascadeCallback
 
         callbacks: list[Any] = []
@@ -1107,9 +1212,25 @@ class CARLTrainer:
         # Coherence monitoring -- find the CARL reward fn (carries _last_metrics)
         carl_fn = self._find_carl_reward_fn()
         if carl_fn is not None:
-            callbacks.append(CoherenceMonitorCallback(carl_fn))
+            callbacks.append(
+                CoherenceMonitorCallback(
+                    carl_fn,
+                    chain=self.chain,
+                    session_id=self.run.id,
+                )
+            )
         else:
             logger.warning("Could not locate CARL reward function for coherence monitoring")
+
+        # Emit TRAINING_STEP + CHECKPOINT into InteractionChain when attached.
+        if self.chain is not None:
+            callbacks.append(
+                InteractionChainCallback(
+                    chain=self.chain,
+                    run_id=self.run.id,
+                    step_interval=self._step_interval,
+                )
+            )
 
         return callbacks
 
