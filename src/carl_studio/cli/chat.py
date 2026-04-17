@@ -223,6 +223,24 @@ def chat_cmd(
         c.info("Use: carl chat --model claude-sonnet-4-6  for cloud inference.")
         raise typer.Exit(0)
 
+    # First-run nudge: if the user has never initialized Carl, offer it now.
+    # The chat agent needs an API key at minimum; walking through init first
+    # beats hitting a mystery credential prompt mid-conversation.
+    try:
+        from carl_studio.cli.init import _first_run_complete, init_cmd
+    except ImportError:
+        pass
+    else:
+        if not _first_run_complete():
+            c.blank()
+            c.info("Looks like this is your first run. Let's set up in one minute.")
+            if typer.confirm("Run carl init now?", default=True):
+                try:
+                    init_cmd(skip_extras=False, skip_project=False, force=False, json_output=False)
+                except typer.Exit:
+                    pass
+                c.blank()
+
     # Load frame
     frame = None
     if frame_source and frame_source != "none":

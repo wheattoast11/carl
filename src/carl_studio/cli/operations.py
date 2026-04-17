@@ -97,6 +97,94 @@ def _echo_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
     return chain
 
 
+def _chat_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
+    """Open the interactive chat loop. Args become the first user turn if provided."""
+    chain.record(ActionType.CLI_CMD, "carl chat", input={"first_turn": " ".join(args)})
+    if args:
+        # If args were given, one-shot it instead of blocking on input
+        prompt = " ".join(args)
+        try:
+            from carl_studio.cli.chat import run_one_shot_agent
+
+            run_one_shot_agent(prompt)
+        except SystemExit:
+            pass
+    else:
+        try:
+            from carl_studio.cli.chat import chat_cmd
+
+            chat_cmd()
+        except SystemExit:
+            pass
+    return chain
+
+
+def _train_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
+    """Hand the chain off to the agent as a training instruction."""
+    prompt = "train " + " ".join(args) if args else "Help me set up a training run for this project."
+    chain.record(ActionType.CLI_CMD, "carl train (via agent)", input={"prompt": prompt[:200]})
+    try:
+        from carl_studio.cli.chat import run_one_shot_agent
+
+        run_one_shot_agent(prompt)
+    except SystemExit:
+        pass
+    return chain
+
+
+def _review_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
+    """Ask Carl for a code/config review on the given target."""
+    target = " ".join(args) or "the most recent change"
+    prompt = (
+        f"Review {target}. Look for bugs, bad patterns, and things that would confuse "
+        f"a new reader. Keep it under 200 words."
+    )
+    chain.record(ActionType.CLI_CMD, "review", input={"target": target})
+    try:
+        from carl_studio.cli.chat import run_one_shot_agent
+
+        run_one_shot_agent(prompt)
+    except SystemExit:
+        pass
+    return chain
+
+
+def _simplify_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
+    """Ask Carl to simplify the target file or module."""
+    target = " ".join(args) or "the current file"
+    prompt = (
+        f"Simplify {target}. Remove dead code, redundant abstractions, and anything that "
+        f"doesn't pull weight. Preserve behavior. Report each simplification before applying."
+    )
+    chain.record(ActionType.CLI_CMD, "simplify", input={"target": target})
+    try:
+        from carl_studio.cli.chat import run_one_shot_agent
+
+        run_one_shot_agent(prompt)
+    except SystemExit:
+        pass
+    return chain
+
+
+def _ship_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
+    """Run the full quality pipeline via the agent: tests, lint, type, bundle, commit."""
+    extra = " ".join(args)
+    prompt = (
+        "Ship this: run tests, run lint, run type checks, fix any failures, then stage "
+        "and commit the fix. Report what was green, what was red, and what you changed."
+    )
+    if extra:
+        prompt += f"\n\nExtra instructions: {extra}"
+    chain.record(ActionType.CLI_CMD, "ship", input={"extra": extra})
+    try:
+        from carl_studio.cli.chat import run_one_shot_agent
+
+        run_one_shot_agent(prompt)
+    except SystemExit:
+        pass
+    return chain
+
+
 OPERATIONS: dict[str, Operation] = {
     "doctor": _doctor_op,
     "start": _start_op,
@@ -104,6 +192,11 @@ OPERATIONS: dict[str, Operation] = {
     "ask": _ask_op,
     "freshness": _freshness_op,
     "echo": _echo_op,
+    "chat": _chat_op,
+    "train": _train_op,
+    "review": _review_op,
+    "simplify": _simplify_op,
+    "ship": _ship_op,
 }
 
 
