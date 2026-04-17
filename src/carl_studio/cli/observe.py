@@ -354,11 +354,13 @@ def _render_diagnose(c: "CampConsole", frames: list, api_key: str | None) -> Non
     key = api_key or os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         c.blank()
-        c.warn("--diagnose requires ANTHROPIC_API_KEY")
-        c.info("Set the environment variable or pass --api-key <key>")
-        c.info("Without it, carl observe still gives full local metrics above.")
-        c.blank()
-        return
+        c.info("Without ANTHROPIC_API_KEY, carl observe still gives full local metrics above.")
+        try:
+            from carl_studio.cli.prompt import require
+            key = require("ANTHROPIC_API_KEY")
+        except typer.Abort:
+            c.blank()
+            return
 
     try:
         import anthropic  # noqa: F401

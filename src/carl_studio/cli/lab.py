@@ -208,9 +208,8 @@ def chat_repl(
     c = get_console()
     _warn_legacy_command_alias(c, ctx, "carl lab chat")
     if not api_key:
-        c.error("ANTHROPIC_API_KEY required for carl chat")
-        c.info("Set via env var or --api-key")
-        raise typer.Exit(1)
+        from carl_studio.cli.prompt import require
+        api_key = require("ANTHROPIC_API_KEY")
 
     try:
         import anthropic
