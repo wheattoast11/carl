@@ -23,7 +23,7 @@ Attach platform:
 app = typer.Typer(
     name="carl",
     help=_APP_HELP,
-    no_args_is_help=True,
+    no_args_is_help=False,  # bare `carl` routes to chat via the default callback
 )
 
 camp_app = typer.Typer(

@@ -78,6 +78,105 @@ def _list_sessions() -> None:
         console.print(table)
 
 
+def run_one_shot_agent(
+    prompt: str,
+    *,
+    model: str = "",
+    config: str = "carl.yaml",
+    api_key: str | None = None,
+    frame_source: str = "current",
+    budget: float = 0.0,
+) -> None:
+    """Fire a single agent turn with ``prompt`` and print the streamed reply.
+
+    Used for ``carl ask "train a model on gsm8k"`` style invocations.
+    Does not enter the interactive loop; returns when the turn is done.
+    """
+    c = get_console()
+
+    frame = None
+    if frame_source and frame_source != "none":
+        from carl_studio.frame import WorkFrame
+
+        if frame_source == "current":
+            frame = WorkFrame.from_project(config)
+        else:
+            frame = WorkFrame.load(frame_source)
+
+    from carl_studio.chat_agent import CARLAgent
+
+    agent = CARLAgent(
+        api_key=api_key or "",
+        model=model,
+        frame=frame,
+        max_budget_usd=budget,
+    )
+
+    info = agent.provider_info
+    c.blank()
+    c.kv("Model", info["model"])
+    c.kv("Prompt", prompt[:120] + ("..." if len(prompt) > 120 else ""))
+    c.blank()
+
+    streaming_text = False
+    try:
+        for event in agent.chat(prompt):
+            if event.kind == "text_delta":
+                if not streaming_text:
+                    c.print("carl> ", end="")
+                    streaming_text = True
+                c.print(event.content, end="")
+            elif event.kind == "text":
+                c.blank()
+                from rich.markdown import Markdown
+
+                c.print(Markdown(f"**carl>** {event.content}"))
+            elif event.kind == "tool_call":
+                if streaming_text:
+                    c.blank()
+                    streaming_text = False
+                c.info(f"[{event.tool_name}] {_format_args(event.tool_args)}")
+            elif event.kind == "tool_result":
+                preview = event.content[:200]
+                if len(event.content) > 200:
+                    preview += "..."
+                c.info(f"  -> {preview}")
+            elif event.kind == "done":
+                if streaming_text:
+                    c.blank()
+                    streaming_text = False
+            elif event.kind == "error":
+                c.error(event.content)
+    except Exception as exc:
+        c.error(str(exc))
+
+    cost = agent.cost_summary
+    if cost["turn_count"] > 0:
+        c.blank()
+        c.kv("Cost", f"${cost['total_cost_usd']:.4f}", key_width=10)
+
+
+def ask_cmd(
+    prompt: str = typer.Argument(..., help="What to ask or do"),
+    model: str = typer.Option("", "--model", "-m", help="Claude model"),
+    config: str = typer.Option("carl.yaml", "--config", "-c", help="Project config"),
+    api_key: str | None = typer.Option(
+        None, "--api-key", envvar="ANTHROPIC_API_KEY", help="Anthropic API key"
+    ),
+    frame_source: str = typer.Option("current", "--frame", help="WorkFrame"),
+    budget: float = typer.Option(0.0, "--budget", help="Max spend in USD"),
+) -> None:
+    """Ask Carl a single question or give a single instruction."""
+    run_one_shot_agent(
+        prompt,
+        model=model,
+        config=config,
+        api_key=api_key,
+        frame_source=frame_source,
+        budget=budget,
+    )
+
+
 def chat_cmd(
     model: str = typer.Option(
         "", "--model", "-m", help="Claude model for agent (default: from settings)"

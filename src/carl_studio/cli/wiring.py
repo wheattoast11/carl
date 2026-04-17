@@ -277,8 +277,21 @@ except ImportError:
 # Wire carl chat (top-level agentic chat)
 # ---------------------------------------------------------------------------
 try:
-    from .chat import chat_cmd
+    from . import chat as _chat_module
+    from .chat import ask_cmd, chat_cmd
 
     app.command(name="chat")(chat_cmd)
+    app.command(name="ask")(ask_cmd)
+
+    # Bare `carl` (no subcommand) → open the chat interface. Carl is the
+    # default surface; every other subcommand is a shortcut underneath.
+    # Look chat_cmd up dynamically so tests can patch carl_studio.cli.chat.chat_cmd.
+    @app.callback(invoke_without_command=True)
+    def _default_to_chat(ctx: typer.Context) -> None:
+        """CARL — chat by default, any subcommand below routes normally."""
+        if ctx.invoked_subcommand is None:
+            _chat_module.chat_cmd()
+
 except ImportError:
     _make_stub(app, "chat", doc="Chat requires the full carl-studio package.")
+    _make_stub(app, "ask", doc="Ask requires the full carl-studio package.")
