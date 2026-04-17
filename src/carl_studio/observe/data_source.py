@@ -136,7 +136,7 @@ class TraceFileSource:
 
             # Reconstruct trace for sparklines
             try:
-                from carl_studio.primitives.coherence_trace import CoherenceTrace
+                from carl_core.coherence_trace import CoherenceTrace
 
                 trace = CoherenceTrace.from_dict(raw)
                 phi_spark = trace.sparkline(width=60)

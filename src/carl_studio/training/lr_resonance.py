@@ -25,7 +25,7 @@ except Exception:
         pass
 
 
-from carl_studio.primitives.constants import KAPPA
+from carl_core.constants import KAPPA
 
 
 class ResonanceLRCallback(TrainerCallback):

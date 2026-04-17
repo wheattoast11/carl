@@ -19,7 +19,7 @@ except Exception:
         pass
 
 
-from carl_studio.primitives.constants import KAPPA, SIGMA
+from carl_core.constants import KAPPA, SIGMA
 
 
 class CoherenceMonitorCallback(TrainerCallback):

@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from carl_studio.primitives import CoherenceProbe, CoherenceObserver
+from carl_core import CoherenceProbe, CoherenceObserver
 
 
 def test_observer_accumulates():

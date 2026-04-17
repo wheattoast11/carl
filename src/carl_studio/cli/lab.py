@@ -223,7 +223,7 @@ def chat_repl(
         )
         raise typer.Exit(1)
 
-    from carl_studio.primitives.constants import KAPPA, SIGMA
+    from carl_core.constants import KAPPA, SIGMA
 
     # Load project context if available
     project_context = ""

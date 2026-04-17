@@ -5,13 +5,13 @@ import threading
 import numpy as np
 import pytest
 
-from carl_studio.primitives.constants import KAPPA
+from carl_core.constants import KAPPA
 from carl_studio.training.lr_resonance import ResonanceLRCallback
 
 
 def _make_mock_carl_fn(R_value: float = 0.5):
     """Mock CARL reward fn with traces that produce a specific Kuramoto R."""
-    from carl_studio.primitives.coherence_trace import CoherenceTrace
+    from carl_core.coherence_trace import CoherenceTrace
 
     # Build a trace with known Phi values that produce target R
     # For half-circle mapping: R = |mean(exp(i*pi*phi))|

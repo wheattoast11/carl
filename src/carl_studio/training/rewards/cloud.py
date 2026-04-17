@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from carl_studio.primitives.math import compute_phi
+from carl_core.math import compute_phi
 
 
 def cloud_quality_reward(logits: np.ndarray, token_ids: np.ndarray) -> float:

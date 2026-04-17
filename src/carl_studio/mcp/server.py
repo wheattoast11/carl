@@ -134,7 +134,7 @@ async def observe_now(run_id: str) -> str:
     Requires ANTHROPIC_API_KEY in environment.
     Returns JSON with status, diagnosis, signals, recommendations.
     """
-    from carl_studio.primitives import CoherenceObserver
+    from carl_core import CoherenceObserver
 
     observer = CoherenceObserver()
     assessment = observer.force_observe()
@@ -147,7 +147,7 @@ async def get_coherence_metrics(logits_summary: str) -> str:
     Input: JSON with vocab_size, n_tokens.
     Returns JSON with KAPPA, SIGMA, T_STAR for the given embedding dimension.
     """
-    from carl_studio.primitives.constants import KAPPA, SIGMA, T_STAR
+    from carl_core.constants import KAPPA, SIGMA, T_STAR
 
     data = json.loads(logits_summary)
     d = data.get("embedding_dim", 3072)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from carl_studio import __version__
-from carl_studio.primitives.constants import KAPPA, SIGMA
+from carl_core.constants import KAPPA, SIGMA
 
 
 def generate_model_card(

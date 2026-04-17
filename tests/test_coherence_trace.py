@@ -4,8 +4,8 @@ import json
 import numpy as np
 import pytest
 
-from carl_studio.primitives.coherence_trace import CoherenceTrace, select_traces
-from carl_studio.primitives.constants import DEFECT_THRESHOLD
+from carl_core.coherence_trace import CoherenceTrace, select_traces
+from carl_core.constants import DEFECT_THRESHOLD
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +246,7 @@ class TestBackwardCompat:
 
     def test_probe_measure_returns_snapshot(self):
         """CoherenceProbe.measure() still returns CoherenceSnapshot."""
-        from carl_studio.primitives.coherence_probe import CoherenceProbe
+        from carl_core.coherence_probe import CoherenceProbe
         logits, ids = _make_random_logits()
         probe = CoherenceProbe(vocab_size=1000)
         snap = probe.measure(logits, ids, step=0)
@@ -255,7 +255,7 @@ class TestBackwardCompat:
 
     def test_probe_measure_trace(self):
         """CoherenceProbe.measure_trace() returns CoherenceTrace."""
-        from carl_studio.primitives.coherence_probe import CoherenceProbe
+        from carl_core.coherence_probe import CoherenceProbe
         logits, ids = _make_random_logits()
         probe = CoherenceProbe(vocab_size=1000)
         trace = probe.measure_trace(logits, ids, step=0)

@@ -28,8 +28,8 @@ except Exception:
         pass
 
 
-from carl_studio.primitives.coherence_trace import CoherenceTrace, select_traces
-from carl_studio.primitives.constants import KAPPA, SIGMA
+from carl_core.coherence_trace import CoherenceTrace, select_traces
+from carl_core.constants import KAPPA, SIGMA
 
 
 class CoherenceTraceCallback(TrainerCallback):

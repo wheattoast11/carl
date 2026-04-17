@@ -1,8 +1,8 @@
 """Test CoherenceProbe and constants."""
 import numpy as np
 import pytest
-from carl_studio.primitives import KAPPA, SIGMA, DEFECT_THRESHOLD, T_STAR
-from carl_studio.primitives import CoherenceProbe
+from carl_core import KAPPA, SIGMA, DEFECT_THRESHOLD, T_STAR
+from carl_core import CoherenceProbe
 
 
 def test_conservation_constant():

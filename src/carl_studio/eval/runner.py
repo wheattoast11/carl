@@ -1120,7 +1120,7 @@ class EvalRunner:
             return None
 
         try:
-            from carl_studio.primitives import CoherenceProbe
+            from carl_core import CoherenceProbe
 
             vocab_size = model.config.vocab_size
             probe = CoherenceProbe(vocab_size=vocab_size)

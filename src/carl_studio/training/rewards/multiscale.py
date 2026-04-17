@@ -11,7 +11,7 @@ import math
 
 import numpy as np
 
-from carl_studio.primitives.math import compute_phi
+from carl_core.math import compute_phi
 
 
 def multiscale_coherence_reward(logits: np.ndarray, token_ids: np.ndarray) -> float:

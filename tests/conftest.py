@@ -58,7 +58,6 @@ def _stub_carl_studio_init():
 
     # Stub intermediate subpackages so their children can be imported
     _subpackages = {
-        "carl_studio.primitives": "src/carl_studio/primitives",
         "carl_studio.environments": "src/carl_studio/environments",
         "carl_studio.environments.builtins": "src/carl_studio/environments/builtins",
         "carl_studio.compute": "src/carl_studio/compute",
@@ -107,7 +106,6 @@ def _stub_carl_studio_init():
     # Load __init__.py for subpackages that export public API
     # (e.g. carl_studio.compute.get_backend lives in __init__.py)
     _init_modules = {
-        "carl_studio.primitives": "src/carl_studio/primitives/__init__.py",
         "carl_studio.compute": "src/carl_studio/compute/__init__.py",
         "carl_studio.training": "src/carl_studio/training/__init__.py",
         "carl_studio.training.rewards": "src/carl_studio/training/rewards/__init__.py",
@@ -136,7 +134,7 @@ def _stub_carl_studio_init():
     except Exception:
         pass
 
-    for attr in ("observe", "eval", "training", "compute", "primitives", "environments", "data"):
+    for attr in ("observe", "eval", "training", "compute", "environments", "data"):
         mod = sys.modules.get(f"carl_studio.{attr}")
         if mod is not None:
             setattr(pkg, attr, mod)

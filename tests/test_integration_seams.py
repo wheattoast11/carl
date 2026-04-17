@@ -38,7 +38,7 @@ class TestPackageImports:
         assert callable(make_carl_reward)
 
     def test_coherence_trace_importable(self):
-        from carl_studio.primitives import CoherenceTrace, select_traces
+        from carl_core import CoherenceTrace, select_traces
         assert CoherenceTrace is not None
         assert callable(select_traces)
 
@@ -237,7 +237,7 @@ class TestCarlRewardTraceStorage:
 class TestTraceCallbackChain:
     def _build_chain(self):
         """Build the full chain: carl_fn → cascade wrap → _apply_weight → callback reads."""
-        from carl_studio.primitives.coherence_trace import CoherenceTrace
+        from carl_core.coherence_trace import CoherenceTrace
         from carl_studio.training.cascade import CascadeRewardManager
         from carl_studio.training.trace_callback import CoherenceTraceCallback
         from carl_studio.training.trainer import _apply_weight
@@ -324,7 +324,7 @@ class TestTraceCallbackChain:
 class TestFromEntropyFidelity:
     def test_carl_reward_identical(self):
         """The efficient path must produce identical CARL reward."""
-        from carl_studio.primitives.coherence_trace import CoherenceTrace
+        from carl_core.coherence_trace import CoherenceTrace
         import math
 
         rng = np.random.default_rng(42)
@@ -353,7 +353,7 @@ class TestFromEntropyFidelity:
 
     def test_kuramoto_R_identical(self):
         """Kuramoto R must match between construction paths."""
-        from carl_studio.primitives.coherence_trace import CoherenceTrace
+        from carl_core.coherence_trace import CoherenceTrace
 
         rng = np.random.default_rng(99)
         logits = rng.standard_normal((64, 500)).astype(np.float32)

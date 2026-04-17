@@ -21,7 +21,7 @@ from typing import Any, TypedDict
 
 import numpy as np
 
-from carl_studio.primitives.coherence_trace import CoherenceTrace
+from carl_core.coherence_trace import CoherenceTrace
 
 
 class RewardComponents(TypedDict):

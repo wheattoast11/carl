@@ -4,7 +4,7 @@ from typing import Any
 import math
 import numpy as np
 
-from carl_studio.primitives.constants import KAPPA, SIGMA, DEFECT_THRESHOLD
+from carl_core.constants import KAPPA, SIGMA, DEFECT_THRESHOLD
 
 
 class AtroposAdapter:

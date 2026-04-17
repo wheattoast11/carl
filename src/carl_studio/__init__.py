@@ -10,8 +10,8 @@ See also: carl.py (300-line seed crystal at the repo root)
 
 __version__ = "0.3.0"
 
-from carl_studio.primitives.constants import KAPPA, SIGMA, DEFECT_THRESHOLD
-from carl_studio.primitives import CoherenceProbe
+from carl_core.constants import KAPPA, SIGMA, DEFECT_THRESHOLD
+from carl_core import CoherenceProbe
 from carl_studio.types.config import TrainingConfig
 from . import observe
 

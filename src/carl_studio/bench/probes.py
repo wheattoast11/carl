@@ -15,8 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from pydantic import BaseModel, Field
 
-from carl_studio.primitives.constants import DEFECT_THRESHOLD
-from carl_studio.primitives.math import compute_phi
+from carl_core.constants import DEFECT_THRESHOLD
+from carl_core.math import compute_phi
 
 
 # ---------------------------------------------------------------------------

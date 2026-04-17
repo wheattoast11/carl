@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from carl_studio.primitives.constants import KAPPA, SIGMA, T_STAR
+from carl_core.constants import KAPPA, SIGMA, T_STAR
 
 
 class ExperimentResult(BaseModel):

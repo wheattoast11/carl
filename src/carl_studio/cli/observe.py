@@ -147,7 +147,7 @@ def _load_frames(
 
 def _render_observe_report(c: "CampConsole", frames: list, source_desc: str) -> dict:
     """Render the rich one-shot observe report. Returns computed metrics dict."""
-    from carl_studio.primitives.constants import KAPPA, SIGMA
+    from carl_core.constants import KAPPA, SIGMA
 
     if not frames:
         c.blank()
@@ -379,7 +379,7 @@ def _render_diagnose(c: "CampConsole", frames: list, api_key: str | None) -> Non
         c.warn("No data to diagnose.")
         return
 
-    from carl_studio.primitives import CoherenceObserver, CoherenceSnapshot
+    from carl_core import CoherenceObserver, CoherenceSnapshot
 
     c.blank()
     c.print("  [camp.primary]Claude-powered analysis[/]  (--diagnose)")
