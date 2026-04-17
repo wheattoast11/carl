@@ -30,7 +30,7 @@ def _resolve_model_adapter(
             if not model:
                 model = settings.default_model
             if not adapter and settings.hub_namespace:
-                # Convention: latest adapter = namespace/il-terminals-carl-*
+                # Convention: latest adapter = namespace/<prefix>-*
                 # But we don't guess -- user must specify or set in carl.yaml
                 pass
         except Exception:
@@ -221,8 +221,8 @@ def infer_cmd(
     """Run inference with a CARL-trained model, optionally with TTT.
 
     Examples:
-      carl infer --model Tesslate/OmniCoder-9B --adapter wheattoast11/il-terminals-carl-omni9b-v12
-      carl infer --adapter wheattoast11/il-terminals-carl-omni9b-v12 --ttt slot --live
+      carl infer --model your-org/your-model --adapter your-org/your-adapter
+      carl infer --adapter your-org/your-adapter --ttt slot --live
     """
     c = get_console()
     c.header("CARL Infer")

@@ -281,7 +281,7 @@ class CARLAgent:
     def __init__(
         self,
         api_key: str = "",
-        model: str = "claude-sonnet-4-6",
+        model: str = "",
         frame: Any | None = None,
         workdir: str = ".",
         *,
@@ -291,8 +291,35 @@ class CARLAgent:
         session_id: str = "",
         _client: Any | None = None,
     ) -> None:
+        # -- Resolve model from settings when not explicitly passed ----------
+        if not model:
+            try:
+                from carl_studio.settings import CARLSettings
+
+                settings = CARLSettings.load()
+                model = settings.default_chat_model or "claude-sonnet-4-6"
+            except Exception:
+                model = "claude-sonnet-4-6"
+
+        # -- Resolve api_key from settings when not explicitly passed --------
+        api_key_source = "default"
+        if api_key:
+            api_key_source = "explicit"
+        elif _client is None:
+            try:
+                from carl_studio.settings import CARLSettings
+
+                settings = CARLSettings.load()
+                resolved_key = settings.anthropic_api_key or ""
+                if resolved_key:
+                    api_key = resolved_key
+                    api_key_source = "settings"
+            except Exception:
+                pass
+
         if _client is not None:
             self._client = _client
+            api_key_source = "injected"
         else:
             try:
                 import anthropic
@@ -302,6 +329,7 @@ class CARLAgent:
                 ) from exc
             self._client = anthropic.Anthropic(api_key=api_key or None)
         self._model = model
+        self._api_key_source = api_key_source
         self._frame = frame
         self._workdir = str(Path(workdir).resolve())
         self._messages: list[dict[str, Any]] = []
@@ -331,6 +359,15 @@ class CARLAgent:
             self._project_line = f"PROJECT: {proj.name} | Model: {proj.base_model} | Method: {proj.method}"
         except Exception:
             pass
+
+    @property
+    def provider_info(self) -> dict[str, str]:
+        """Return provider resolution info for display."""
+        return {
+            "model": self._model,
+            "provider": "anthropic",
+            "api_key_source": self._api_key_source,
+        }
 
     def chat(self, user_input: str) -> Iterator[AgentEvent]:
         """Send message, handle tool calls, yield events.

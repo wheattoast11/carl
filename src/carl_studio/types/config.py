@@ -149,9 +149,9 @@ class TrainingConfig(BaseModel):
 
     # Identity
     run_name: str = Field(description="Human-readable run name")
-    base_model: str = Field(description="HuggingFace model ID (e.g. 'Tesslate/OmniCoder-9B')")
+    base_model: str = Field(description="HuggingFace model ID (e.g. 'your-org/your-model')")
     output_repo: str = Field(
-        description="HuggingFace repo to push results (e.g. 'wheattoast11/OmniCoder-9B-Zero-Phase1')"
+        description="HuggingFace repo to push results (e.g. 'your-org/your-model-phase1')"
     )
 
     # Method

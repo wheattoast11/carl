@@ -24,25 +24,35 @@ def x402_status(
     """Show x402 payment rail status and configuration."""
     from carl_studio.console import get_console
     from carl_studio.x402 import load_x402_config
+    from carl_studio.x402_sdk import sdk_available
 
     c = get_console()
     config = load_x402_config()
+    has_sdk = sdk_available()
 
     if json_output:
-        typer.echo(json.dumps(config.model_dump(), indent=2))
+        data = config.model_dump()
+        data["sdk_available"] = has_sdk
+        data["client"] = "x402-sdk" if has_sdk else "urllib-builtin"
+        typer.echo(json.dumps(data, indent=2))
         raise typer.Exit(0)
 
     c.header("x402 Payment Rail")
     c.kv("Enabled", "yes" if config.enabled else "not configured", key_width=20)
+    c.kv("Client", "x402-sdk (official)" if has_sdk else "urllib (builtin)", key_width=20)
     c.kv("Wallet", config.wallet_address or "(not set)", key_width=20)
     c.kv("Chain", config.chain, key_width=20)
     c.kv("Token", config.payment_token, key_width=20)
     c.kv("Facilitator", config.facilitator_url or "(not set)", key_width=20)
     c.kv("Auto-approve", f"< ${config.auto_approve_below:.2f}" if config.auto_approve_below else "off", key_width=20)
 
-    if not config.wallet_address:
+    if has_sdk:
+        c.blank()
+        c.ok("Official x402 SDK detected -- auto-intercept and facilitator APIs available.")
+    elif not config.wallet_address:
         c.blank()
         c.info("Configure: carl camp x402 configure --wallet <addr> --facilitator <url>")
+        c.info("Install SDK: pip install 'carl-studio[x402]'")
 
 
 @x402_app.command(name="configure")

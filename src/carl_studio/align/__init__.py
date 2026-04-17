@@ -11,7 +11,7 @@ Usage::
 
     config = AlignConfig(
         mode=AlignMode.PATTERNS,
-        model="wheattoast11/OmniCoder-9B-Zero-Phase2",
+        model="your-org/your-model",
         source="./migration-notes.md",
     )
     result = AlignPipeline(config).run()

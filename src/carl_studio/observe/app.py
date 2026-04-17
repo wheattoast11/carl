@@ -182,7 +182,7 @@ class ObserveApp(App):
         self,
         source_type: str = "file",
         source_path: str = "",
-        source_space: str = "wheattoast11-trackio",
+        source_space: str = "",
         source_project: str = "",
         source_run: str = "",
         poll_interval: float = 2.0,
@@ -246,7 +246,7 @@ class ObserveApp(App):
 def run_app(
     source: str = "file",
     path: str = "",
-    space: str = "wheattoast11-trackio",
+    space: str = "",
     project: str = "",
     run: str = "",
     poll: float = 2.0,

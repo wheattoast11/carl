@@ -165,7 +165,7 @@ def list_kits(
 
 @marketplace_app.command("show")
 def show_item(
-    hub_id: str = typer.Argument(..., help="Hub ID (e.g. wheattoast11/OmniCoder-9B)"),
+    hub_id: str = typer.Argument(..., help="Hub ID (e.g. your-org/your-model)"),
 ) -> None:
     """Show detail for a model or adapter by hub ID."""
     c = get_console()

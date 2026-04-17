@@ -63,7 +63,7 @@ class EvalConfig(BaseModel):
     # Adapter stacking for Phase 2'
     base_model: str | None = Field(
         default=None,
-        description="Base model ID (if checkpoint is an adapter). Default: Tesslate/OmniCoder-9B",
+        description="Base model ID (if checkpoint is an adapter)",
     )
     sft_adapter: str | None = Field(
         default=None,
@@ -589,7 +589,7 @@ class EvalRunner:
     Usage::
 
         config = EvalConfig(
-            checkpoint="wheattoast11/OmniCoder-9B-Zero-Phase2Prime",
+            checkpoint="your-org/your-model-checkpoint",
             phase="2prime",
             threshold=0.30,
         )
@@ -850,8 +850,13 @@ class EvalRunner:
         use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
         dtype = torch.bfloat16 if use_bf16 else torch.float32
 
-        base_model = self.config.base_model or "Tesslate/OmniCoder-9B"
-        hf_token = os.environ.get("HF_TOKEN") or _get_hf_token()
+        base_model = self.config.base_model
+        if not base_model:
+            raise ValueError(
+                "base_model is required for Phase 2' evaluation. "
+                "Set it via --base-model or in your EvalConfig."
+            )
+        hf_token = _get_hf_token() or os.environ.get("HF_TOKEN")
 
         logger.info("Loading base model: %s (%s)", base_model, dtype)
         model = AutoModelForImageTextToText.from_pretrained(
@@ -1006,7 +1011,7 @@ class EvalRunner:
         except ImportError as exc:
             raise ImportError(f"The 'datasets' package is required. {TRAINING_EXTRA_HINT}") from exc
 
-        hf_token = os.environ.get("HF_TOKEN") or _get_hf_token()
+        hf_token = _get_hf_token() or os.environ.get("HF_TOKEN")
         load_kwargs: dict[str, Any] = {
             "split": self.config.dataset_split,
             "token": hf_token,
@@ -1184,7 +1189,12 @@ def generate_eval_script(config: EvalConfig) -> str:
     """
     import textwrap
 
-    base_model = config.base_model or "Tesslate/OmniCoder-9B"
+    base_model = config.base_model
+    if not base_model:
+        raise ValueError(
+            "base_model is required for eval script generation. "
+            "Set it via EvalConfig(base_model=...) or --base-model."
+        )
     sft_adapter = config.sft_adapter or ""
     checkpoint = config.checkpoint
     dataset = config.dataset

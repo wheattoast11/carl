@@ -32,7 +32,7 @@ class CARLProject(BaseModel):
     description: str = Field(default="", description="What this project trains")
 
     # Model
-    base_model: str = Field(default="", description="HF model ID (e.g. Tesslate/OmniCoder-9B)")
+    base_model: str = Field(default="", description="HF model ID (e.g. your-org/your-model)")
     adapter: str | None = Field(default=None, description="Existing adapter to resume from")
     output_repo: str = Field(default="", description="HF repo for trained model")
 

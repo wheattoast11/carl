@@ -5,7 +5,7 @@ Users write YAML, carl runs it end-to-end.
 
 Example carl-recipe.yaml:
     name: my-custom-agent
-    base: Tesslate/OmniCoder-9B
+    base: your-org/your-model
     courses:
       - kit: coding-agent
         steps: 100
@@ -40,7 +40,7 @@ class CourseSpec:
 class Recipe:
     """Full training pipeline — list of courses."""
     name: str
-    base: str = "Tesslate/OmniCoder-9B"
+    base: str = ""
     hub_namespace: str = ""
     courses: list[CourseSpec] = field(default_factory=list)
     source: str = ""                  # where to gather data from
@@ -50,9 +50,20 @@ class Recipe:
     def hub_id(self) -> str:
         ns = self.hub_namespace or ""
         slug = self.name.lower().replace(" ", "-").replace("_", "-")
-        base_tag = self.base.split("/")[-1].lower().replace("-", "")[:10]
-        model_id = f"il-terminals-carl-{base_tag}-{slug}"
+        base_tag = self.base.split("/")[-1].lower().replace("-", "")[:10] if self.base else "base"
+        prefix = self._resolve_naming_prefix()
+        model_id = f"{prefix}-{base_tag}-{slug}" if prefix else f"{base_tag}-{slug}"
         return f"{ns}/{model_id}" if ns else model_id
+
+    @staticmethod
+    def _resolve_naming_prefix() -> str:
+        """Resolve naming prefix from settings if available."""
+        try:
+            from carl_studio.settings import CARLSettings
+            settings = CARLSettings.load()
+            return settings.naming_prefix
+        except Exception:
+            return ""
 
 
 def load_recipe(path: str | Path) -> Recipe:
@@ -86,7 +97,7 @@ def load_recipe(path: str | Path) -> Recipe:
 
     return Recipe(
         name=str(data.get("name", path.stem)),
-        base=str(data.get("base", "Tesslate/OmniCoder-9B")),
+        base=str(data.get("base", "") or ""),
         hub_namespace=str(data.get("hub_namespace", "") or ""),
         courses=courses,
         source=str(data.get("source", "") or ""),

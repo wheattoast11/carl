@@ -175,16 +175,16 @@ def detect_effective_tier(configured_tier: Tier) -> Tier:
 
 
 def _detect_hf_token() -> str | None:
-    """Detect HF token from env or huggingface_hub credentials."""
-    token = os.environ.get("HF_TOKEN")
-    if token:
-        return token
+    """Detect HF token from huggingface_hub credentials, then env fallback."""
     try:
         from huggingface_hub import get_token
 
-        return get_token()
+        token = get_token()
+        if token:
+            return token
     except Exception:
-        return None
+        pass
+    return os.environ.get("HF_TOKEN")
 
 
 # ---------------------------------------------------------------------------

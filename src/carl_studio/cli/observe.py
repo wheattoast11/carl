@@ -473,7 +473,7 @@ def _render_diagnose(c: "CampConsole", frames: list, api_key: str | None) -> Non
 @app.command()
 def observe(
     url: str | None = typer.Option(
-        None, "--url", "-u", help="Trackio space URL (e.g. https://wheattoast11-trackio.hf.space/)"
+        None, "--url", "-u", help="Trackio space URL (e.g. https://owner-space.hf.space/)"
     ),
     file: str | None = typer.Option(None, "--file", "-f", help="Local JSONL log file path"),
     live: bool = typer.Option(False, "--live", "-l", help="Launch real-time Textual TUI dashboard"),
@@ -495,23 +495,23 @@ def observe(
     ),
     run_name: str = typer.Option("", "--run", help="Trackio run name"),
     space: str = typer.Option(
-        "wheattoast11-trackio", "--space", help="Trackio space name (if not using --url)"
+        "", "--space", help="Trackio space name (e.g. owner-space, if not using --url)"
     ),
 ) -> None:
     """Observe training coherence dynamics. Rich defaults, zero config.
 
     \b
     One-shot (default):
-      carl observe --url https://wheattoast11-trackio.hf.space/ --run my-run
+      carl observe --url https://owner-space.hf.space/ --run my-run
       carl observe --file logs/train.jsonl
 
     \b
     Live TUI:
-      carl observe --live --url https://wheattoast11-trackio.hf.space/ --run my-run
+      carl observe --live --url https://owner-space.hf.space/ --run my-run
 
     \b
     Claude-powered analysis:
-      carl observe --diagnose --url https://wheattoast11-trackio.hf.space/ --run my-run
+      carl observe --diagnose --url https://owner-space.hf.space/ --run my-run
     """
     c = get_console()
     from carl_studio.settings import CARLSettings

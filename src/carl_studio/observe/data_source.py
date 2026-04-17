@@ -236,7 +236,7 @@ class TrackioSource:
 
     def __init__(
         self,
-        space: str = "wheattoast11-trackio",
+        space: str = "",
         project: str = "",
         run: str = "",
         token: str | None = None,

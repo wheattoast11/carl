@@ -16,7 +16,7 @@ class GraderSkill(BaseSkill):
         self,
         *,
         checkpoint: str,
-        base_model: str = "Tesslate/OmniCoder-9B",
+        base_model: str = "",
         phase: str = "auto",
         threshold: float = 0.30,
         **kwargs: Any,

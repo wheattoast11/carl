@@ -140,13 +140,13 @@ def run_stop_cmd(
 @app.command(name="eval")
 def eval_cmd(
     adapter: str = typer.Option(
-        "wheattoast11/OmniCoder-9B-Zero-Phase2Prime",
+        ...,
         "--adapter",
         "-a",
-        help="HF adapter/checkpoint ID to evaluate",
+        help="HF adapter/checkpoint ID to evaluate (e.g. your-org/your-checkpoint)",
     ),
     base_model: str = typer.Option(
-        "Tesslate/OmniCoder-9B",
+        "",
         "--base-model",
         "-b",
         help="Base model ID (for Phase 2' adapter merging)",
@@ -157,10 +157,10 @@ def eval_cmd(
         help="SFT adapter to merge before GRPO adapter",
     ),
     dataset: str = typer.Option(
-        "wheattoast11/zero-rl-tool-calling-data",
+        "",
         "--dataset",
         "-d",
-        help="HF dataset ID or local path",
+        help="HF dataset ID or local path (e.g. your-org/your-dataset)",
     ),
     data_files: str | None = typer.Option(
         None,
@@ -215,7 +215,7 @@ def eval_cmd(
 
     Examples:
 
-      carl eval --adapter wheattoast11/OmniCoder-9B-Zero-Phase2Prime
+      carl eval --adapter your-org/your-checkpoint
 
       carl eval --phase 2prime --remote
 

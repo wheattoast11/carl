@@ -12,7 +12,7 @@ Usage::
 
     from carl_studio.bench import BenchConfig, BenchSuite
 
-    config = BenchConfig(model="Tesslate/OmniCoder-9B")
+    config = BenchConfig(model="your-org/your-model")
     suite = BenchSuite(config)
     cti = suite.run()
     print(cti.score, cti.verdict)

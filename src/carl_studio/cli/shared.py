@@ -101,7 +101,7 @@ def _print_observe_usage(c: CampConsole) -> None:
     """Render concise observe usage examples."""
     c.blank()
     c.print("  [camp.muted]Usage:[/]")
-    c.print("    carl observe --url https://wheattoast11-trackio.hf.space/ --run your-run")
+    c.print("    carl observe --url https://owner-space.hf.space/ --run your-run")
     c.print(
         "    carl observe --url https://huggingface.co/spaces/owner/trackio --project your-project --run your-run"
     )
@@ -136,7 +136,7 @@ def _render_training_config_error(
     c.info("Aliases accepted on the CLI: a100 -> a100-large, a10g -> a10g-large")
     c.blank()
 
-    example_model = str(raw.get("base_model", "Tesslate/OmniCoder-9B"))
+    example_model = str(raw.get("base_model", "your-org/your-model") or "your-org/your-model")
     example_method = str(raw.get("method", "grpo"))
     c.print("  [camp.primary]Quick start[/]")
     c.print(

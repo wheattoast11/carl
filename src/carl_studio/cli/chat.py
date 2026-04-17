@@ -80,7 +80,7 @@ def _list_sessions() -> None:
 
 def chat_cmd(
     model: str = typer.Option(
-        "claude-sonnet-4-6", "--model", "-m", help="Claude model for agent"
+        "", "--model", "-m", help="Claude model for agent (default: from settings)"
     ),
     config: str = typer.Option(
         "carl.yaml", "--config", "-c", help="Project config for context"
@@ -124,12 +124,6 @@ def chat_cmd(
         c.info("Use: carl chat --model claude-sonnet-4-6  for cloud inference.")
         raise typer.Exit(0)
 
-    if not api_key:
-        c.error("ANTHROPIC_API_KEY required for carl chat")
-        c.info("Set via: export ANTHROPIC_API_KEY=sk-ant-...")
-        c.info("Or pass: carl chat --api-key sk-ant-...")
-        raise typer.Exit(1)
-
     # Load frame
     frame = None
     if frame_source and frame_source != "none":
@@ -140,11 +134,11 @@ def chat_cmd(
         else:
             frame = WorkFrame.load(frame_source)
 
-    # Create agent
+    # Create agent — api_key and model resolve from CARLSettings when not passed
     from carl_studio.chat_agent import CARLAgent
 
     agent = CARLAgent(
-        api_key=api_key,
+        api_key=api_key or "",
         model=model,
         frame=frame,
         max_budget_usd=budget,
@@ -158,10 +152,12 @@ def chat_cmd(
         else:
             c.info(f"New session: {session}")
 
+    info = agent.provider_info
     director = c.theme.persona.value.upper()
     c.blank()
     c.header(f"Chat with {director}")
-    c.kv("Model", model)
+    c.kv("Model", info["model"])
+    c.kv("Key", info["api_key_source"])
     if frame and frame.active:
         c.kv("Frame", f"{frame.domain}/{frame.function}/{frame.role}")
     if session:

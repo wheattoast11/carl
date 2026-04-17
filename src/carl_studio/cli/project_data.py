@@ -253,7 +253,7 @@ def project_init(
             else ""
         )
         model = typer.prompt(
-            "Base model ID (e.g. Tesslate/OmniCoder-9B)",
+            "Base model ID (e.g. your-org/your-model)",
             default=default_model,
         )
         method = typer.prompt("Training method (sft/grpo/dpo)", default=method)

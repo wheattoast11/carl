@@ -43,7 +43,7 @@ class CampConsole:
 
         from carl_studio.console import console
         console.header("CARL Train", "v0.2.0")
-        console.kv("Model", "Tesslate/OmniCoder-9B")
+        console.kv("Model", "your-org/your-model")
         console.gate("PASS", detail="94.6% click accuracy")
     """
 

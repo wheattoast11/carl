@@ -287,15 +287,16 @@ class SendItPipeline:
             except ImportError:
                 issues.append("torch not installed (required for local training)")
         else:
-            # Remote mode — check for HF token
-            token = os.environ.get("HF_TOKEN")
-            if not token:
-                try:
-                    from huggingface_hub import get_token
+            # Remote mode — check for HF token (prefer hub credentials)
+            token = None
+            try:
+                from huggingface_hub import get_token
 
-                    token = get_token()
-                except Exception:
-                    token = None
+                token = get_token()
+            except Exception:
+                pass
+            if not token:
+                token = os.environ.get("HF_TOKEN")
 
             if not token:
                 issues.append("HF auth not detected (set HF_TOKEN or run `hf auth login`)")
@@ -327,7 +328,7 @@ class SendItPipeline:
 
             eval_config = EvalConfig(
                 checkpoint=output_repo,
-                dataset=self.config.dataset_repo or "wheattoast11/zero-rl-tool-calling-data",
+                dataset=self.config.dataset_repo,
                 data_files="eval.jsonl" if is_grpo else None,
                 phase=eval_phase,
                 threshold=getattr(self.config, "eval_threshold", default_threshold),

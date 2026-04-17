@@ -143,6 +143,10 @@ class CARLSettings(BaseSettings):
     openai_api_key: str | None = Field(default=None, description="OpenAI API key")
     llm_model: str = Field(default="", description="Default LLM model for synthesis")
     llm_base_url: str = Field(default="", description="Custom OpenAI-compatible base URL")
+    default_chat_model: str = Field(
+        default="claude-sonnet-4-6",
+        description="Default model for carl chat (Anthropic model ID)",
+    )
 
     # Platform (carl.camp)
     supabase_url: str = Field(default="", description="Supabase project URL")
@@ -199,16 +203,16 @@ class CARLSettings(BaseSettings):
     # -- Auto-detection --
 
     def _auto_detect_credentials(self) -> None:
-        """Fill in credentials from environment and HF hub."""
+        """Fill in credentials from HF hub credentials, then env fallback."""
         if self.hf_token is None:
-            self.hf_token = os.environ.get("HF_TOKEN")
-            if self.hf_token is None:
-                try:
-                    from huggingface_hub import get_token
+            try:
+                from huggingface_hub import get_token
 
-                    self.hf_token = get_token()
-                except Exception:
-                    pass
+                self.hf_token = get_token()
+            except Exception:
+                pass
+            if self.hf_token is None:
+                self.hf_token = os.environ.get("HF_TOKEN")
 
         if self.anthropic_api_key is None:
             self.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -242,6 +246,7 @@ class CARLSettings(BaseSettings):
                 "log_level",
                 "default_compute",
                 "default_model",
+                "default_chat_model",
                 "hub_namespace",
                 "trackio_url",
                 "naming_prefix",
@@ -398,6 +403,7 @@ SETTABLE_FIELDS: dict[str, type | tuple[type, ...]] = {
     "log_level": (str,),
     "llm_model": (str,),
     "llm_base_url": (str,),
+    "default_chat_model": (str,),
     "supabase_url": (str,),
     "supabase_anon_key": (str,),
     "observe_defaults.show_entropy": (bool,),
