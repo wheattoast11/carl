@@ -15,6 +15,33 @@ from carl_core.coherence_observer import CoherenceObserver
 from carl_core.frame_buffer import FrameBuffer, FrameRecord
 from carl_core.math import compute_phi
 from carl_core.interaction import ActionType, InteractionChain, Step
+from carl_core.errors import (
+    CARLError,
+    ConfigError,
+    ValidationError,
+    CredentialError,
+    NetworkError,
+    BudgetError,
+    PermissionError,
+    CARLTimeoutError,
+)
+from carl_core.hashing import canonical_json, content_hash, content_hash_bytes
+from carl_core.retry import (
+    CircuitBreaker,
+    CircuitState,
+    RetryPolicy,
+    async_retry,
+    poll,
+    retry,
+)
+from carl_core.safepath import PathEscape, SandboxedPath, safe_resolve, within
+from carl_core.tier import (
+    FEATURE_TIERS,
+    Tier,
+    TierGateError,
+    feature_tier,
+    tier_allows,
+)
 
 __all__ = [
     "KAPPA",
@@ -32,5 +59,31 @@ __all__ = [
     "ActionType",
     "InteractionChain",
     "Step",
+    "CARLError",
+    "ConfigError",
+    "ValidationError",
+    "CredentialError",
+    "NetworkError",
+    "BudgetError",
+    "PermissionError",
+    "CARLTimeoutError",
+    "canonical_json",
+    "content_hash",
+    "content_hash_bytes",
+    "CircuitBreaker",
+    "CircuitState",
+    "RetryPolicy",
+    "async_retry",
+    "poll",
+    "retry",
+    "PathEscape",
+    "SandboxedPath",
+    "safe_resolve",
+    "within",
+    "Tier",
+    "FEATURE_TIERS",
+    "TierGateError",
+    "feature_tier",
+    "tier_allows",
     "__version__",
 ]

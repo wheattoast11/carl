@@ -103,8 +103,13 @@ members = ["packages/*"]
 [tool.uv.sources]
 carl-core = { workspace = true }
 
+[tool.pytest.ini_options]
+testpaths = ["tests", "packages/carl-core/tests"]
+addopts = "--import-mode=importlib"
+pythonpath = [".", "src", "packages/carl-core/src"]
+
 [tool.pyright]
-include = ["src", "packages/*/src"]
+include = ["src", "packages/*/src", "packages/*/tests", "tests"]
 typeCheckingMode = "strict"
 pythonVersion = "3.11"
 extraPaths = ["packages/carl-core/src"]
