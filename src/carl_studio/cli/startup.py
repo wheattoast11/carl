@@ -151,6 +151,17 @@ def start(
     c.blank()
     c.header("CARL Start")
 
+    # First-run nudge: if the user hasn't run `carl init` yet, flag it early
+    # so they get one-shot setup instead of piecemeal prompts.
+    try:
+        from carl_studio.cli.init import _first_run_complete
+
+        if not _first_run_complete() and not inventory:
+            c.print("  [camp.accent]New here?[/] Run: [bold]carl init[/] for one-shot setup.")
+            c.blank()
+    except Exception:
+        pass
+
     # Interactive Project Setup Handoff
     if not inventory and not project.get("path"):
         c.info("No carl.yaml found in current directory.")

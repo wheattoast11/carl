@@ -24,6 +24,7 @@ from .lab import (
     mcp_serve,
     paper_app,
 )
+from .init import init_cmd
 from .platform import login, logout, sync_app
 
 
@@ -58,6 +59,7 @@ def _make_stub(
 # Register camp/lab aliases for the converged command map
 # ---------------------------------------------------------------------------
 
+app.command(name="init")(init_cmd)
 camp_app.command(name="login")(login)
 camp_app.command(name="logout")(logout)
 app.command(name="logout", hidden=True)(logout)
