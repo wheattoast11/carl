@@ -34,6 +34,8 @@ class ActionType(str, Enum):
     EVAL_PHASE = "eval_phase"         # eval phase start/end boundary
     REWARD = "reward"                 # reward-aggregation snapshot
     CHECKPOINT = "checkpoint"         # trainer checkpoint / model save
+    MEMORY_READ = "memory_read"       # memory recall (WORKING/LONG retrieval)
+    MEMORY_WRITE = "memory_write"     # memory commit (write to any layer)
 
 
 def _utcnow() -> datetime:

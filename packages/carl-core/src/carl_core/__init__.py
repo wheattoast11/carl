@@ -27,6 +27,7 @@ from carl_core.errors import (
     CARLTimeoutError,
 )
 from carl_core.hashing import canonical_json, content_hash, content_hash_bytes
+from carl_core.memory import MemoryItem, MemoryLayer, MemoryStore
 from carl_core.retry import (
     CircuitBreaker,
     CircuitState,
@@ -72,6 +73,9 @@ __all__ = [
     "canonical_json",
     "content_hash",
     "content_hash_bytes",
+    "MemoryItem",
+    "MemoryLayer",
+    "MemoryStore",
     "CircuitBreaker",
     "CircuitState",
     "RetryPolicy",

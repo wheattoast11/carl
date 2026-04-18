@@ -76,6 +76,16 @@ lab_app.command(name="bench")(bench_cmd)
 lab_app.command(name="align")(align_cmd)
 lab_app.command(name="learn")(learn_cmd)
 lab_app.command(name="mcp")(mcp_serve)
+try:
+    from .training import backends_cmd as _backends_cmd
+
+    lab_app.command(name="backends")(_backends_cmd)
+except ImportError:
+    _make_stub(
+        lab_app,
+        "backends",
+        doc="Backend adapter registry requires the full carl-studio package.",
+    )
 lab_app.add_typer(golf_app, name="golf")
 lab_app.add_typer(paper_app, name="paper")
 lab_app.add_typer(admin_app, name="admin")
@@ -179,6 +189,24 @@ except ImportError:
         doc="Inference requires the training extras.",
         hint=_TRAINING_HINT,
     )
+
+
+# ---------------------------------------------------------------------------
+# Wire research-cycle verbs: hypothesize + commit
+# ---------------------------------------------------------------------------
+try:
+    from .hypothesize import hypothesize_cmd
+
+    app.command(name="hypothesize")(hypothesize_cmd)
+except ImportError:
+    _make_stub(app, "hypothesize", doc="Hypothesize requires the full carl-studio.")
+
+try:
+    from .commit import commit_cmd
+
+    app.command(name="commit")(commit_cmd)
+except ImportError:
+    _make_stub(app, "commit", doc="Commit requires the full carl-studio.")
 
 
 # ---------------------------------------------------------------------------

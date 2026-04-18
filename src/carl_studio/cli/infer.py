@@ -5,6 +5,8 @@ Register in cli.py via: ``app.command('infer')(infer_cmd)``
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import typer
@@ -207,6 +209,97 @@ def _run_repl(
             c.error(f"Generation failed: {exc}")
 
 
+def _load_eval_report(path: Path) -> dict[str, Any]:
+    """Load an eval report JSON file. Raises typer.BadParameter on failure."""
+    if not path.exists():
+        raise typer.BadParameter(f"Eval report not found: {path}")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"Eval report is not valid JSON: {path}") from exc
+    if not isinstance(data, dict):
+        raise typer.BadParameter(f"Eval report must be a JSON object: {path}")
+    return data
+
+
+def _find_latest_eval_report() -> Path | None:
+    """Search well-known run output locations for the newest eval_report.json.
+
+    Looks under ``runs/`` then ``~/.carl/runs/``.
+    """
+    candidates: list[Path] = []
+    for root in (Path("runs"), Path.home() / ".carl" / "runs"):
+        if root.exists() and root.is_dir():
+            candidates.extend(root.rglob("eval_report.json"))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return candidates[0]
+
+
+def _propose_next_hypothesis(
+    eval_report: dict[str, Any], coherence: dict[str, Any] | None
+) -> str:
+    """Ask CARLAgent to emit a single next-step hypothesis based on an eval report."""
+    from carl_studio.chat_agent import CARLAgent
+
+    context = {
+        "passed": eval_report.get("passed"),
+        "primary_metric": eval_report.get("primary_metric"),
+        "primary_value": eval_report.get("primary_value"),
+        "threshold": eval_report.get("threshold"),
+        "metrics": eval_report.get("metrics"),
+        "coherence": coherence or eval_report.get("coherence") or {},
+    }
+
+    prompt = (
+        "Eval report:\n"
+        + json.dumps(context, indent=2, default=str)
+        + "\n\nPropose exactly ONE next-step hypothesis as a single English sentence. "
+        "It should be testable within 2 hours on a single GPU. Do not explain."
+    )
+
+    try:
+        agent = CARLAgent(api_key="", frame=None, max_budget_usd=0.30)
+    except ImportError:
+        return ""
+    agent._tools = []  # type: ignore[attr-defined]
+
+    out: list[str] = []
+    try:
+        for event in agent.chat(prompt):
+            kind = getattr(event, "kind", "") or ""
+            if kind in ("text", "text_delta"):
+                out.append(getattr(event, "content", "") or "")
+    except Exception:
+        return ""
+    return "".join(out).strip()
+
+
+def _render_proposal(c: Any, eval_report: dict[str, Any]) -> None:
+    """Render the eval report summary + a proposed next hypothesis."""
+    c.blank()
+    c.header("Propose Next Hypothesis")
+    passed = eval_report.get("passed")
+    pm = eval_report.get("primary_metric") or "primary"
+    pv = eval_report.get("primary_value")
+    th = eval_report.get("threshold")
+    c.kv("Passed", "yes" if passed else "no")
+    if pv is not None:
+        c.kv(pm, pv)
+    if th is not None:
+        c.kv("Threshold", th)
+
+    proposal = _propose_next_hypothesis(eval_report, eval_report.get("coherence"))
+    c.blank()
+    if proposal:
+        c.ok("Suggested next hypothesis:")
+        c.print(f"  {proposal}")
+        c.info('Next: carl hypothesize "..."')
+    else:
+        c.warn("Agent did not return a proposal.")
+
+
 def infer_cmd(
     model: str = typer.Option("", "--model", "-m", help="Base model ID"),
     adapter: str = typer.Option("", "--adapter", "-a", help="LoRA adapter repo ID"),
@@ -217,15 +310,49 @@ def infer_cmd(
     system_prompt: str = typer.Option("", "--system", help="System prompt override"),
     max_tokens: int = typer.Option(2048, "--max-tokens"),
     prompt: str = typer.Argument("", help="Input prompt (or empty for interactive)"),
+    propose_hypothesis: bool = typer.Option(
+        False,
+        "--propose-hypothesis",
+        help="After inference, summarize latest eval and propose a next hypothesis",
+    ),
+    from_eval: str = typer.Option(
+        "",
+        "--from-eval",
+        help="Read a pre-existing eval_report.json and skip model loading",
+    ),
 ) -> None:
     """Run inference with a CARL-trained model, optionally with TTT.
 
     Examples:
       carl infer --model your-org/your-model --adapter your-org/your-adapter
       carl infer --adapter your-org/your-adapter --ttt slot --live
+      carl infer --from-eval runs/abc/eval_report.json --propose-hypothesis
     """
     c = get_console()
     c.header("CARL Infer")
+
+    # ------------------------------------------------------------------
+    # --from-eval: read a report, skip model loading entirely
+    # ------------------------------------------------------------------
+    if from_eval:
+        report_path = Path(from_eval)
+        report = _load_eval_report(report_path)
+        c.kv("Report", str(report_path))
+        c.kv("Mode", "from-eval")
+        c.blank()
+        pm = report.get("primary_metric") or "primary"
+        pv = report.get("primary_value")
+        th = report.get("threshold")
+        passed = report.get("passed")
+        c.kv("Passed", "yes" if passed else "no")
+        if pv is not None:
+            c.kv(pm, pv)
+        if th is not None:
+            c.kv("Threshold", th)
+
+        if propose_hypothesis:
+            _render_proposal(c, report)
+        return
 
     # Validate TTT mode
     valid_ttt_modes = ("none", "slot", "lora", "all")
@@ -291,3 +418,20 @@ def infer_cmd(
         except Exception as exc:
             c.error(f"Generation failed: {exc}")
             raise typer.Exit(code=1)
+
+    # ------------------------------------------------------------------
+    # --propose-hypothesis: after inference, summarize latest eval report
+    # ------------------------------------------------------------------
+    if propose_hypothesis:
+        latest = _find_latest_eval_report()
+        if latest is None:
+            c.warn("No eval_report.json found under runs/ or ~/.carl/runs/.")
+            c.info("Run `carl eval ...` first, or pass --from-eval <path>.")
+            return
+        try:
+            report = _load_eval_report(latest)
+        except typer.BadParameter as exc:
+            c.error(str(exc))
+            return
+        c.info(f"Using latest eval report: {latest}")
+        _render_proposal(c, report)

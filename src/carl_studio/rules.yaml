@@ -1,0 +1,41 @@
+# Packaged constitutional defaults. User overrides at ~/.carl/constitution.yaml.
+rules:
+  - id: security.no_secret_logging
+    text: Never log, persist, or echo API keys, JWTs, or wallet passphrases.
+    priority: 100
+    tags: [security, secrets, logging]
+
+  - id: security.sandbox_user_paths
+    text: Always route user-supplied paths through carl_core.safepath.safe_resolve.
+    priority: 100
+    tags: [security, paths, sandbox]
+
+  - id: reliability.typed_errors
+    text: Every failure path raises a carl_core.errors.CARLError subclass with a stable code.
+    priority: 90
+    tags: [errors, reliability]
+
+  - id: reliability.retry_with_backoff
+    text: External calls (HTTP, HF hub, facilitator) use carl_core.retry with exponential backoff.
+    priority: 80
+    tags: [errors, network, retry]
+
+  - id: agency.anticipatory
+    text: Carl should anticipate the next useful step and surface it proactively rather than wait.
+    priority: 70
+    tags: [agent, ux]
+
+  - id: agency.commit_what_worked
+    text: At session end, promote validated learnings to long-term memory via `carl commit`.
+    priority: 70
+    tags: [agent, memory]
+
+  - id: research.hypothesis_first
+    text: Frame training runs as hypotheses (`carl hypothesize`) with measurable predictions before running.
+    priority: 60
+    tags: [research, training]
+
+  - id: research.observe_before_act
+    text: "`carl infer` reads the eval report + coherence trace before proposing the next experiment."
+    priority: 60
+    tags: [research, eval]

@@ -428,6 +428,11 @@ def train(
         help="Resume training from a checkpoint directory. Use 'auto' to pick the "
         "newest checkpoint in output_dir, or provide an explicit path.",
     ),
+    backend: str | None = typer.Option(
+        None,
+        "--backend",
+        help="Training backend adapter: trl (default), unsloth, axolotl, tinker, atropos.",
+    ),
 ) -> None:
     """Start a CARL training run. Use --send-it for full autonomous pipeline."""
     import yaml
@@ -440,6 +445,14 @@ def train(
             raw = yaml.safe_load(f) or {}
     else:
         raw = {}
+
+    # Resolve the training backend early so unknown names fail fast (exit 2).
+    backend_name = (backend or str(raw.get("backend", "") or "trl")).strip().lower()
+    _maybe_dispatch_backend(
+        backend_name=backend_name,
+        raw=raw,
+        dry_run=dry_run,
+    )
 
     # CLI overrides
     if name:
@@ -746,6 +759,163 @@ def _stop_impl(run_id: str) -> None:
         )
 
     c.ok(f"Job {remote_job_id} cancelled.")
+
+
+# ---------------------------------------------------------------------------
+# Backend dispatch (adapter layer)
+# ---------------------------------------------------------------------------
+
+
+def _maybe_dispatch_backend(
+    *,
+    backend_name: str,
+    raw: dict[str, Any],
+    dry_run: bool,
+) -> None:
+    """Route ``carl train --backend X`` to the adapter layer when X != trl.
+
+    The default ``trl`` path falls through to the existing in-process trainer
+    so backwards compatibility is preserved. Unknown backend names trigger
+    ``typer.Exit(2)`` with a stable error message.
+    """
+    if backend_name == "trl":
+        return  # fall through to the default trainer path
+
+    c = get_console()
+    try:
+        from carl_studio.adapters import get_adapter, list_adapters
+    except Exception as exc:  # pragma: no cover - defensive
+        c.error(f"adapter registry unavailable: {exc}")
+        raise typer.Exit(2)
+
+    try:
+        adapter = get_adapter(backend_name)
+    except Exception as exc:
+        from carl_core.errors import ConfigError
+
+        if isinstance(exc, ConfigError):
+            known = sorted(a["name"] for a in list_adapters())
+            c.error(f"unknown training backend: {backend_name!r}")
+            c.info(f"known: {', '.join(known) or '(none)'}")
+            raise typer.Exit(2)
+        raise
+
+    raw = _normalize_training_config(raw)
+
+    if dry_run:
+        c.banner(f"v{__version__}")
+        c.config_block(
+            [
+                ("Backend", adapter.name),
+                ("Available", "yes" if adapter.available() else "no"),
+                ("Model", str(raw.get("base_model", "-"))),
+                ("Dataset", str(raw.get("dataset_repo", "-"))),
+                ("Method", str(raw.get("method", "-"))),
+            ],
+            title="Backend Dispatch -- Dry Run",
+        )
+        translated = _translate_for_backend(adapter, raw, c)
+        if translated is not None:
+            c.blank()
+            c.info("Translated config (preview):")
+            from rich.syntax import Syntax
+
+            c.print(Syntax(json.dumps(translated, indent=2), "json", theme="monokai"))
+        c.blank()
+        raise typer.Exit(0)
+
+    if not adapter.available():
+        c.error_with_hint(
+            f"backend {adapter.name!r} is not installed on this machine",
+            hint=_backend_install_hint(adapter.name),
+            code="carl.adapter.unavailable",
+        )
+        raise typer.Exit(1)
+
+    try:
+        job = adapter.submit(raw)
+    except Exception as exc:
+        from carl_core.errors import CARLError
+
+        if isinstance(exc, CARLError):
+            c.error(f"{exc.code}: {exc}")
+            raise typer.Exit(1)
+        raise
+
+    c.ok(f"Submitted to backend {adapter.name!r}: {job.run_id}")
+    c.kv("Status", job.status)
+    c.info(f"Monitor: carl lab backends --status {adapter.name}:{job.run_id}")
+    raise typer.Exit(0)
+
+
+def _translate_for_backend(adapter: Any, raw: dict[str, Any], c: Any) -> dict[str, Any] | None:
+    """Call the adapter's ``translate()`` if it exposes one; otherwise None.
+
+    All non-TRL adapters ship a public ``translate()`` — this helper keeps
+    the dispatch code resilient to future adapters that may skip it.
+    """
+    translate = getattr(adapter, "translate", None)
+    if translate is None:
+        return None
+    try:
+        return translate(raw)
+    except Exception as exc:
+        from carl_core.errors import CARLError
+
+        if isinstance(exc, CARLError):
+            c.error(f"{exc.code}: {exc}")
+        else:
+            c.error(f"translation failed: {exc}")
+        raise typer.Exit(1)
+
+
+def _backend_install_hint(name: str) -> str:
+    return {
+        "trl": "pip install 'carl-studio[training]'",
+        "unsloth": "pip install unsloth",
+        "axolotl": "pip install axolotl",
+        "tinker": "pip install tinker  (see https://thinkingmachines.ai/tinker)",
+        "atropos": "pip install atropos",
+    }.get(name, f"install the {name} backend")
+
+
+# ---------------------------------------------------------------------------
+# carl lab backends
+# ---------------------------------------------------------------------------
+@app.command(name="backends", hidden=True)
+def backends_cmd(
+    json_output: bool = typer.Option(False, "--json", help="Output as JSON"),
+) -> None:
+    """List registered training backend adapters and availability."""
+    try:
+        from carl_studio.adapters import list_adapters
+    except Exception as exc:
+        get_console().error(f"adapter registry unavailable: {exc}")
+        raise typer.Exit(1)
+
+    entries = list_adapters()
+
+    if json_output:
+        typer.echo(json.dumps(entries, indent=2))
+        raise typer.Exit(0)
+
+    c = get_console()
+    c.blank()
+    c.header("Training Backends")
+    if not entries:
+        c.info("No adapters registered.")
+        c.blank()
+        raise typer.Exit(0)
+
+    table = c.make_table("Name", "Available", "Install Hint", title="Adapters")
+    for entry in entries:
+        table.add_row(
+            entry["name"],
+            "yes" if entry["available"] else "no",
+            _backend_install_hint(entry["name"]),
+        )
+    c.print(table)
+    c.blank()
 
 
 @app.command(hidden=True)

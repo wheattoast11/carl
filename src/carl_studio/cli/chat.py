@@ -335,21 +335,69 @@ def chat_cmd(
 
 
 def _exit_session(c: Any, agent: Any) -> None:
-    """Save session and show cost summary on exit."""
+    """Save session and show cost summary on exit.
+
+    Also offers to promote 1-3 durable rules derived from the session into
+    the user's constitution when the session is non-trivial (>=3 turns) and
+    the agent has a constitution loaded.
+    """
     # Auto-save if session has content
     if agent._messages:
         sid = agent.save_session(title="carl chat")
         c.info(f"Session saved: {sid}")
         c.info(f"Resume with: carl chat --session {sid}")
 
-    # Show cost summary
+    # Offer learnings promotion — only when the session produced real content
+    # and we actually have a constitution to append to.
     cost = agent.cost_summary
-    if cost["turn_count"] > 0:
+    turn_count = int(cost.get("turn_count", 0) or 0)
+    constitution = getattr(agent, "_constitution", None)
+    if turn_count >= 3 and constitution is not None:
+        _maybe_promote_learnings(c, agent, constitution)
+
+    # Show cost summary
+    if turn_count > 0:
         c.kv("Cost", f"${cost['total_cost_usd']:.4f}", key_width=10)
         c.kv("Tokens", f"{cost['total_input_tokens']}in / {cost['total_output_tokens']}out", key_width=10)
-        c.kv("Turns", str(cost["turn_count"]), key_width=10)
+        c.kv("Turns", str(turn_count), key_width=10)
 
     c.voice("farewell")
+
+
+def _maybe_promote_learnings(c: Any, agent: Any, constitution: Any) -> None:
+    """Prompt the user to codify durable learnings into the constitution."""
+    try:
+        prompt_ok = typer.confirm(
+            "Promote any learnings from this session?", default=False,
+        )
+    except Exception:
+        return
+    if not prompt_ok:
+        return
+
+    try:
+        proposed = agent.suggest_learnings() or []
+    except Exception as exc:
+        c.warn(f"Could not propose learnings: {exc}")
+        return
+
+    if not proposed:
+        c.info("No durable learnings proposed.")
+        return
+
+    for rule in proposed:
+        preview = f"[{rule.id} | p{rule.priority}] {rule.text[:160]}"
+        try:
+            keep = typer.confirm(f"Add rule? {preview}", default=False)
+        except Exception:
+            keep = False
+        if not keep:
+            continue
+        try:
+            constitution.append(rule)
+            c.ok(f"Rule codified: {rule.id}")
+        except Exception as exc:
+            c.warn(f"Failed to append rule {rule.id}: {exc}")
 
 
 def _format_args(args: dict) -> str:

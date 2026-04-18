@@ -24,16 +24,37 @@ import concurrent.futures
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
+if TYPE_CHECKING:  # pragma: no cover — typing only
+    from carl_core.memory import MemoryItem, MemoryLayer, MemoryStore
+    from carl_studio.constitution import Constitution, ConstitutionalRule
+
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Memory recall defaults
+# ---------------------------------------------------------------------------
+_MEMORY_RECALL_TOP_K = 3
+_MEMORY_RECALL_MIN_SCORE = 0.15
+_MEMORY_CONTENT_PREVIEW = 200
+_MEMORY_ITEM_OUTPUT_CAP = 500
+
+# Signal phrases that trigger an auto-remember of the user's utterance.
+_AUTO_REMEMBER_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bremember\b", re.IGNORECASE),
+    re.compile(r"^\s*note\s*:", re.IGNORECASE),
+    re.compile(r"\balways\b", re.IGNORECASE),
+    re.compile(r"\bnever\b", re.IGNORECASE),
+)
 
 # ---------------------------------------------------------------------------
 # Hard context bounds
@@ -563,6 +584,8 @@ class CARLAgent:
         pre_tool_use: PreToolHook | None = None,
         post_tool_use: PostToolHook | None = None,
         session_id: str = "",
+        memory_store: MemoryStore | None = None,
+        constitution: Constitution | None = None,
         _client: Any | None = None,
     ) -> None:
         # -- Resolve model from settings when not explicitly passed ----------
@@ -642,6 +665,36 @@ class CARLAgent:
         except Exception:
             pass
 
+        # -- Constitution (CRYSTAL layer) --------------------------------
+        # Attempt to resolve a Constitution instance. If the caller passed
+        # one, trust it verbatim; otherwise try the default loader. Failures
+        # must never break agent construction — the agent degrades to the
+        # legacy behaviour (no constitutional rules injected).
+        self._constitution: Constitution | None = constitution
+        if self._constitution is None:
+            try:
+                from carl_studio.constitution import Constitution as _Constitution
+
+                self._constitution = _Constitution.load()
+            except Exception as exc:
+                logger.debug("Constitution.load() failed; continuing without: %s", exc)
+                self._constitution = None
+
+        # Compiled system-prompt block — cached per-instance so a noisy
+        # large ruleset doesn't re-serialize on every turn.
+        self._constitution_prompt: str | None = None
+
+        # -- Memory store (WORKING + LONG + SHORT/CRYSTAL) ---------------
+        self._memory: MemoryStore | None = memory_store
+        if self._memory is None:
+            try:
+                from carl_core.memory import MemoryStore as _MemoryStore
+
+                self._memory = _MemoryStore(Path.home() / ".carl" / "memory")
+            except Exception as exc:
+                logger.debug("MemoryStore bootstrap failed; continuing without: %s", exc)
+                self._memory = None
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
@@ -718,7 +771,18 @@ class CARLAgent:
           * Hook exceptions (pre/post tool use) yield a ``carl.hook_failed``
             error event and the loop continues.
         """
-        self._messages.append({"role": "user", "content": user_input})
+        # Memory recall — prepend relevant past learnings to the user turn,
+        # and emit MEMORY_READ steps into the InteractionChain. Recall is
+        # best-effort: any failure leaves the original prompt unchanged.
+        recalled_items = self._recall_memories(user_input)
+        augmented_input = self._augment_prompt_with_recall(user_input, recalled_items)
+
+        # Auto-remember strong signals ("always", "never", "remember", "note:")
+        # BEFORE the API call so the new SHORT memory is visible to the next
+        # recall pass — this is the crystallize-in-place pattern.
+        self._maybe_auto_remember(user_input)
+
+        self._messages.append({"role": "user", "content": augmented_input})
         self._turn_count += 1
 
         while True:
@@ -993,6 +1057,254 @@ class CARLAgent:
                 return
 
     # ------------------------------------------------------------------
+    # Memory: recall, remember, auto-remember, suggest_learnings
+    # ------------------------------------------------------------------
+
+    def _recall_memories(self, prompt: str) -> list[MemoryItem]:
+        """Return recalled WORKING+LONG memory items or []; never raises.
+
+        Emits a MEMORY_READ step into the InteractionChain for each item
+        surfaced. Items below ``_MEMORY_RECALL_MIN_SCORE`` are dropped by the
+        MemoryStore before they reach us.
+        """
+        if self._memory is None:
+            return []
+        try:
+            from carl_core.memory import MemoryLayer as _MemoryLayer
+
+            recalled = self._memory.recall(
+                prompt,
+                layers={_MemoryLayer.WORKING, _MemoryLayer.LONG},
+                top_k=_MEMORY_RECALL_TOP_K,
+                min_score=_MEMORY_RECALL_MIN_SCORE,
+            )
+        except Exception as exc:
+            logger.debug("memory.recall failed: %s", exc)
+            return []
+
+        if not recalled:
+            return []
+
+        # Emit MEMORY_READ steps — failure to record must not kill the turn.
+        chain = self._get_chain()
+        if chain is not None:
+            try:
+                from carl_core.interaction import ActionType
+
+                for item in recalled:
+                    chain.record(
+                        ActionType.MEMORY_READ,
+                        name=item.id,
+                        input=prompt,
+                        output=item.content[:_MEMORY_ITEM_OUTPUT_CAP],
+                    )
+            except Exception as exc:
+                logger.debug("chain.record MEMORY_READ failed: %s", exc)
+        return recalled
+
+    @staticmethod
+    def _augment_prompt_with_recall(
+        prompt: str, recalled: list[MemoryItem],
+    ) -> str:
+        """Prepend a visible recall block to the user's turn, or passthrough."""
+        if not recalled:
+            return prompt
+        note_lines = ["# Recalled context (from past sessions):"]
+        for item in recalled:
+            preview = item.content[:_MEMORY_CONTENT_PREVIEW]
+            note_lines.append(f"- [{item.id}] {preview}")
+        note = "\n".join(note_lines)
+        return f"{note}\n\n---\n\n{prompt}"
+
+    def remember(
+        self,
+        content: str,
+        *,
+        layer: MemoryLayer | None = None,
+        tags: set[str] | None = None,
+    ) -> MemoryItem | None:
+        """Write ``content`` to memory and record a MEMORY_WRITE step.
+
+        ``layer`` defaults to ``MemoryLayer.SHORT`` when None. Returns the
+        freshly written ``MemoryItem`` or ``None`` when the store is absent.
+        """
+        if self._memory is None:
+            return None
+        try:
+            from carl_core.memory import MemoryLayer as _MemoryLayer
+        except Exception as exc:
+            logger.debug("memory import failed in remember(): %s", exc)
+            return None
+
+        target_layer = layer if layer is not None else _MemoryLayer.SHORT
+        try:
+            item = self._memory.write(
+                content, layer=target_layer, tags=tags or set(),
+            )
+        except Exception as exc:
+            logger.warning("memory.write failed: %s", exc)
+            return None
+
+        chain = self._get_chain()
+        if chain is not None:
+            try:
+                from carl_core.interaction import ActionType
+
+                chain.record(
+                    ActionType.MEMORY_WRITE,
+                    name=item.id,
+                    input={"layer": target_layer.name, "tags": sorted(tags or set())},
+                    output=content[:_MEMORY_ITEM_OUTPUT_CAP],
+                )
+            except Exception as exc:
+                logger.debug("chain.record MEMORY_WRITE failed: %s", exc)
+        return item
+
+    def _maybe_auto_remember(self, user_input: str) -> None:
+        """If the user's utterance contains a learn-signal, persist it.
+
+        Looks for: ``remember``, ``note:``, ``always``, ``never``. Tags come
+        from the active frame's domain/function/role so recall surfaces them
+        under relevant topics.
+        """
+        if self._memory is None:
+            return
+        if not any(pat.search(user_input) for pat in _AUTO_REMEMBER_PATTERNS):
+            return
+        tags = self._derive_topics_from_frame()
+        tags.add("auto_remember")
+        self.remember(user_input, tags=tags)
+
+    def suggest_learnings(self) -> list[ConstitutionalRule]:
+        """Ask the agent to propose 1-3 durable rules from recent turns.
+
+        Zero-tool sub-invocation. Reuses the same model with a reduced
+        output budget. Returns [] on malformed output so callers can always
+        treat the result as a list.
+        """
+        try:
+            from carl_studio.constitution import ConstitutionalRule
+        except Exception as exc:
+            logger.debug("ConstitutionalRule import failed: %s", exc)
+            return []
+
+        # Gather the last few user+assistant exchanges as a digest. Tool
+        # results and auto-injected recall blocks are de-emphasized.
+        digest = self._recent_turns_digest(max_turns=6)
+        if not digest:
+            return []
+
+        suggest_prompt = (
+            "Review the recent conversation turns below. Propose 1-3 durable "
+            "rules to codify as learnings for future sessions. Respond with "
+            "ONLY a JSON array. Each element must be an object with keys: "
+            "id (dot-separated string), text (natural-language rule), "
+            "priority (integer 0-100), tags (array of strings).\n\n"
+            f"Recent turns:\n{digest}"
+        )
+
+        raw_json = self._one_shot_text(
+            suggest_prompt, max_tokens=1024,
+        )
+        if not raw_json:
+            return []
+
+        return self._parse_learnings_json(raw_json, ConstitutionalRule)
+
+    def _recent_turns_digest(self, *, max_turns: int) -> str:
+        """Compact textual digest of the last ``max_turns`` messages."""
+        if not self._messages:
+            return ""
+        window = self._messages[-max_turns:]
+        lines: list[str] = []
+        for msg in window:
+            role = str(msg.get("role", "?"))
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                bits: list[str] = []
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") == "text":
+                        bits.append(str(block.get("text", "")))
+                    elif block.get("type") == "tool_use":
+                        bits.append(f"[tool_use:{block.get('name','?')}]")
+                text = " ".join(b for b in bits if b).strip()
+            else:
+                text = str(content).strip()
+            if text:
+                lines.append(f"{role}: {text[:500]}")
+        return "\n".join(lines)
+
+    def _one_shot_text(self, prompt: str, *, max_tokens: int) -> str:
+        """Zero-tool synchronous call — returns the assistant text or ""."""
+        try:
+            kwargs: dict[str, Any] = {
+                "model": self._model,
+                "max_tokens": max(1, int(max_tokens)),
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            response = self._client.messages.create(**kwargs)
+        except Exception as exc:
+            logger.debug("one-shot suggest_learnings call failed: %s", exc)
+            return ""
+
+        # Best-effort text extraction across SDK shapes.
+        content = getattr(response, "content", None) or []
+        texts: list[str] = []
+        for block in content:
+            btype = getattr(block, "type", None)
+            if btype == "text":
+                text_val = getattr(block, "text", "") or ""
+                if text_val:
+                    texts.append(str(text_val))
+            elif isinstance(block, dict) and block.get("type") == "text":
+                texts.append(str(block.get("text", "")))
+        return "".join(texts).strip()
+
+    @staticmethod
+    def _parse_learnings_json(
+        raw: str,
+        rule_cls: type[ConstitutionalRule],
+    ) -> list[ConstitutionalRule]:
+        """Parse a JSON array of learnings, skipping malformed entries."""
+        text = raw.strip()
+        # Try to extract the first JSON array if there's surrounding prose.
+        if not text.startswith("["):
+            start = text.find("[")
+            end = text.rfind("]")
+            if start != -1 and end != -1 and end > start:
+                text = text[start:end + 1]
+            else:
+                return []
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(data, list):
+            return []
+
+        out: list[ConstitutionalRule] = []
+        for entry in data:
+            if not isinstance(entry, dict):
+                continue
+            # ConstitutionalRule requires id + text; tolerate soft fields.
+            try:
+                rule = rule_cls(
+                    id=str(entry.get("id", "")).strip(),
+                    text=str(entry.get("text", "")).strip(),
+                    priority=int(entry.get("priority", 50)),
+                    tags=[str(t) for t in (entry.get("tags") or []) if t],
+                    source="user",
+                )
+            except Exception:
+                continue
+            if not rule.id or not rule.text:
+                continue
+            out.append(rule)
+        return out
+
+    # ------------------------------------------------------------------
     # Streaming helpers
     # ------------------------------------------------------------------
 
@@ -1108,7 +1420,48 @@ class CARLAgent:
             "7. When asked about ingested data, use query_knowledge first.",
         ])
 
-        return "\n".join(parts)
+        base = "\n".join(parts)
+
+        # Constitutional rules (CRYSTAL layer) — injected at most once per
+        # agent instance. A failure here must never block the turn: log and
+        # return the base prompt unchanged.
+        rules_block = self._get_constitution_prompt()
+        if rules_block:
+            return base + "\n\n" + rules_block
+        return base
+
+    def _get_constitution_prompt(self) -> str:
+        """Return the cached constitutional block, compiling on first use."""
+        if self._constitution is None:
+            return ""
+        if self._constitution_prompt is not None:
+            return self._constitution_prompt
+        try:
+            topics = self._derive_topics_from_frame() or None
+            compiled = self._constitution.compile_system_prompt(
+                topics=topics, max_rules=20,
+            )
+        except Exception as exc:
+            logger.debug("Constitution.compile_system_prompt failed: %s", exc)
+            compiled = ""
+        self._constitution_prompt = compiled
+        return compiled
+
+    def _derive_topics_from_frame(self) -> set[str]:
+        """Extract topic tags from the active WorkFrame for rule selection.
+
+        Returns a set built from domain/function/role. Empty set when no
+        frame is set (callers treat an empty set as "all topics").
+        """
+        frame = self._frame
+        if frame is None:
+            return set()
+        topics: set[str] = set()
+        for attr in ("domain", "function", "role"):
+            value = getattr(frame, attr, "")
+            if isinstance(value, str) and value:
+                topics.add(value.lower())
+        return topics
 
     @staticmethod
     def _content_to_dicts(content: Any) -> list[dict[str, Any]]:

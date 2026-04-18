@@ -670,6 +670,130 @@ def _push_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
     return _run(chain, "push", args, _do, extra_input={"types": types_arg})
 
 
+def _hypothesize_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
+    """Wrap ``carl hypothesize <statement>``. Parses -o/--output and flags from args."""
+    output = "carl.yaml"
+    model = ""
+    dry_run = False
+    force = False
+    statement_tokens: list[str] = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in ("-o", "--output") and i + 1 < len(args):
+            output = args[i + 1]
+            i += 2
+            continue
+        if tok in ("-m", "--model") and i + 1 < len(args):
+            model = args[i + 1]
+            i += 2
+            continue
+        if tok == "--dry-run":
+            dry_run = True
+            i += 1
+            continue
+        if tok == "--force":
+            force = True
+            i += 1
+            continue
+        statement_tokens.append(tok)
+        i += 1
+    statement = " ".join(statement_tokens).strip()
+
+    if not statement:
+        def _missing() -> None:
+            raise SystemExit(2)
+
+        return _run(
+            chain,
+            "hypothesize",
+            args,
+            _missing,
+            extra_input={"error": "hypothesize requires a statement"},
+        )
+
+    def _do() -> None:
+        from carl_studio.cli.hypothesize import hypothesize_cmd
+
+        hypothesize_cmd(
+            statement=statement,
+            output=output,
+            model=model,
+            dry_run=dry_run,
+            force=force,
+        )
+
+    return _run(
+        chain,
+        "hypothesize",
+        args,
+        _do,
+        extra_input={"statement": statement[:200], "output": output},
+    )
+
+
+def _commit_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
+    """Wrap ``carl commit <learning>`` with --id/--priority/--tags/--from-session/--dry-run."""
+    rule_id = ""
+    priority = 60
+    tags = ""
+    from_session = ""
+    dry_run = False
+    learning_tokens: list[str] = []
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok == "--id" and i + 1 < len(args):
+            rule_id = args[i + 1]
+            i += 2
+            continue
+        if tok in ("-p", "--priority") and i + 1 < len(args):
+            try:
+                priority = int(args[i + 1])
+            except ValueError:
+                pass
+            i += 2
+            continue
+        if tok == "--tags" and i + 1 < len(args):
+            tags = args[i + 1]
+            i += 2
+            continue
+        if tok == "--from-session" and i + 1 < len(args):
+            from_session = args[i + 1]
+            i += 2
+            continue
+        if tok == "--dry-run":
+            dry_run = True
+            i += 1
+            continue
+        learning_tokens.append(tok)
+        i += 1
+    learning = " ".join(learning_tokens).strip()
+
+    def _do() -> None:
+        from carl_studio.cli.commit import commit_cmd
+
+        commit_cmd(
+            learning=learning or None,
+            rule_id=rule_id,
+            priority=priority,
+            tags=tags,
+            from_session=from_session,
+            dry_run=dry_run,
+        )
+
+    return _run(
+        chain,
+        "commit",
+        args,
+        _do,
+        extra_input={
+            "learning": learning[:200],
+            "from_session": from_session,
+        },
+    )
+
+
 def _diagnose_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
     """Wrap ``carl observe --diagnose ...``. Parses --file/--url from args."""
     url: str | None = None
@@ -762,6 +886,9 @@ OPERATIONS: dict[str, Operation] = {
     "publish": _publish_op,
     "push": _push_op,
     "diagnose": _diagnose_op,
+    # research cycle
+    "hypothesize": _hypothesize_op,
+    "commit": _commit_op,
 }
 
 
