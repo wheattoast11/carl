@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "carl-studio"
-version = "0.5.0"
+version = "0.6.0"
 description = "CARL (Coherence-Aware Reinforcement Learning) — information-theoretic reward signals for LLM training via token-level probability distributions"
 readme = "README.md"
 license = "MIT"

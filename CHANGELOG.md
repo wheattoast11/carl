@@ -2,9 +2,188 @@
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-04-19
+
+The resonant-heartbeat release. Four-wave execution against a 48-ticket MECE
+backlog synthesized from five parallel review teams. 2637 tests pass (+161 new).
+Ships the target UX vision: bare `carl` greets with a pre-coded intro, extracts
+JIT context from the first input, forks a resonant heartbeat loop over an
+async sticky-note queue, and closes the loop with training-feedback proposals.
+Fixes the framework's central reward/eval isomorphism: `EvalGate` now requires
+coherence floor (φ ≥ SIGMA) in addition to primary metric, cascade gates on
+crystallization events (not reward volume), and `PhaseAdaptiveCARLReward`
+shifts weights by detected Kuramoto phase.
+
+### WAVE-0 — Security + correctness + tech-debt (v0.5.1 hotfix bundle)
+
+#### 🔒 Security
+- `_tool_dispatch_cli` now passes `_scrubbed_subprocess_env()` to child process
+  (was leaking ANTHROPIC_API_KEY / HF_TOKEN / OPENAI_API_KEY / OPENROUTER_API_KEY
+  into model-invoked subprocess). Tracks REV-001.
+- `CARLSettings.save()` excludes `openrouter_api_key` + `openai_api_key` from
+  the YAML dump (previously persisted plaintext to `~/.carl/config.yaml`).
+  Tracks REV-003.
+
+#### 🛡 Correctness
+- `EvalSandbox.execute_code` uses `sys.executable` instead of bare `"python"`,
+  preventing phantom tool failures in docker / CI / multi-venv environments
+  (REV-005).
+- `CARLAgent._one_shot_text` accumulates `_total_cost_usd` / token counters
+  on every API call. `max_budget_usd` was previously bypassable via
+  `suggest_learnings()` auxiliary calls (REV-006).
+- `TrainingPipeline._check_gate` returns `False` on exception (was silently
+  PASSing OOM / network / missing-dataset failures, allowing potentially
+  broken models to reach the Hub) (REV-007).
+- `CascadeRewardManager.__init__` guards `warmup_steps = max(1, warmup_steps)`
+  against `ZeroDivisionError` at `get_stage_weight` (REV-009).
+
+#### 🧹 Tech debt
+- Deleted `carl_studio.primitives` compatibility shim (slated for v0.5.0
+  removal per CLAUDE.md, still present at v0.5.0 ship). Zero in-tree consumers
+  verified. `import carl_studio.primitives` now raises `ModuleNotFoundError`
+  (SIMP-001).
+- Renamed `carl_studio.agent.CARLAgent` (FSM autonomy agent) →
+  `AutonomyAgent` to resolve collision with the canonical
+  `carl_studio.chat_agent.CARLAgent` used by all CLI paths. Module-level
+  `__getattr__` emits `DeprecationWarning` on legacy import, removal
+  scheduled v0.7 (SIMP-002).
+- `.gitignore` hardened against `/fix_*.py` and `/patch_*.py` scratch scripts
+  (SIMP-008).
+
+### WAVE-1 — Target UX + coherence alignment (the vision)
+
+#### Foundations
+- `ActionType.HEARTBEAT_CYCLE` + `ActionType.STICKY_NOTE` on `InteractionChain`
+  (ARC-008).
+- `sticky_notes` SQLite table + `src/carl_studio/sticky.py` module with
+  `StickyNote` (Pydantic v2) and `StickyQueue` supporting priority-ordered
+  append/dequeue/complete/archive/get/status (ARC-004).
+- `src/carl_studio/jit_context.py` — `JITContext` model, `TaskIntent` enum
+  (EXPLORE/TRAIN/EVAL/STICKY/FREE), `extract()` with move-key shortcircuit
+  + regex classification, `WorkFrame`-aware `frame_patch` builder (ARC-002).
+
+#### Target UX
+- `src/carl_studio/cli/intro.py` — env-baked pre-coded intro with 4 keyed
+  moves `[e]xplore` `[t]rain` e`[v]aluate` `[s]ticky` + free-form. Rendered
+  before first `input()` in `chat_cmd`. Zero-latency, no I/O.
+  `parse_intro_selection()` accepts single-letter or full-word form. Rich
+  markup escape pins UAT-052 regression (ARC-001 + SIMP-009).
+- `carl queue` CLI sub-app: `add` / `list` / `status` / `clear` backed by
+  `StickyQueue`. Doctor gains a "Queue" stanza reporting pending count
+  (ARC-007).
+- `src/carl_studio/heartbeat/` — package with `HeartbeatPhase` enum
+  (INTERVIEW → EXPLORE → RESEARCH → PLAN → EXECUTE → EVALUATE → RECOMMEND
+  → AWAIT), `HeartbeatLoop` daemon-thread async loop draining the sticky
+  queue, `HeartbeatConnection(AsyncBaseConnection)` participating in the
+  Connection registry with full FSM lifecycle. Thread-safe sqlite via
+  fresh `LocalDB` per worker thread (ARC-003 + ARC-006).
+- `src/carl_studio/feedback.py` — `FeedbackEngine` + `EvalBaseline` +
+  `TrainingProposal` Pydantic models. `cli/training.py` gains `--from-queue`
+  flag that loads a pending proposal. Proposals are persisted to
+  `LocalDB.config` under stable keys (ARC-005).
+- Bootstrap phase: after turn-1, `ctx.frame_patch` is applied to
+  `agent._frame` via `model_copy(update=...)` (only when frame is inactive,
+  preserving `--frame` overrides) (JRN-002).
+- Greeting gate uses `self._turn_count <= 1` (was `len(self._messages) <= 1`),
+  so resumed sessions don't re-greet (REV-004).
+- `_tool_frame` invalidates `_constitution_prompt` cache so frame-adapted
+  rules re-compile for the new domain (REV-010).
+
+#### Coherence alignment (framework integrity)
+- `EvalGate.check` requires both primary metric AND coherence floor
+  (`phi_mean ≥ SIGMA`, `0.3 ≤ discontinuity ≤ 0.7`). Restores the reward/eval
+  isomorphism the package has always claimed. Legacy construction preserved
+  for backward compat; new gate active when `EvalConfig.require_coherence_gate=True`
+  (default) (SEM-001).
+- `CascadeRewardManager(gate_mode="crystallization")` fires on
+  `sum(trace.n_crystallizations) >= N` over configurable window — a
+  phase-transition signature, not a reward-volume percentile. Metric mode
+  preserved (SEM-006).
+- `PhaseAdaptiveCARLReward(CARLReward)` reads Kuramoto-R from `_last_traces`
+  and shifts `(w_mc, w_cq, w_disc)` by detected phase: gaseous rewards
+  commitment, liquid balances, crystalline rewards stability (SEM-010).
+
+### WAVE-2 — First-run polish + CLI dedup + MCP/A2A validation
+
+#### First-run UX
+- `carl init` persists `default_chat_model` so bare `carl` just works
+  post-init (JRN-004).
+- `carl doctor` prints a "Next steps" guide block (gated by first-run
+  marker age) (JRN-005).
+- Optional sample-project scaffold in `carl init` (JRN-006).
+- Post-init celebration + next-step pathways (JRN-008).
+- `session_theme` persisted with agent state (move:explore/train/evaluate/
+  sticky or free-form) (JRN-009).
+- Optional GitHub repo / HF model context-gathering (JRN-010).
+
+#### CLI dedup + discoverability
+- `_pump_events` helper shared between `chat_cmd` and `run_one_shot_agent`
+  (SIMP-003).
+- `parse_flags()` replaces 12 handrolled arg loops in `operations.py`
+  (-69 LOC) (SIMP-006).
+- `_PROMPT_OPS` dict consolidates 6 prompt-template macro ops (SIMP-010).
+- Operation descriptions appear in `carl flow --list` (JRN-007).
+
+#### Tech-debt consolidation
+- 7 error classes (`ContractError` / `ConsentError` / `MarketplaceError` /
+  `SyncError` / `X402Error` / `BillingError` / `CreditError`) migrated onto
+  `CARLError` hierarchy with stable codes (`carl.contract` etc.). Network
+  failures now use multi-inheritance with `NetworkError`
+  (`MarketplaceNetworkError`, `CreditNetworkError`). Secret-redaction via
+  `to_dict()` is now active for all of them (SIMP-004).
+- `x402_sdk.py` deleted; `X402SDKClient` folded into `x402_connection.py`
+  (SIMP-005).
+- `CARLSettings.SETTABLE_FIELDS` derived dynamically from
+  `cls.model_fields`; `load()` uses `local_data.keys() & model_fields.keys()`
+  instead of a hardcoded allow-list (SIMP-007).
+
+#### DB lifecycle + MCP/A2A validation
+- `LocalDB._connect` commits on clean exit, rolls back on exception,
+  serializes via `threading.Lock`. `sqlite3.connect(check_same_thread=False)`
+  so the lock can actually do its job (REV-002).
+- `LocalDB.__init__` calls `self.close()` on `_init_schema` failure so
+  corrupt-DB doesn't leak a half-open connection (REV-008).
+- MCP `_session` documented + single-tenant banner on server startup;
+  per-request migration path documented for v0.7 (UAT-049).
+- A2A `send` CLI validates `--inputs` is a JSON object and `skill` is in
+  `BUILTIN_SKILLS` registry (UAT-050).
+- MCP `sync_data` logs JWT cache-write failures at DEBUG instead of silent
+  swallow (UAT-051).
+
+### WAVE-3 — Framework depth (isomorphism, contraction, multi-layer, TTT)
+
+- `carl_core.connection.coherence.ChannelCoherence` — per-transaction
+  observable (phi_mean / cloud_quality / success_rate / latency_ms) that
+  any channel can publish. `channel_coherence_diff()` +
+  `channel_coherence_distance()` make the 1P/3P isomorphism claim
+  measurable. `BaseConnection` gains `channel_coherence()` reader +
+  `publish_channel_coherence()` setter; `to_dict()` surfaces it (SEM-002).
+- `Step` gains optional `phi` / `kuramoto_r` / `channel_coherence` fields.
+  `InteractionChain.coherence_trajectory()` returns the phi-vs-step series
+  across all channels — chain is now a witness, not just a log (SEM-007).
+- `carl_core.dynamics.ContractionProbe` — records trajectory, fits
+  contraction constant q_hat via log-ratio OLS, fires
+  `contraction_violation` on divergence from Banach-style contraction.
+  Opt-in via `CARL_CONTRACTION_PROBE=1` through `ResonanceLRCallback`;
+  logs `dynamics/q_hat` (SEM-003).
+- `test_conservation_law.py` — smoke test for KAPPA · SIGMA = 4 and
+  ∫(1-phi_t) ≈ SIGMA · T_STAR within 10× tolerance on synthetic cooling
+  trajectory (`@pytest.mark.slow`) (SEM-008).
+- `CoherenceProbe.measure_multi_layer(hidden_states, logits, token_ids)`
+  returns `LayeredTrace` with per-layer residual cosine + optional
+  attention entropy. Gated by `CARL_LAYER_PROBE=1`; fast logits-only path
+  preserved (SEM-004).
+- `GRPOReflectionCallback.on_log` computes `tau` from CARL reward's
+  `_last_traces` via Kuramoto-R in the public training path. Publishes
+  `witness/tau` + `witness/kuramoto_R` to the logs stream. Previously the
+  crystalline gate was permanently closed for public users; TTT
+  micro-update now fires on real phase transitions (SEM-009).
+
 ### Removed
 
-- `carl_studio.primitives` compatibility shim. Originally added in 0.4.0 to bridge the `carl_core` extraction and marked for v0.5.0 removal, the shim had zero in-tree consumers remaining. Downstream callers must import from `carl_core.*` directly (e.g. `from carl_core import CoherenceProbe`, `from carl_core.errors import CARLError`, `from carl_core.interaction import InteractionChain`). The `DeprecationWarning` stub is gone; `import carl_studio.primitives` now raises `ModuleNotFoundError`. Tracks SIMP-001.
+- `carl_studio.primitives` compatibility shim (see WAVE-0 above).
+- `carl_studio.x402_sdk` module — consolidated into `x402_connection`
+  (see WAVE-2 above).
 
 ## [0.4.1] — 2026-04-18
 
