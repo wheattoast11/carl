@@ -9,8 +9,12 @@ from __future__ import annotations
 __version__ = "0.1.0"
 
 from carl_core.constants import KAPPA, SIGMA, DEFECT_THRESHOLD, T_STAR
-from carl_core.coherence_trace import CoherenceTrace, select_traces
-from carl_core.coherence_probe import CoherenceProbe, CoherenceSnapshot
+from carl_core.coherence_trace import CoherenceTrace, LayeredTrace, select_traces
+from carl_core.coherence_probe import (
+    CARL_LAYER_PROBE_ENABLED,
+    CoherenceProbe,
+    CoherenceSnapshot,
+)
 from carl_core.coherence_observer import CoherenceObserver
 from carl_core.frame_buffer import FrameBuffer, FrameRecord
 from carl_core.math import compute_phi
@@ -49,6 +53,7 @@ from carl_core.connection import (
     AsyncBaseConnection,
     BaseConnection,
     CARLConnectionError,
+    ChannelCoherence,
     ConnectionAuthError,
     ConnectionBase,
     ConnectionClosedError,
@@ -65,6 +70,8 @@ from carl_core.connection import (
     ConnectionTrust,
     ConnectionUnavailableError,
     can_transition,
+    channel_coherence_diff,
+    channel_coherence_distance,
     get_registry,
     reset_registry,
 )
@@ -75,7 +82,9 @@ __all__ = [
     "DEFECT_THRESHOLD",
     "T_STAR",
     "CoherenceTrace",
+    "LayeredTrace",
     "select_traces",
+    "CARL_LAYER_PROBE_ENABLED",
     "CoherenceProbe",
     "CoherenceSnapshot",
     "CoherenceObserver",
@@ -138,5 +147,9 @@ __all__ = [
     "ConnectionRegistry",
     "get_registry",
     "reset_registry",
+    # channel coherence (cross-channel observable)
+    "ChannelCoherence",
+    "channel_coherence_diff",
+    "channel_coherence_distance",
     "__version__",
 ]

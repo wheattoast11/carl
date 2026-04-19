@@ -72,6 +72,22 @@ class Step:
         Step id of the parent when nested or dispatched in parallel.
     step_id
         Stable id for this step (12-hex chars, generated here).
+    phi
+        Optional coherence-field snapshot for this step. When populated
+        (by training / eval / chat-agent / connection hooks), a chain
+        becomes a true cross-channel witness: :meth:`coherence_trajectory`
+        reduces the whole chain to a phi-vs-step series.
+    kuramoto_r
+        Optional Kuramoto order-parameter (R) snapshot in [0, 1] — the
+        phase-locking correlate of phi. Sourced from
+        :meth:`carl_core.coherence_trace.CoherenceTrace.kuramoto_R` when
+        available.
+    channel_coherence
+        When this step was emitted by a
+        :class:`carl_core.connection.BaseConnection` transact, the
+        connection's :class:`~carl_core.connection.ChannelCoherence` at
+        event time, serialized via
+        :meth:`~carl_core.connection.ChannelCoherence.as_dict`.
     """
 
     action: ActionType
@@ -85,6 +101,9 @@ class Step:
     step_id: str = field(default_factory=_new_id)
     session_id: str | None = None
     trace_id: str | None = None
+    phi: float | None = None
+    kuramoto_r: float | None = None
+    channel_coherence: dict[str, float] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -99,6 +118,13 @@ class Step:
             "parent_id": self.parent_id,
             "session_id": self.session_id,
             "trace_id": self.trace_id,
+            "phi": self.phi,
+            "kuramoto_r": self.kuramoto_r,
+            "channel_coherence": (
+                dict(self.channel_coherence)
+                if self.channel_coherence is not None
+                else None
+            ),
         }
 
 
@@ -136,8 +162,15 @@ class InteractionChain:
         parent_id: str | None = None,
         session_id: str | None = None,
         trace_id: str | None = None,
+        phi: float | None = None,
+        kuramoto_r: float | None = None,
+        channel_coherence: dict[str, float] | None = None,
     ) -> Step:
-        """Build and append a step in one call — the common case."""
+        """Build and append a step in one call — the common case.
+
+        ``phi`` / ``kuramoto_r`` / ``channel_coherence`` are optional
+        cross-channel coherence fields; see :class:`Step` for semantics.
+        """
         step = Step(
             action=action,
             name=name,
@@ -148,6 +181,9 @@ class InteractionChain:
             parent_id=parent_id,
             session_id=session_id,
             trace_id=trace_id,
+            phi=phi,
+            kuramoto_r=kuramoto_r,
+            channel_coherence=channel_coherence,
         )
         self.steps.append(step)
         return step
@@ -168,6 +204,18 @@ class InteractionChain:
         if not self.steps:
             return 1.0
         return sum(1 for s in self.steps if s.success) / len(self.steps)
+
+    def coherence_trajectory(self) -> list[tuple[str, float | None]]:
+        """Return the phi-vs-step series (timestamp, phi) across the whole chain.
+
+        Steps without phi are included with ``None`` — caller decides
+        whether to filter (visualization) or impute (training signal).
+        This is what turns a flat log into a cross-channel coherence
+        witness: the trajectory is well-defined across training,
+        eval, chat, and connection transacts because every step can
+        attach a coherence snapshot with the same units.
+        """
+        return [(s.started_at.isoformat(), s.phi) for s in self.steps]
 
     # -- serialization -----------------------------------------------------
 
@@ -194,6 +242,12 @@ class InteractionChain:
         if started := d.get("started_at"):
             chain.started_at = datetime.fromisoformat(started)
         for raw in d.get("steps", []):
+            cc_raw = raw.get("channel_coherence")
+            cc: dict[str, float] | None
+            if cc_raw is None:
+                cc = None
+            else:
+                cc = {str(k): float(v) for k, v in cc_raw.items()}
             chain.steps.append(
                 Step(
                     action=ActionType(raw["action"]),
@@ -207,6 +261,9 @@ class InteractionChain:
                     step_id=raw.get("step_id", _new_id()),
                     session_id=raw.get("session_id"),
                     trace_id=raw.get("trace_id"),
+                    phi=raw.get("phi"),
+                    kuramoto_r=raw.get("kuramoto_r"),
+                    channel_coherence=cc,
                 )
             )
         return chain

@@ -11,6 +11,7 @@ terminals.tech for access.
 from __future__ import annotations
 
 import math
+import os
 from typing import Any, Optional
 
 import numpy as np
@@ -26,6 +27,7 @@ except Exception:
 
 
 from carl_core.constants import KAPPA
+from carl_core.dynamics import ContractionProbe
 
 
 class ResonanceLRCallback(TrainerCallback):
@@ -69,6 +71,12 @@ class ResonanceLRCallback(TrainerCallback):
         self._t_star_steps = int(KAPPA * self.d_model / max(self.tokens_per_step, 1))
         self._kuramoto_R = 0.5
         self._impl = None
+
+        # Opt-in contraction probe (SEM-003). Enabled by env var so there is
+        # no runtime cost for users who do not want it.
+        self._contraction_probe: ContractionProbe | None = None
+        if os.environ.get("CARL_CONTRACTION_PROBE") == "1":
+            self._contraction_probe = ContractionProbe(window=50)
 
         try:
             from terminals_runtime.training import ResonanceLRCallbackImpl
@@ -144,6 +152,8 @@ class ResonanceLRCallback(TrainerCallback):
             return self._kuramoto_R
 
         values: list[float] = []
+        phi_means: list[float] = []
+        cq_values: list[float] = []
         for trace in traces:
             phi = getattr(trace, "phi", None)
             if phi is None:
@@ -152,8 +162,20 @@ class ResonanceLRCallback(TrainerCallback):
             if arr.size == 0:
                 continue
             values.append(float(abs(np.mean(np.exp(1j * math.pi * arr)))))
+            phi_means.append(float(np.mean(arr)))
+            # cloud_quality is an optional scalar on CoherenceTrace; fall
+            # back to phi_mean if unavailable so the probe still records.
+            cq = getattr(trace, "cloud_quality", None)
+            cq_values.append(float(cq) if cq is not None else float(np.mean(arr)))
 
         self._kuramoto_R = float(sum(values) / len(values)) if values else 0.5
+
+        # Opt-in: feed the contraction probe.
+        if self._contraction_probe is not None and phi_means:
+            phi_m = sum(phi_means) / len(phi_means)
+            cq_m = sum(cq_values) / len(cq_values) if cq_values else phi_m
+            self._contraction_probe.record(phi_m, cq_m)
+
         return self._kuramoto_R
 
     def on_step_begin(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
@@ -206,3 +228,13 @@ class ResonanceLRCallback(TrainerCallback):
         logs["lr_resonance/total_multiplier"] = total_multiplier
         logs["lr_resonance/kuramoto_R"] = kuramoto_R
         logs["lr_resonance/t_star_steps"] = self._t_star_steps
+
+        # Opt-in contraction-probe telemetry (SEM-003).
+        if self._contraction_probe is not None:
+            report = self._contraction_probe.report()
+            if report is not None:
+                logs["dynamics/q_hat"] = report.q_hat
+                logs["dynamics/contraction_violation"] = (
+                    1.0 if not report.contraction_holds else 0.0
+                )
+                logs["dynamics/q_hat_samples"] = float(report.sample_size)

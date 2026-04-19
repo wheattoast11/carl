@@ -10,18 +10,38 @@ The callback fires between GRPO steps. It reads traces from the CARL
 reward function, selects high-reward completions, and applies LoRA
 micro-updates that consolidate successful patterns.
 
-Gated by phase: only fires when τ < 0.3 (crystalline). During
-exploration (gaseous/fluid), the GRPO gradient alone drives learning.
-During crystallization, the micro-update accelerates convergence toward
-the most efficient strategies.
+Gated by phase: only fires when τ < TTT_CRYSTALLINE_THRESHOLD (0.3).
+During exploration (gaseous/fluid), the GRPO gradient alone drives
+learning. During crystallization, the micro-update accelerates
+convergence toward the most efficient strategies.
+
+TTT micro-update precondition: tau < TTT_CRYSTALLINE_THRESHOLD.
+Tau is now computed from the CARL reward's ``_last_traces`` via
+Kuramoto-R in the public path (SEM-009). Previously the gate was
+dormant without ``terminals-runtime`` writing ``witness/tau`` to the
+logs stream — the callback fell back to the initial ``_last_tau=0.5``
+for every step, which means ``0.5 > 0.3`` and the micro-update never
+fired. The public callback now derives ``tau = 1 - mean_kuramoto_R``
+from the reward function's cached trace batch, mirroring
+``training/lr_resonance.py::ResonanceLRCallback._read_kuramoto_R``.
+
+Precedence: callback-computed tau (fresh traces this step) takes
+priority over any ``witness/tau`` pre-written to the log stream by
+``terminals-runtime`` or another upstream source. If no traces are
+available this step, the callback falls back to ``logs["witness/tau"]``
+(runtime-supplied), then to the last observed tau
+(``self._last_tau``).
 
 Requires terminals-runtime for LoRAMicroUpdate implementation.
 """
 from __future__ import annotations
 
+import math
 import sys
 from dataclasses import dataclass
 from typing import Any
+
+import numpy as np
 
 try:
     import torch
@@ -32,6 +52,18 @@ try:
     from transformers import TrainerCallback
 except ImportError:
     TrainerCallback = object  # type: ignore
+
+
+# ---------------------------------------------------------------------------
+# Phase thresholds (shared with the lr_resonance classifier + the CARL
+# phase-adaptive composite). Kept module-level so tests and downstream
+# callers can reference the exact gate the micro-update enforces.
+# ---------------------------------------------------------------------------
+TTT_CRYSTALLINE_THRESHOLD: float = 0.3
+"""Upper bound on tau for the TTT micro-update to fire.
+
+tau = 1 - mean(kuramoto_R). Low tau = high phase alignment = crystalline.
+"""
 
 
 @dataclass
@@ -69,10 +101,10 @@ class GRPOReflectionCallback(TrainerCallback):
 
     def __init__(
         self,
-        carl_reward_fn: Any,
-        tokenizer: Any,
+        carl_reward_fn: Any = None,
+        tokenizer: Any = None,
         reward_threshold: float = 0.5,
-        tau_gate: float = 0.3,
+        tau_gate: float = TTT_CRYSTALLINE_THRESHOLD,
         enable: bool = True,
     ):
         self._carl_fn = carl_reward_fn
@@ -98,11 +130,146 @@ class GRPOReflectionCallback(TrainerCallback):
             self._enable = False
             return False
 
+    def _read_kuramoto_R(self) -> float | None:
+        """Read current mean Kuramoto-R from the CARL reward's _last_traces.
+
+        Mirrors ``training/lr_resonance.py::ResonanceLRCallback._read_kuramoto_R``
+        so the public training path produces ``witness/tau`` without depending
+        on ``terminals-runtime``. If no reward function or no traces are
+        available, returns ``None`` and the caller falls back to whatever
+        upstream populated ``witness/tau`` (if anything), then to the last
+        observed tau.
+
+        The ``make_carl_reward`` closure exposes ``_last_traces`` as a
+        one-slot list whose single element is a ``list[CoherenceTrace]``
+        (the current training batch). This helper unwraps both that
+        one-slot shape and the direct-list shape for forward-compat. When
+        a metrics lock is exposed, it is acquired to avoid racing the
+        reward function's batch write (same pattern as the resonance LR
+        callback).
+        """
+        reward_fn = getattr(self, "_carl_fn", None)
+        if reward_fn is None:
+            return None
+
+        traces_holder = getattr(reward_fn, "_last_traces", None)
+        if traces_holder is None:
+            return None
+
+        # Guard against races with the reward function's batch write.
+        lock = getattr(reward_fn, "_metrics_lock", None)
+        if lock is not None:
+            lock.acquire()
+            try:
+                traces = self._unwrap_traces(traces_holder)
+            finally:
+                lock.release()
+        else:
+            traces = self._unwrap_traces(traces_holder)
+
+        if not traces:
+            return None
+
+        try:
+            rs: list[float] = []
+            for trace_any in traces:
+                t: Any = trace_any
+                if t is None:
+                    continue
+                # Prefer the trace's own kuramoto_R (used by the phase-adaptive
+                # composite). Fall back to a phi-field integration if the trace
+                # doesn't expose it (mirrors the lr_resonance computation, which
+                # hits the raw phi array).
+                r_val: float | None
+                if hasattr(t, "kuramoto_R"):
+                    try:
+                        r_val = float(t.kuramoto_R())
+                    except Exception:
+                        r_val = self._kuramoto_from_phi(t)
+                else:
+                    r_val = self._kuramoto_from_phi(t)
+                if r_val is None or not math.isfinite(r_val):
+                    continue
+                rs.append(r_val)
+            if not rs:
+                return None
+            return sum(rs) / len(rs)
+        except Exception:
+            # Classifier must never crash training. Fall back to upstream tau.
+            return None
+
+    @staticmethod
+    def _unwrap_traces(holder: Any) -> list[Any]:
+        """Normalize the ``_last_traces`` holder to a flat ``list[trace]``.
+
+        Accepts both the one-slot list ``[list_of_traces]`` emitted by
+        ``make_carl_reward`` and a direct ``list[trace]`` emitted by the
+        phase-adaptive composite. Returns ``[]`` for any other shape.
+        """
+        if not isinstance(holder, list):
+            return []
+        holder_list: list[Any] = list(holder)  # type: ignore[arg-type]
+        if not holder_list:
+            return []
+        first: Any = holder_list[0]
+        if isinstance(first, list):
+            # One-slot wrapper: [list_of_traces]
+            first_list: list[Any] = list(first)  # type: ignore[arg-type]
+            return [t for t in first_list if t is not None]
+        # Direct list of trace objects (or Nones); keep non-null entries only.
+        return [t for t in holder_list if t is not None]
+
+    @staticmethod
+    def _kuramoto_from_phi(trace: Any) -> float | None:
+        """Compute Kuramoto-R from a trace's raw phi field.
+
+        Mirrors ``ResonanceLRCallback._read_kuramoto_R`` (lr_resonance.py:146-156):
+        half-circle mapping ``theta = pi * phi`` followed by the magnitude of
+        the mean complex exponential. Used as a fallback for trace objects
+        that don't expose ``kuramoto_R()`` directly (e.g. test stubs that
+        only provide ``phi``).
+        """
+        phi = getattr(trace, "phi", None)
+        if phi is None:
+            return None
+        arr = np.asarray(phi, dtype=float)
+        if arr.size == 0:
+            return None
+        try:
+            return float(abs(np.mean(np.exp(1j * math.pi * arr))))
+        except Exception:
+            return None
+
     def on_log(self, args, state, control, logs=None, **kwargs):
-        """Track τ from training logs."""
+        """Track τ from training logs.
+
+        Publishes ``witness/tau`` and ``witness/kuramoto_R`` to the logs
+        dict so downstream callbacks (and the trainer's log stream) can
+        consume the same signal without depending on ``terminals-runtime``.
+        See module docstring (SEM-009) for the precedence rules:
+
+          1. Callback-computed tau from fresh traces this step wins.
+          2. Otherwise, any ``witness/tau`` already present in logs
+             (e.g. written by terminals-runtime).
+          3. Otherwise, the last observed tau (initial ``_last_tau=0.5``
+             on first call).
+        """
         if logs is None:
             return
-        self._last_tau = float(logs.get("witness/tau", self._last_tau))
+
+        r = self._read_kuramoto_R()
+        if r is not None:
+            tau = 1.0 - r
+            # Publish the witness signals the TTT + lr_resonance stack expects.
+            # Only overwrite if we actually have a fresh computation — never
+            # clobber an upstream value with stale data.
+            logs["witness/tau"] = tau
+            logs["witness/kuramoto_R"] = r
+        else:
+            # Fall back to whatever upstream populated, then to the last tau.
+            tau = float(logs.get("witness/tau", self._last_tau))
+
+        self._last_tau = tau
 
     def on_step_end(self, args, state, control, **kwargs):
         """Apply between-step LoRA micro-update if crystalline."""

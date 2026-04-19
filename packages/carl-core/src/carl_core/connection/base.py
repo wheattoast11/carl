@@ -39,6 +39,7 @@ from typing import Any, AsyncIterator, Iterator, TypeVar
 
 from carl_core.interaction import ActionType, InteractionChain
 
+from .coherence import ChannelCoherence
 from .errors import ConnectionClosedError, ConnectionTransitionError
 from .lifecycle import VALID_TRANSITIONS, ConnectionState
 from .spec import ConnectionSpec, ConnectionTrust
@@ -99,6 +100,7 @@ class ConnectionBase:
         self._last_error: BaseException | None = None
         self._stats = ConnectionStats()
         self._chain = chain
+        self._channel_coherence: ChannelCoherence = ChannelCoherence.empty()
 
     # -- identity ---------------------------------------------------------
 
@@ -249,6 +251,25 @@ class ConnectionBase:
             },
         )
 
+    # -- cross-channel coherence -----------------------------------------
+
+    def channel_coherence(self) -> ChannelCoherence:
+        """Return the last published :class:`ChannelCoherence` for this
+        connection. Empty (all-zero) until a subclass / caller publishes.
+        """
+        with self._lock:
+            return self._channel_coherence
+
+    def publish_channel_coherence(self, cc: ChannelCoherence) -> None:
+        """Replace the last-published coherence snapshot.
+
+        Any subclass or external supervisor may call this to make its
+        per-channel coherence observable to monitors / tests / cross-
+        channel isomorphism checks.
+        """
+        with self._lock:
+            self._channel_coherence = cc
+
     # -- serialization ---------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:
@@ -269,6 +290,7 @@ class ConnectionBase:
                     if self._stats.last_error_at
                     else None,
                 },
+                "channel_coherence": self._channel_coherence.as_dict(),
             }
 
 

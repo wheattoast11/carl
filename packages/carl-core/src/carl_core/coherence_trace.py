@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -613,3 +613,52 @@ def select_traces(
         result.append(chosen[2])
 
     return result[:k]
+
+
+# ---------------------------------------------------------------------------
+# LayeredTrace — multi-layer residual-stream observation
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LayeredTrace:
+    """Coherence observations across the residual stream + final output.
+
+    Bundles:
+      - ``final`` — the terminal-distribution ``CoherenceTrace`` (the existing
+        CARL primitive computed from final-layer logits).
+      - ``layer_residual_cos`` — per-layer residual cosine similarity between
+        adjacent residual streams ``(h_{l-1}, h_l)`` averaged over tokens.
+        High cosine (~1) == tight residual flow (momentum preserved). Low
+        cosine == layer-wise correction which often precedes crystallization.
+      - ``layer_attention_entropy`` — optional per-layer mean attention entropy
+        (averaged over heads and tokens). ``None`` when attentions were not
+        provided to ``measure_multi_layer``.
+      - ``n_layers`` — number of residual layers that participated in the
+        cosine computation (i.e. ``len(hidden_states) - 1``).
+
+    The framework positions momentum as a residual-stream phenomenon — two
+    models can produce identical final distributions via very different
+    internal trajectories. ``LayeredTrace`` lets consumers observe the
+    trajectory, not just the endpoint.
+    """
+
+    final: "CoherenceTrace"
+    layer_residual_cos: List[float]
+    layer_attention_entropy: Optional[List[float]]
+    n_layers: int
+
+    @property
+    def residual_trajectory(self) -> List[float]:
+        """Per-layer cosine as a trajectory (for contraction analysis)."""
+        return list(self.layer_residual_cos)
+
+    @property
+    def residual_mean(self) -> float:
+        if not self.layer_residual_cos:
+            return 0.0
+        return sum(self.layer_residual_cos) / len(self.layer_residual_cos)
+
+    @property
+    def residual_min(self) -> float:
+        return min(self.layer_residual_cos) if self.layer_residual_cos else 0.0

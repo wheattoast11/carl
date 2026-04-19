@@ -41,6 +41,11 @@ from carl_core.connection.base import (
     ConnectionBase,
     ConnectionStats,
 )
+from carl_core.connection.coherence import (
+    ChannelCoherence,
+    channel_coherence_diff,
+    channel_coherence_distance,
+)
 from carl_core.connection.errors import (
     CARLConnectionError,
     ConnectionAuthError,
@@ -92,6 +97,10 @@ __all__ = [
     "AsyncBaseConnection",
     "ConnectionBase",
     "ConnectionStats",
+    # coherence
+    "ChannelCoherence",
+    "channel_coherence_diff",
+    "channel_coherence_distance",
     # registry
     "ConnectionRegistry",
     "get_registry",
