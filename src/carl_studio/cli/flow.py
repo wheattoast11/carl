@@ -36,7 +36,7 @@ from carl_core.interaction import ActionType, InteractionChain
 from carl_studio.console import get_console
 from carl_studio.settings import CARL_HOME
 
-from .operations import get_operation, list_operations
+from .operations import get_description, get_operation, list_operations
 
 INTERACTIONS_DIR = CARL_HOME / "interactions"
 
@@ -57,13 +57,28 @@ def flow_cmd(
     c = get_console()
 
     if list_ops:
+        names = list_operations()
         if json_output:
-            typer.echo(_json.dumps({"ops": list_operations()}, indent=2))
+            typer.echo(
+                _json.dumps(
+                    {
+                        "ops": names,
+                        "descriptions": {n: get_description(n) for n in names},
+                    },
+                    indent=2,
+                )
+            )
         else:
             c.blank()
             c.header("Registered flow ops")
-            for name in list_operations():
-                c.info(f"  /{name}")
+            # Align the ``—`` column so the descriptions read as a table.
+            width = max((len(n) for n in names), default=0)
+            for name in names:
+                desc = get_description(name)
+                if desc:
+                    c.info(f"  /{name.ljust(width)}  — {desc}")
+                else:
+                    c.info(f"  /{name}")
             c.blank()
         raise typer.Exit(0)
 

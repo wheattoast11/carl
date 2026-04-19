@@ -17,11 +17,14 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
+from carl_core.errors import CARLError
 from pydantic import BaseModel, Field
 
 
-class ContractError(Exception):
+class ContractError(CARLError):
     """Raised when contract operations fail."""
+
+    code = "carl.contract"
 
 
 class ContractStatus(str, Enum):

@@ -1,8 +1,30 @@
-"""CARL Studio MCP Server -- exposes training tools for AI agents."""
+"""CARL Studio MCP Server -- exposes training tools for AI agents.
+
+Tenancy model (UAT-049)
+-----------------------
+This MCP server is **single-tenant by design**. The ``_session`` dict below
+(JWT, tier, user_id, authenticated_at) is a process-wide singleton — it is
+*not* keyed per-client. If two MCP clients connect to the same server
+process they will share the same auth state, and a JWT posted by one
+client will be visible to every other client.
+
+Operators MUST run **one server process per tenant/user**. Do not share a
+single ``carl mcp serve`` process across multiple human or automation
+identities. Multi-tenant deployments should provision a dedicated
+process (or container) per principal and front them with their own
+transport — the MCP SDK's ``Context`` object is the correct seam for
+per-request state but retrofitting it across all nine authenticated
+tools (plus the nine legacy tools already out in the wild) would be a
+breaking change that we defer until the MCP 2025-11-25 migration.
+
+The module emits a ``logger.warning`` on import so this constraint is
+surfaced every time the server boots, regardless of log level defaults.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import time
 from typing import TYPE_CHECKING, Awaitable, Callable, TypeVar
 
@@ -11,14 +33,29 @@ from mcp.server.fastmcp import FastMCP
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
     from carl_studio.mcp.connection import MCPServerConnection
 
+logger = logging.getLogger(__name__)
+
 mcp = FastMCP("carl-studio")
 
 # ---------------------------------------------------------------------------
 # Session state — module-level, persists for the MCP server process lifetime
 # ---------------------------------------------------------------------------
+#
+# UAT-049: this dict is **single-tenant** — see the module docstring.
+# Every authenticated tool (`authenticate`, `get_tier_status`,
+# `dispatch_a2a_task`, `sync_data`, …) reads/writes this singleton.
+# Attempting to serve multiple tenants from one process will leak auth
+# state across clients. We emit a banner below so the constraint is
+# visible at startup.
 
 _session: dict[str, str] = {"jwt": "", "tier": "free", "user_id": ""}
 _SESSION_MAX_AGE = 3600  # 1 hour — re-authenticate after this
+
+logger.warning(
+    "carl-studio MCP server loaded: session state is SINGLE-TENANT "
+    "(module-level _session dict). Run one process per tenant — "
+    "do not share this server across users or automations."
+)
 
 # ---------------------------------------------------------------------------
 # Connection-primitive binding (Phase 1 port of the MCP surface)
@@ -737,7 +774,11 @@ async def sync_data(direction: str = "push", entity_types: str = "runs") -> str:
         # Parse entity_types — comma-separated or single
         types_list = [t.strip() for t in entity_types.split(",") if t.strip()] or ["runs"]
 
-        # Inject the session JWT into LocalDB auth cache if present
+        # Inject the session JWT into LocalDB auth cache if present.
+        # UAT-051: silent ``pass`` used to hide permission/disk errors.
+        # Keep the "never break sync" semantics but leave operators a
+        # breadcrumb — ``sync.py`` still falls back to reading the JWT
+        # directly from the DB, so the outer sync call can continue.
         jwt = _session.get("jwt", "")
         if jwt:
             try:
@@ -746,8 +787,8 @@ async def sync_data(direction: str = "push", entity_types: str = "runs") -> str:
                 db = LocalDB()
                 db.set_auth("jwt", jwt, ttl_hours=24)
                 db.close()
-            except Exception:
-                pass  # Best-effort — sync.py will read from DB directly
+            except Exception as exc:
+                logger.debug("JWT cache-write failed: %s", exc)
 
         try:
             from carl_studio.sync import pull, push

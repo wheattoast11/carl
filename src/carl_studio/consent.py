@@ -10,6 +10,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
+from carl_core.errors import CARLError
 from pydantic import BaseModel, Field
 
 _CONSENT_KEY = "consent_state"
@@ -22,8 +23,10 @@ CONSENT_KEYS = frozenset({
 })
 
 
-class ConsentError(Exception):
+class ConsentError(CARLError):
     """Raised when consent operations fail."""
+
+    code = "carl.consent"
 
 
 class ConsentFlag(BaseModel):

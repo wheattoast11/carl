@@ -15,18 +15,20 @@ Usage:
 from __future__ import annotations
 
 import json
-import urllib.request
 import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from typing import Any
+
+from carl_core.errors import CARLError
 
 from carl_studio.db import LocalDB
 
 
-class SyncError(Exception):
+class SyncError(CARLError):
     """Raised when sync fails after retries."""
 
-    pass
+    code = "carl.sync"
 
 
 def _supabase_request(
@@ -65,9 +67,19 @@ def _supabase_request(
             return json.loads(resp.read())
     except urllib.error.HTTPError as e:
         error_body = e.read().decode() if e.fp else str(e)
-        raise SyncError(f"Sync failed ({e.code}): {error_body}")
+        raise SyncError(
+            f"Sync failed ({e.code}): {error_body}",
+            code="carl.sync.http",
+            context={"status": e.code, "function": function},
+            cause=e,
+        ) from e
     except urllib.error.URLError as e:
-        raise SyncError(f"Network error: {e.reason}")
+        raise SyncError(
+            f"Network error: {e.reason}",
+            code="carl.sync.network",
+            context={"function": function},
+            cause=e,
+        ) from e
 
 
 # ─── Push ────────────────────────────────────────────────────

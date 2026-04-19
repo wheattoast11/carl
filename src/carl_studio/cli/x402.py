@@ -24,7 +24,7 @@ def x402_status(
     """Show x402 payment rail status and configuration."""
     from carl_studio.console import get_console
     from carl_studio.x402 import load_x402_config
-    from carl_studio.x402_sdk import sdk_available
+    from carl_studio.x402_connection import sdk_available
 
     c = get_console()
     config = load_x402_config()

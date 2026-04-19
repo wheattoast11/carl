@@ -1,4 +1,10 @@
-"""Tests for carl_studio.x402_sdk -- SDK adapter and fallback logic."""
+"""Tests for the x402 SDK adapter (now consolidated into x402_connection).
+
+The legacy module ``carl_studio.x402_sdk`` was removed. All of its symbols
+moved to :mod:`carl_studio.x402_connection`. These tests exercise the SDK
+adapter behavior (ensure_client, EVM signer registration, create_x402_client
+fallback) at its new home AND verify that the old module import fails.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +13,22 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from carl_studio.x402_sdk import X402SDKClient, create_x402_client, sdk_available
+from carl_studio.x402_connection import (
+    X402SDKClient,
+    create_x402_client,
+    sdk_available,
+)
+
+
+class TestDeletedModuleRaises:
+    def test_x402_sdk_module_gone(self) -> None:
+        """carl_studio.x402_sdk no longer exists."""
+        with pytest.raises(ModuleNotFoundError):
+            import carl_studio.x402_sdk  # noqa: F401
+
+    def test_create_payment_connection_importable_from_connection_module(self) -> None:
+        """create_payment_connection lives on x402_connection."""
+        from carl_studio.x402_connection import create_payment_connection  # noqa: F401
 
 
 class TestSdkAvailable:

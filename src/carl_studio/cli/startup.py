@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import time
+from pathlib import Path
+from typing import Callable
 
 import typer
 
@@ -17,6 +20,34 @@ from .shared import (
     _render_command_inventory,
 )
 
+# JRN-005 — Next-steps block is suppressed once the first-run marker is
+# older than this (in seconds). 7 days aligns with the rest of the post-
+# onboarding grace period surfaces.
+_DOCTOR_NEXT_STEPS_MAX_AGE_S: float = 7 * 24 * 60 * 60
+
+
+def _next_steps_should_show(
+    *, verbose: bool, marker_path: Path, now_fn: Callable[[], float] | None = None,
+) -> bool:
+    """Decide whether to render the Next steps block.
+
+    Shown when ``verbose`` is on OR the first-run marker is younger than
+    7 days. Missing marker is treated as "never initialized" — we do not
+    show the block in that case; the caller is likely to hit the bigger
+    "run carl init" nudge first, which is a better signal.
+    """
+    if verbose:
+        return True
+    try:
+        if not marker_path.is_file():
+            return False
+        mtime = marker_path.stat().st_mtime
+    except OSError:
+        return False
+    current = (now_fn or time.time)()
+    age = current - mtime
+    return 0 <= age <= _DOCTOR_NEXT_STEPS_MAX_AGE_S
+
 
 # ---------------------------------------------------------------------------
 # carl doctor
@@ -26,6 +57,9 @@ def doctor(
     json_output: bool = typer.Option(False, "--json", help="Output readiness as JSON"),
     check_freshness: bool = typer.Option(
         False, "--check-freshness", help="Force dependency freshness check"
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Always show the Next steps guidance block"
     ),
 ) -> None:
     """Audit local readiness for the guided CARL workbench workflow."""
@@ -151,6 +185,23 @@ def doctor(
                     f"  [dim]- [{issue.severity}] {issue.detail}"
                     f" (fix: {issue.remediation})[/dim]"
                 )
+            c.blank()
+
+    # JRN-005 — humanize doctor with a short Next steps block. Hidden when
+    # there are blocking issues (don't distract from red messages) and
+    # gated to recently initialized installs unless --verbose is on.
+    if not readiness["blocking_issues"]:
+        try:
+            from carl_studio.cli.init import FIRST_RUN_MARKER
+
+            marker = FIRST_RUN_MARKER
+        except Exception:  # pragma: no cover — defensive
+            marker = Path.home() / ".carl" / ".initialized"
+        if _next_steps_should_show(verbose=verbose, marker_path=marker):
+            c.print("  [camp.primary]Next steps[/]")
+            c.kv("carl \"explore my repo\"", "start a conversation")
+            c.kv("carl train --help", "train a model")
+            c.kv("carl queue add \"text\"", "add a sticky-note")
             c.blank()
 
     raise typer.Exit(0 if readiness["guided_workbench"] else 1)

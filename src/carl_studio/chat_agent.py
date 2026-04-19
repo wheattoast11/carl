@@ -736,6 +736,13 @@ class CARLAgent:
         # primer without persistently mutating the base prompt.
         self._system_prompt_extension: str = ""
 
+        # JRN-009 — persisted across save/load. Tracks the lane the user
+        # started in so analytics and future prompts can distinguish
+        # ``move:explore`` from ``move:train`` sessions. Default ``""``
+        # means "not yet classified" — the CLI sets this on the first
+        # bootstrap turn; programmatic callers can set it explicitly.
+        self._session_theme: str = ""
+
         # Session
         self._session_id = session_id
 
@@ -1561,6 +1568,13 @@ class CARLAgent:
             parts.append("No frame set. When the user describes their goal, call set_frame immediately.")
             parts.append("")
 
+        # Session theme (JRN-009) — only surfaces in the prompt when the
+        # user picked a keyed move; free-form and unset sessions get no
+        # extra steering here (they're driven by the primer extension).
+        if self._session_theme and self._session_theme.startswith("move:"):
+            parts.append(f"SESSION THEME: {self._session_theme}")
+            parts.append("")
+
         # Project context (cached at construction time)
         if self._project_line:
             parts.append(self._project_line)
@@ -2134,6 +2148,7 @@ class CARLAgent:
             "total_input_tokens": self._total_input_tokens,
             "total_output_tokens": self._total_output_tokens,
             "turn_count": self._turn_count,
+            "session_theme": self._session_theme,
         }
 
         s = store or SessionStore()
@@ -2174,6 +2189,8 @@ class CARLAgent:
         self._total_input_tokens = state.get("total_input_tokens", 0)
         self._total_output_tokens = state.get("total_output_tokens", 0)
         self._turn_count = state.get("turn_count", 0)
+        # JRN-009 — restore session theme; default to "" for legacy sessions.
+        self._session_theme = state.get("session_theme", "") or ""
 
         # A resumed session can carry more chunks than the current cap (the
         # owner may have downsized max_knowledge_chunks) — trim aggressively
@@ -2190,6 +2207,37 @@ class CARLAgent:
                 logger.warning("Could not rebuild WorkFrame from session: %s", exc)
 
         return True
+
+    # ------------------------------------------------------------------
+    # Session theme (JRN-009)
+    # ------------------------------------------------------------------
+
+    _VALID_SESSION_THEMES: tuple[str, ...] = (
+        "",  # unset
+        "move:explore",
+        "move:train",
+        "move:eval",
+        "move:sticky",
+        "free-form",
+    )
+
+    def set_session_theme(self, theme: str) -> None:
+        """Record the lane the user started this session in.
+
+        Accepts the canonical ``move:<verb>`` labels, ``"free-form"``, or
+        ``""`` to reset. Unknown labels are accepted but logged at debug
+        level — the CLI should gate this with a validated map, but
+        downstream callers may legitimately experiment with new themes.
+        """
+        theme_str = str(theme or "").strip()
+        if theme_str and theme_str not in self._VALID_SESSION_THEMES:
+            logger.debug("Unrecognized session_theme=%r (accepted anyway)", theme_str)
+        self._session_theme = theme_str
+
+    @property
+    def session_theme(self) -> str:
+        """Return the currently recorded session theme (or ``""``)."""
+        return self._session_theme
 
     @property
     def cost_summary(self) -> dict[str, Any]:

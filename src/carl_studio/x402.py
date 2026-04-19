@@ -14,7 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from carl_core.errors import NetworkError
+from carl_core.errors import CARLError, NetworkError
 from carl_core.interaction import ActionType, InteractionChain
 from carl_core.retry import CircuitBreaker
 
@@ -31,8 +31,10 @@ _FACILITATOR_BREAKER = CircuitBreaker(
 )
 
 
-class X402Error(Exception):
+class X402Error(CARLError):
     """Raised when x402 payment operations fail."""
+
+    code = "carl.x402"
 
 
 class X402Config(BaseModel):

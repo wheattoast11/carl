@@ -7,11 +7,12 @@ is ready to train in under two minutes.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import webbrowser
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import typer
 
@@ -21,6 +22,15 @@ from carl_studio.console import get_console
 from carl_studio.settings import CARL_HOME, GLOBAL_CONFIG
 
 FIRST_RUN_MARKER = CARL_HOME / ".initialized"
+CONTEXT_FILE = CARL_HOME / "context.json"
+
+# Provider -> default chat model mapping for JRN-004. Keep in sync with
+# ``carl_studio.chat_agent._MODEL_PRICING`` and the OpenRouter catalog.
+_PROVIDER_DEFAULT_MODEL: dict[str, str] = {
+    "Anthropic": "claude-sonnet-4-6",
+    "OpenRouter": "openrouter/deepseek/deepseek-chat",
+    "OpenAI": "gpt-4o-mini",
+}
 
 
 def init_cmd(
@@ -61,8 +71,13 @@ def init_cmd(
         steps_done.append("carl.camp account")
 
     # 2. LLM provider
-    if _ensure_llm_provider(chain):
+    provider_ok, provider_label = _ensure_llm_provider(chain)
+    if provider_ok:
         steps_done.append("LLM provider")
+
+    # 2b. JRN-004 — persist default_chat_model so bare `carl` just works.
+    if _persist_default_chat_model(provider_label, chain):
+        steps_done.append("default chat model")
 
     # 3. Optional extras
     if not skip_extras and _offer_extras(chain):
@@ -71,6 +86,14 @@ def init_cmd(
     # 4. Project
     if not skip_project and _ensure_project(chain):
         steps_done.append("project config")
+
+    # 4b. JRN-006 — optional sample-project scaffold.
+    if not skip_project and _offer_sample_project(chain):
+        steps_done.append("sample project scaffold")
+
+    # 4c. JRN-010 — optional context gathering (GitHub repo / HF model).
+    if _offer_context_gathering(chain):
+        steps_done.append("context gathered")
 
     # 5. Consent
     if _ensure_consent(chain):
@@ -86,9 +109,10 @@ def init_cmd(
 
     c.blank()
     c.ok("Ready.")
-    c.info("Try: carl \"train a small model on gsm8k\"")
-    c.info("Or:  carl chat")
-    c.blank()
+
+    # JRN-008 — celebration + guidance. Informative only (no prompt); the
+    # user picks their next command organically from the listed paths.
+    _celebrate_and_guide(c)
 
     if json_output:
         typer.echo(_json_result(chain, status="initialized", steps_done=steps_done))
@@ -198,7 +222,13 @@ def _detect_any_provider() -> str | None:
     return None
 
 
-def _ensure_llm_provider(chain: InteractionChain) -> bool:
+def _ensure_llm_provider(chain: InteractionChain) -> tuple[bool, str | None]:
+    """Resolve an LLM provider. Returns (success, provider_label_or_None).
+
+    ``provider_label`` is the key into :data:`_PROVIDER_DEFAULT_MODEL` — used
+    by JRN-004 to write a sane ``default_chat_model`` so ``carl`` works
+    immediately after ``carl init`` without any further config.
+    """
     c = get_console()
     detected = _detect_any_provider()
     if detected:
@@ -207,7 +237,7 @@ def _ensure_llm_provider(chain: InteractionChain) -> bool:
             ActionType.GATE, "llm_provider",
             input={"resolved_via": "detected"}, output={"provider": detected}, success=True,
         )
-        return True
+        return True, detected
 
     c.print("  [camp.primary]LLM provider[/]")
     c.print("  [1] Anthropic (Claude)")
@@ -219,25 +249,107 @@ def _ensure_llm_provider(chain: InteractionChain) -> bool:
     try:
         from carl_studio.cli.prompt import require
     except ImportError:  # pragma: no cover
-        return False
+        return False, None
 
+    provider_label: str | None
     try:
         if choice == "1":
             require("ANTHROPIC_API_KEY", chain=chain)
+            provider_label = "Anthropic"
         elif choice == "2":
             require("OPENROUTER_API_KEY", chain=chain)
+            provider_label = "OpenRouter"
         elif choice == "3":
             require("OPENAI_API_KEY", chain=chain)
+            provider_label = "OpenAI"
         else:
             c.info("Skipped. Carl will prompt when a command needs a key.")
             chain.record(
                 ActionType.GATE, "llm_provider",
                 input={"resolved_via": "skipped"}, success=True,
             )
-            return True
+            return True, None
     except typer.Abort:
         c.info("Skipped. Carl will prompt when a command needs a key.")
+        return False, None
+    return True, provider_label
+
+
+def _persisted_default_chat_model() -> str:
+    """Read ``default_chat_model`` from the global config file, or ``""``.
+
+    Kept separate from :func:`_persist_default_chat_model` so pyright can
+    type the local YAML-unwrap without leaking Any into that function.
+    """
+    if not GLOBAL_CONFIG.is_file():
+        return ""
+    try:
+        import yaml as _yaml
+
+        parsed: Any = _yaml.safe_load(GLOBAL_CONFIG.read_text())
+    except Exception:  # pragma: no cover — defensive
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    value = cast(dict[str, Any], parsed).get("default_chat_model")
+    return value if isinstance(value, str) else ""
+
+
+def _persist_default_chat_model(provider_label: str | None, chain: InteractionChain) -> bool:
+    """JRN-004 — persist ``default_chat_model`` to ~/.carl/config.yaml.
+
+    After a provider is chosen, resolve a sane default chat model for that
+    provider and save it via :meth:`CARLSettings.save`. This is what makes
+    plain ``carl`` work immediately after ``carl init``.
+
+    Returns ``True`` when a default was written, ``False`` when the step was
+    a no-op (unknown provider, user already had a value, save failure).
+    """
+    if not provider_label:
         return False
+    model = _PROVIDER_DEFAULT_MODEL.get(provider_label)
+    if not model:
+        return False
+
+    try:
+        from carl_studio.settings import CARLSettings
+
+        settings = CARLSettings.load()
+    except Exception as exc:  # pragma: no cover — defensive
+        chain.record(
+            ActionType.CLI_CMD, "persist_default_chat_model",
+            output={"error": str(exc)}, success=False,
+        )
+        return False
+
+    # Skip only when the persisted file already has our target value. The
+    # schema default ``claude-sonnet-4-6`` is in-memory, not on disk — we
+    # still want to write it so bare ``carl`` picks it up via the global
+    # config layer without falling back to the schema.
+    if _persisted_default_chat_model() == model:
+        chain.record(
+            ActionType.CLI_CMD, "persist_default_chat_model",
+            input={"already_set": True, "model": model}, success=True,
+        )
+        return False
+
+    try:
+        settings.default_chat_model = model
+        target = settings.save()
+    except Exception as exc:  # pragma: no cover — defensive
+        chain.record(
+            ActionType.CLI_CMD, "persist_default_chat_model",
+            output={"error": str(exc), "model": model}, success=False,
+        )
+        return False
+
+    chain.record(
+        ActionType.CLI_CMD, "persist_default_chat_model",
+        input={"provider": provider_label, "model": model},
+        output={"path": str(target)}, success=True,
+    )
+    c = get_console()
+    c.info(f"Default chat model set: {model}")
     return True
 
 
@@ -403,6 +515,231 @@ def _ensure_consent(chain: InteractionChain) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Step: sample project scaffold (JRN-006)
+# ---------------------------------------------------------------------------
+
+# Minimal carl.yaml schema for the scaffold. Kept intentionally tiny —
+# just enough to drive `carl train` end-to-end against a 1.1B TinyLlama
+# checkpoint + wikitext. Full schema lives in carl_studio.project.
+_SAMPLE_PROJECT_YAML = """\
+name: carl-quickstart
+description: Sample CARL project — TinyLlama + wikitext. Safe to delete.
+base_model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+output_repo: ''
+compute_target: local
+backend: local
+dataset_repo: wikitext
+method: sft
+max_steps: 50
+learning_rate: 2.0e-05
+carl_enabled: true
+hub_token_env: HF_TOKEN
+tracking_url: null
+stack:
+  tools: []
+  frameworks: []
+  repos: []
+  use_case: quickstart
+"""
+
+
+def _offer_sample_project(chain: InteractionChain) -> bool:
+    """Scaffold a minimal ``carl.yaml`` + ``data/`` + ``outputs/`` structure.
+
+    Skipped when the current directory already has a ``carl.yaml`` (the
+    main project step already handled that case). Returns ``True`` when
+    the scaffold was created, ``False`` on skip / decline / failure.
+    """
+    c = get_console()
+    cwd = Path.cwd()
+    if cwd.joinpath("carl.yaml").is_file():
+        chain.record(
+            ActionType.CLI_CMD, "sample_project",
+            input={"skipped": "carl.yaml exists"}, success=True,
+        )
+        return False
+
+    c.print("  [camp.primary]Sample project[/]")
+    c.info("A tiny TinyLlama + wikitext quickstart to try `carl train` immediately.")
+    try:
+        wanted = typer.confirm("  Create a sample training project? (quickstart)", default=False)
+    except (typer.Abort, EOFError, OSError):
+        wanted = False
+    if not wanted:
+        chain.record(
+            ActionType.CLI_CMD, "sample_project",
+            input={"answer": "no"}, success=True,
+        )
+        return False
+
+    try:
+        target = cwd / "carl.yaml"
+        target.write_text(_SAMPLE_PROJECT_YAML)
+        (cwd / "data").mkdir(exist_ok=True)
+        (cwd / "outputs").mkdir(exist_ok=True)
+    except OSError as exc:
+        c.warn(f"Sample scaffold failed: {exc}")
+        chain.record(
+            ActionType.CLI_CMD, "sample_project",
+            output={"error": str(exc)}, success=False,
+        )
+        return False
+
+    c.ok(f"Sample project scaffolded in {cwd}")
+    c.info("  Try: carl train --config carl.yaml")
+    chain.record(
+        ActionType.CLI_CMD, "sample_project",
+        input={"answer": "yes"},
+        output={"path": str(target)},
+        success=True,
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Step: context gathering (JRN-010)
+# ---------------------------------------------------------------------------
+
+def _load_context() -> dict[str, Any]:
+    """Read ``~/.carl/context.json``; return ``{}`` if missing/malformed."""
+    empty: dict[str, Any] = {}
+    if not CONTEXT_FILE.is_file():
+        return empty
+    try:
+        raw = CONTEXT_FILE.read_text()
+    except OSError:
+        return empty
+    try:
+        data: Any = json.loads(raw)
+    except json.JSONDecodeError:
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    # Cast narrows json.loads's Any-valued output to the return type.
+    return cast(dict[str, Any], data)
+
+
+def _save_context(data: dict[str, Any]) -> Path:
+    """Persist user-supplied context to ``~/.carl/context.json``."""
+    CARL_HOME.mkdir(parents=True, exist_ok=True)
+    CONTEXT_FILE.write_text(json.dumps(data, indent=2))
+    return CONTEXT_FILE
+
+
+def _offer_context_gathering(chain: InteractionChain) -> bool:
+    """JRN-010 — ask the user to link a GitHub repo and/or HF model.
+
+    Idempotent: when ``~/.carl/context.json`` already has values, we prompt
+    "keep current context? (Y/n)" and bail unless the user says no. Empty
+    answers are never stored — the file is only written when at least one
+    field has a real value.
+    """
+    c = get_console()
+    existing = _load_context()
+
+    if existing.get("github_repo") or existing.get("hf_model"):
+        c.print("  [camp.primary]Context[/]")
+        if existing.get("github_repo"):
+            c.info(f"  github_repo: {existing['github_repo']}")
+        if existing.get("hf_model"):
+            c.info(f"  hf_model:    {existing['hf_model']}")
+        try:
+            keep = typer.confirm("  Keep current context?", default=True)
+        except (typer.Abort, EOFError, OSError):
+            keep = True
+        if keep:
+            chain.record(
+                ActionType.CLI_CMD, "context_gathering",
+                input={"action": "kept_existing"}, success=True,
+            )
+            return False
+        # fallthrough: user wants to edit
+
+    try:
+        wanted = typer.confirm(
+            "  Have a GitHub repo or HF model you want to work with?",
+            default=False,
+        )
+    except (typer.Abort, EOFError, OSError):
+        # Non-interactive or abort -> skip quietly.
+        wanted = False
+    if not wanted:
+        chain.record(
+            ActionType.CLI_CMD, "context_gathering",
+            input={"answer": "no"}, success=True,
+        )
+        return False
+
+    try:
+        github_repo = typer.prompt(
+            "  GitHub repo (user/repo or URL; blank to skip)",
+            default="",
+            show_default=False,
+        ).strip()
+    except (typer.Abort, EOFError, OSError):
+        github_repo = ""
+    try:
+        hf_model = typer.prompt(
+            "  HF model (user/model or URL; blank to skip)",
+            default="",
+            show_default=False,
+        ).strip()
+    except (typer.Abort, EOFError, OSError):
+        hf_model = ""
+
+    data: dict[str, Any] = {}
+    if github_repo:
+        data["github_repo"] = github_repo
+    if hf_model:
+        data["hf_model"] = hf_model
+
+    if not data:
+        c.info("No context captured (both answers blank).")
+        chain.record(
+            ActionType.CLI_CMD, "context_gathering",
+            input={"answer": "empty"}, success=True,
+        )
+        return False
+
+    try:
+        target = _save_context(data)
+    except OSError as exc:
+        c.warn(f"Context save failed: {exc}")
+        chain.record(
+            ActionType.CLI_CMD, "context_gathering",
+            output={"error": str(exc)}, success=False,
+        )
+        return False
+
+    c.ok(f"Context saved: {target}")
+    chain.record(
+        ActionType.CLI_CMD, "context_gathering",
+        input={"fields": sorted(data.keys())},
+        output={"path": str(target)},
+        success=True,
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Step: celebration + guidance (JRN-008)
+# ---------------------------------------------------------------------------
+
+def _celebrate_and_guide(c: Any) -> None:
+    """Print an achievement panel + next-step paths (no input required)."""
+    # Compact guidance block — 4 paths covering the main lanes. The user
+    # picks one organically; we do not prompt. Mirrors the `carl` intro
+    # moves so the mental model stays stable across surfaces.
+    c.print("  [camp.accent]You're all set![/]")
+    c.info("You earned the \"first-run\" badge. Here's what to try next:")
+    c.kv("carl \"explore my repo\"", "start a conversation")
+    c.kv("carl train --config carl.yaml", "run training")
+    c.kv("carl doctor", "audit your readiness")
+    c.kv("carl queue add \"idea\"", "drop a sticky-note for the heartbeat")
+    c.blank()
+
+
+# ---------------------------------------------------------------------------
 # Step: freshness
 # ---------------------------------------------------------------------------
 
@@ -443,6 +780,13 @@ def _json_result(chain: InteractionChain, *, status: str, steps_done: list[str])
 __all__ = [
     "init_cmd",
     "FIRST_RUN_MARKER",
+    "CONTEXT_FILE",
     "_first_run_complete",
     "_mark_first_run_complete",
+    "_persist_default_chat_model",
+    "_offer_sample_project",
+    "_offer_context_gathering",
+    "_celebrate_and_guide",
+    "_load_context",
+    "_save_context",
 ]

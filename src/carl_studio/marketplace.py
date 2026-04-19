@@ -15,10 +15,12 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from carl_core.errors import CARLError, NetworkError
 from pydantic import BaseModel, Field
 
 __all__ = [
     "MarketplaceError",
+    "MarketplaceNetworkError",
     "MarketplaceModel",
     "MarketplaceAdapter",
     "MarketplaceRecipe",
@@ -30,8 +32,16 @@ __all__ = [
 _VALID_TYPES = frozenset({"models", "adapters", "recipes", "kits"})
 
 
-class MarketplaceError(Exception):
-    """Raised on marketplace API or network failures."""
+class MarketplaceError(CARLError):
+    """Raised on marketplace API or HTTP failures."""
+
+    code = "carl.marketplace.http"
+
+
+class MarketplaceNetworkError(NetworkError, MarketplaceError):
+    """Raised on marketplace transport failures (DNS, timeouts, refused connections)."""
+
+    code = "carl.marketplace.network"
 
 
 class _Base(BaseModel):
@@ -176,9 +186,19 @@ class MarketplaceClient:
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.fp else ""
-            raise MarketplaceError(f"Marketplace API error ({e.code}): {error_body}")
+            raise MarketplaceError(
+                f"Marketplace API error ({e.code}): {error_body}",
+                code="carl.marketplace.http",
+                context={"status": e.code, "function": function},
+                cause=e,
+            ) from e
         except urllib.error.URLError as e:
-            raise MarketplaceError(f"Network error: {e.reason}")
+            raise MarketplaceNetworkError(
+                f"Network error: {e.reason}",
+                code="carl.marketplace.network",
+                context={"function": function},
+                cause=e,
+            ) from e
 
     # -- Read operations (public, no auth required) ---------------------------
 

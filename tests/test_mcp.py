@@ -635,3 +635,124 @@ class TestRequireTier(unittest.TestCase):
         assert srv._require_tier("sync.cloud") is True
         assert srv._require_tier("orchestration") is True
         assert srv._require_tier("experiment") is True
+
+
+# ---------------------------------------------------------------------------
+# UAT-049 — session tenancy: single-tenant banner + documented scope
+# ---------------------------------------------------------------------------
+
+
+class TestSessionIsolationOrBanner(unittest.TestCase):
+    """UAT-049: per-request state vs single-tenant banner.
+
+    We chose the single-tenant banner path because threading a FastMCP
+    ``Context`` parameter through all eighteen tools would be a
+    breaking MCP-surface change. The banner keeps operators honest
+    about the tenancy model; these tests verify the guardrails.
+    """
+
+    def test_module_docstring_documents_single_tenant_constraint(self) -> None:
+        import carl_studio.mcp.server as srv
+
+        assert srv.__doc__ is not None
+        doc = srv.__doc__.lower()
+        # Operators need to see both "single-tenant" wording and the
+        # "one process per tenant" operational guidance.
+        assert "single-tenant" in doc, (
+            "module docstring must flag the single-tenant scope (UAT-049)"
+        )
+        assert "one server process per tenant" in doc or "one process per tenant" in doc
+
+    def test_startup_banner_warns_about_shared_session(self) -> None:
+        """Importing the server emits a WARNING about session sharing.
+
+        We reload the module under ``assertLogs`` so the ``logger.warning``
+        at import time is captured — a module is only imported once per
+        process, so we reach into ``importlib.reload`` to re-trigger the
+        side effect without mutating the test runner's session state.
+        """
+        import importlib
+        import logging
+
+        import carl_studio.mcp.server as srv
+
+        with self.assertLogs("carl_studio.mcp.server", level=logging.WARNING) as cm:
+            importlib.reload(srv)
+
+        joined = "\n".join(cm.output).lower()
+        assert "single-tenant" in joined, (
+            f"expected single-tenant warning, got: {cm.output!r}"
+        )
+
+    def test_session_is_module_level_singleton(self) -> None:
+        """The ``_session`` dict is shared across imports — that's the bug.
+
+        This test documents the current (intended-for-now) behaviour:
+        a write from "client A" is visible to "client B" because both
+        observe the same module-level dict. Any future migration to
+        per-request state MUST flip this assertion.
+        """
+        import carl_studio.mcp.server as srv
+
+        _reset_session()
+        try:
+            # "Client A" writes.
+            srv._session["jwt"] = "jwt-from-client-a"
+            srv._session["user_id"] = "user-a"
+            # "Client B" reads — same process, same dict — sees A's
+            # values. This is exactly the leak UAT-049 documents.
+            leaked = srv._session["jwt"]
+            leaked_user = srv._session["user_id"]
+            assert leaked == "jwt-from-client-a"
+            assert leaked_user == "user-a"
+        finally:
+            _reset_session()
+
+
+# ---------------------------------------------------------------------------
+# UAT-051 — sync_data JWT cache-write failure is logged, not swallowed silently
+# ---------------------------------------------------------------------------
+
+
+class TestSyncDataLogsCacheFailure(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        _reset_session()
+
+    async def test_sync_data_logs_cache_failure(self) -> None:
+        """When ``db.set_auth`` raises, sync_data must log a DEBUG breadcrumb.
+
+        Pre-fix the ``except Exception: pass`` hid permission/disk errors
+        entirely. The new code logs at DEBUG so sync semantics do not
+        break but operators still get a trail.
+        """
+        import logging
+
+        import carl_studio.mcp.server as srv
+
+        srv._session["tier"] = "paid"
+        srv._session["jwt"] = "paid-jwt-xyz"
+
+        # Force set_auth to blow up.
+        class _BoomDB:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def set_auth(self, *_args: object, **_kwargs: object) -> None:
+                raise OSError("disk full (simulated)")
+
+            def close(self) -> None:
+                pass
+
+        with patch("carl_studio.db.LocalDB", _BoomDB), \
+             patch("carl_studio.sync.push", return_value={"runs": 0}), \
+             self.assertLogs("carl_studio.mcp.server", level=logging.DEBUG) as cm:
+            result = json.loads(await srv.sync_data(direction="push"))
+
+        # Sync itself still succeeded — JWT cache failure does not break the call.
+        assert result["status"] == "ok", result
+        # But the debug breadcrumb was emitted.
+        joined = "\n".join(cm.output).lower()
+        assert "jwt cache-write failed" in joined, (
+            f"expected cache-write debug log, got: {cm.output!r}"
+        )
+        assert "disk full" in joined

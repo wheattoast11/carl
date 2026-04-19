@@ -1,8 +1,12 @@
 """PaymentConnection — x402 payment rail as a carl_core.connection primitive.
 
-This module ports the existing :mod:`carl_studio.x402` + :mod:`carl_studio.x402_sdk`
-client surface onto :class:`carl_core.connection.AsyncBaseConnection`. The
-underlying HTTP client (official x402 SDK or the urllib fallback) is selected
+This module consolidates the x402 payment-rail surface: the official SDK
+adapter (:class:`X402SDKClient`), the stdlib-urllib fallback
+(:class:`~carl_studio.x402.X402Client`), a legacy factory
+(:func:`create_x402_client`), and the lifecycle-aware
+:class:`PaymentConnection` built on :class:`carl_core.connection.AsyncBaseConnection`.
+
+The underlying HTTP client (official x402 SDK or the urllib fallback) is selected
 lazily inside :meth:`PaymentConnection._connect`; neither path is imported at
 module load time so that the `x402` and `eth_account` extras remain optional.
 
@@ -15,6 +19,7 @@ When the breaker is ``OPEN``, :meth:`open` surfaces a
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from carl_core.connection import (
@@ -35,14 +40,141 @@ from carl_studio.x402 import (
     X402Client,
     X402Config,
 )
-from carl_studio.x402_sdk import X402SDKClient, sdk_available
 
 if TYPE_CHECKING:
     from carl_core.interaction import InteractionChain
 
 
+logger = logging.getLogger(__name__)
+
+
 _DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator"
 _DEFAULT_CHAIN_NAME = "base"
+
+
+# ---------------------------------------------------------------------------
+# SDK adapter — promoted from the removed carl_studio.x402_sdk module.
+# ---------------------------------------------------------------------------
+
+
+def sdk_available() -> bool:
+    """Check if the official x402 SDK is installed."""
+    try:
+        import x402  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+class X402SDKClient:
+    """x402 client using the official Coinbase SDK.
+
+    Provides automatic 402 interception and facilitator communication.
+    Paired with :class:`PaymentConnection` — when the SDK is unavailable, the
+    connection binds :class:`~carl_studio.x402.X402Client` instead.
+    """
+
+    def __init__(
+        self,
+        wallet_private_key: str = "",
+        facilitator_url: str = _DEFAULT_FACILITATOR_URL,
+        chain: str = _DEFAULT_CHAIN_NAME,
+    ) -> None:
+        self._wallet_key = wallet_private_key
+        self._facilitator_url = facilitator_url
+        self._chain = chain
+        self._sdk_client: Any = None
+
+    def _ensure_client(self) -> None:
+        """Lazy-init the SDK client with payment scheme registration."""
+        if self._sdk_client is not None:
+            return
+
+        try:
+            from x402 import x402Client  # type: ignore[import-untyped]
+
+            self._sdk_client = x402Client()
+
+            if self._wallet_key:
+                self._register_evm_signer()
+
+        except ImportError:
+            raise ImportError(
+                "x402 SDK required. Install: pip install x402"
+            ) from None
+
+    def _register_evm_signer(self) -> None:
+        """Register EVM account signer with the SDK client."""
+        try:
+            from eth_account import Account  # type: ignore[import-untyped]
+            from x402.mechanisms.evm import EthAccountSigner  # type: ignore[import-untyped]
+            from x402.mechanisms.evm.exact.register import register_exact_evm_client  # type: ignore[import-untyped]
+
+            account = Account.from_key(self._wallet_key)
+            register_exact_evm_client(self._sdk_client, EthAccountSigner(account))
+        except ImportError:
+            logger.debug("eth_account not installed, EVM signing unavailable")
+        except Exception:
+            logger.warning("EVM signer registration failed", exc_info=True)
+
+    async def get(self, url: str, **kwargs: Any) -> Any:
+        """Make an x402-aware GET request."""
+        self._ensure_client()
+        from x402.http.clients import x402HttpxClient  # type: ignore[import-untyped]
+
+        async with x402HttpxClient(self._sdk_client) as http:
+            return await http.get(url, **kwargs)
+
+    async def verify(
+        self, payload: dict[str, Any], requirements: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Verify a payment via the facilitator."""
+        self._ensure_client()
+        from x402.http import HTTPFacilitatorClient, FacilitatorConfig  # type: ignore[import-untyped]
+
+        facilitator = HTTPFacilitatorClient(
+            FacilitatorConfig(url=self._facilitator_url)
+        )
+        result: dict[str, Any] = await facilitator.verify(payload, requirements)
+        return result
+
+    async def get_supported(self) -> Any:
+        """Get supported payment kinds from facilitator."""
+        self._ensure_client()
+        from x402.http import HTTPFacilitatorClient, FacilitatorConfig  # type: ignore[import-untyped]
+
+        facilitator = HTTPFacilitatorClient(
+            FacilitatorConfig(url=self._facilitator_url)
+        )
+        return await facilitator.get_supported()
+
+
+def create_x402_client(
+    config: X402Config,
+    wallet_private_key: str = "",
+) -> X402SDKClient | X402Client:
+    """Create the best available x402 client.
+
+    Returns :class:`X402SDKClient` if the SDK is installed, otherwise
+    :class:`~carl_studio.x402.X402Client`.
+
+    .. note::
+
+       Prefer :func:`create_payment_connection` for new code — it returns a
+       full :class:`PaymentConnection` which participates in the CARL
+       connection registry, FSM, and :class:`InteractionChain` telemetry.
+       This factory remains for backward compatibility and will gain a
+       ``DeprecationWarning`` in v0.6.
+    """
+    if sdk_available():
+        return X402SDKClient(
+            wallet_private_key=wallet_private_key,
+            facilitator_url=config.facilitator_url,
+            chain=config.chain,
+        )
+
+    return X402Client(config)
 
 
 _PAYMENT_SPEC = ConnectionSpec(
@@ -326,9 +458,8 @@ def create_payment_connection(
     """Factory — build a :class:`PaymentConnection` from an :class:`X402Config`.
 
     This is the recommended surface going forward. The older
-    :func:`carl_studio.x402_sdk.create_x402_client` remains available and
-    unchanged for backward compatibility; it will gain a ``DeprecationWarning``
-    in v0.6.
+    :func:`create_x402_client` remains available and unchanged for backward
+    compatibility; it will gain a ``DeprecationWarning`` in v0.6.
     """
     return PaymentConnection(
         wallet_private_key=wallet_private_key,
@@ -340,5 +471,8 @@ def create_payment_connection(
 
 __all__ = [
     "PaymentConnection",
+    "X402SDKClient",
     "create_payment_connection",
+    "create_x402_client",
+    "sdk_available",
 ]

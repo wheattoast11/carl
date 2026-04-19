@@ -11,13 +11,22 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from carl_core.errors import CARLError, NetworkError
 from pydantic import BaseModel
 
 from carl_studio.camp import CampError, CampProfile, fetch_camp_profile
 
 
-class CreditError(Exception):
-    """Raised when credit operations fail."""
+class CreditError(CARLError):
+    """Raised when credit HTTP operations fail."""
+
+    code = "carl.credit"
+
+
+class CreditNetworkError(NetworkError, CreditError):
+    """Raised on credit-rail transport failures (DNS, timeouts, refused connections)."""
+
+    code = "carl.credit.network"
 
 
 class CreditBalance(BaseModel):
@@ -104,13 +113,28 @@ def deduct_credits(
             return bool(data.get("success", False))
     except urllib.error.HTTPError as e:
         body_str = e.read().decode(errors="replace") if e.fp else str(e)
-        raise CreditError(f"Deduction failed ({e.code}): {body_str}") from e
+        raise CreditError(
+            f"Deduction failed ({e.code}): {body_str}",
+            code="carl.credit.http",
+            context={"status": e.code, "job_id": job_id},
+            cause=e,
+        ) from e
     except urllib.error.URLError as e:
-        raise CreditError(f"Deduction failed (network): {e.reason}") from e
+        raise CreditNetworkError(
+            f"Deduction failed (network): {e.reason}",
+            code="carl.credit.network",
+            context={"job_id": job_id},
+            cause=e,
+        ) from e
     except CreditError:
         raise
     except Exception as e:
-        raise CreditError(f"Deduction failed: {e}") from e
+        raise CreditError(
+            f"Deduction failed: {e}",
+            code="carl.credit.unknown",
+            context={"job_id": job_id},
+            cause=e,
+        ) from e
 
 
 def refund_credits(
@@ -148,10 +172,25 @@ def refund_credits(
             return bool(data.get("success", False))
     except urllib.error.HTTPError as e:
         body_str = e.read().decode(errors="replace") if e.fp else str(e)
-        raise CreditError(f"Refund failed ({e.code}): {body_str}") from e
+        raise CreditError(
+            f"Refund failed ({e.code}): {body_str}",
+            code="carl.credit.http",
+            context={"status": e.code, "job_id": job_id},
+            cause=e,
+        ) from e
     except urllib.error.URLError as e:
-        raise CreditError(f"Refund failed (network): {e.reason}") from e
+        raise CreditNetworkError(
+            f"Refund failed (network): {e.reason}",
+            code="carl.credit.network",
+            context={"job_id": job_id},
+            cause=e,
+        ) from e
     except CreditError:
         raise
     except Exception as e:
-        raise CreditError(f"Refund failed: {e}") from e
+        raise CreditError(
+            f"Refund failed: {e}",
+            code="carl.credit.unknown",
+            context={"job_id": job_id},
+            cause=e,
+        ) from e

@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from carl_core.errors import CARLError
+
 from carl_studio.camp import CampError, CampProfile, fetch_camp_profile
 
 CARL_CAMP_BASE = "https://carl.camp"
@@ -14,8 +16,10 @@ BILLING_PORTAL_URL = f"{CARL_CAMP_BASE}/billing"
 PRICING_URL = f"{CARL_CAMP_BASE}/pricing"
 
 
-class BillingError(Exception):
+class BillingError(CARLError):
     """Raised when billing API calls fail."""
+
+    code = "carl.billing"
 
 
 class SubscriptionStatus:

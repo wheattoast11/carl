@@ -445,3 +445,144 @@ class TestSettingsTierAllows:
         monkeypatch.setattr(tier_mod, "_detect_hf_token", lambda: None)
         s = CARLSettings(tier=Tier.PRO)
         assert s.tier_allows("train") is True
+
+
+# ---------------------------------------------------------------------------
+# SIMP-007 single-source-of-truth: SETTABLE_FIELDS is derived from the
+# Pydantic model, and load() pulls new fields without an allow-list edit.
+# ---------------------------------------------------------------------------
+
+
+class TestSettableFieldsMatchModelFields:
+    def test_settable_fields_match_model_fields(self):
+        """Every non-secret scalar on the model appears in SETTABLE_FIELDS.
+
+        Nested Pydantic sub-models are expanded as ``<parent>.<child>``. The
+        registry must NOT leak secret fields (hf_token, api keys).
+        """
+        from carl_studio.settings import (
+            _SETTABLE_EXCLUDE,
+            SETTABLE_FIELDS,
+        )
+
+        for secret in _SETTABLE_EXCLUDE:
+            # Hard secret guard: no top-level and no dotted child surfaces.
+            assert secret not in SETTABLE_FIELDS
+            for key in SETTABLE_FIELDS:
+                assert not key.startswith(f"{secret}.")
+
+        # Every declared field (minus exclusions) is reachable in the registry.
+        for name in CARLSettings.model_fields:
+            if name in _SETTABLE_EXCLUDE:
+                continue
+            reachable = name in SETTABLE_FIELDS or any(
+                k.startswith(f"{name}.") for k in SETTABLE_FIELDS
+            )
+            assert reachable, f"Field {name!r} is not in SETTABLE_FIELDS"
+
+    def test_nested_observe_defaults_expanded(self):
+        """ObserveDefaults leaves are present with correct types."""
+        from carl_studio.settings import SETTABLE_FIELDS
+
+        assert SETTABLE_FIELDS["observe_defaults.show_entropy"] == (bool,)
+        assert SETTABLE_FIELDS["observe_defaults.show_phi"] == (bool,)
+        assert SETTABLE_FIELDS["observe_defaults.default_poll_interval"] == (
+            float,
+        )
+
+    def test_tier_preset_compute_are_registered_as_string(self):
+        """Enum fields surface as str at the CLI coercion layer."""
+        from carl_studio.settings import SETTABLE_FIELDS
+
+        assert SETTABLE_FIELDS["tier"] == (str,)
+        assert SETTABLE_FIELDS["preset"] == (str,)
+        assert SETTABLE_FIELDS["default_compute"] == (str,)
+
+
+class TestLoadPicksUpNewFieldsWithoutAllowlistEdit(object):
+    """Subclass CARLSettings to prove ``load()``'s filter is dynamic.
+
+    A subclass adds a fresh field; a carl.yaml containing that field must
+    load without any hand-maintained allow-list edit. This is the
+    regression-guard for SIMP-007.
+    """
+
+    def test_load_accepts_new_field_without_allowlist_edit(
+        self, tmp_path, monkeypatch
+    ):
+        import carl_studio.settings as settings_mod
+
+        class ExtSettings(CARLSettings):
+            """A one-field extension used to prove load()'s filter is dynamic."""
+
+            extra_setting: str = ""
+
+        # Point the loader at a throwaway project dir — no global config.
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "carl.yaml").write_text(
+            "extra_setting: from-yaml\ndefault_model: proj/model\n"
+            "unrelated_project_key: ignored\n"
+        )
+
+        monkeypatch.chdir(project_dir)
+        # Redirect the global config path to /dev/null so only the local file
+        # contributes.
+        monkeypatch.setattr(
+            settings_mod,
+            "GLOBAL_CONFIG",
+            tmp_path / "does_not_exist.yaml",
+        )
+
+        s = ExtSettings.load()
+        assert s.extra_setting == "from-yaml"
+        assert s.default_model == "proj/model"
+
+    def test_load_ignores_unrelated_project_keys(self, tmp_path, monkeypatch):
+        """Junk keys in carl.yaml do not reach CARLSettings()."""
+        import carl_studio.settings as settings_mod
+
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        (project_dir / "carl.yaml").write_text(
+            "default_model: x/y\nirrelevant_key: 42\n"
+        )
+
+        monkeypatch.chdir(project_dir)
+        monkeypatch.setattr(
+            settings_mod,
+            "GLOBAL_CONFIG",
+            tmp_path / "does_not_exist.yaml",
+        )
+
+        s = CARLSettings.load()
+        assert s.default_model == "x/y"
+        # No AttributeError on unknown key — it's silently dropped by load().
+
+
+class TestTierAliasValidator:
+    """_parse_tier_value was replaced by a field_validator + alias table."""
+
+    def test_resolve_tier_alias_pro(self):
+        from carl_studio.settings import _resolve_tier_alias
+
+        assert _resolve_tier_alias("pro") == Tier.PAID
+
+    def test_resolve_tier_alias_enterprise(self):
+        from carl_studio.settings import _resolve_tier_alias
+
+        assert _resolve_tier_alias("enterprise") == Tier.PAID
+
+    def test_construction_accepts_pro_alias(self):
+        s = CARLSettings(tier="pro")
+        assert s.tier == Tier.PAID
+
+    def test_construction_rejects_unknown_tier(self):
+        with pytest.raises(Exception):
+            CARLSettings(tier="platinum")
+
+    def test_parse_tier_value_removed(self):
+        """The old helper is gone — single source of truth lives in the validator."""
+        import carl_studio.settings as settings_mod
+
+        assert not hasattr(settings_mod, "_parse_tier_value")

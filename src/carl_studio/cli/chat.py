@@ -10,11 +10,77 @@ Cost tracking: --budget <usd> sets a hard spending cap.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 import typer
 
 from carl_studio.console import get_console
+
+
+def _pump_events(
+    events: Iterable[Any],
+    c: Any,
+    *,
+    surface_blocked: bool = False,
+    blank_after_done: bool = False,
+    carl_prefix_newline: bool = False,
+) -> None:
+    """Render agent event stream to the console.
+
+    Shared by the one-shot path (``ask_cmd``) and the interactive loop
+    (``chat_cmd``). The two paths used to diverge on formatting, which made
+    the stream renderer a drift magnet. Differences are captured via flags:
+
+    ``surface_blocked``
+        Emit a ``warn`` when a tool_blocked event arrives (interactive
+        loop); the one-shot path does not surface tool_blocked.
+    ``blank_after_done``
+        Print a trailing blank line after a ``done`` event (interactive
+        loop only — keeps successive turns visually separated).
+    ``carl_prefix_newline``
+        Emit a blank before printing the ``carl> `` prefix on the first
+        text delta (interactive loop — separates the prompt line).
+    """
+    streaming_text = False
+    try:
+        for event in events:
+            if event.kind == "text_delta":
+                if not streaming_text:
+                    if carl_prefix_newline:
+                        c.blank()
+                    c.print("carl> ", end="")
+                    streaming_text = True
+                c.print(event.content, end="")
+            elif event.kind == "text":
+                c.blank()
+                from rich.markdown import Markdown
+
+                c.print(Markdown(f"**carl>** {event.content}"))
+                if blank_after_done:
+                    c.blank()
+            elif event.kind == "tool_call":
+                if streaming_text:
+                    c.blank()
+                    streaming_text = False
+                c.info(f"[{event.tool_name}] {_format_args(event.tool_args)}")
+            elif event.kind == "tool_blocked":
+                if surface_blocked:
+                    c.warn(f"[{event.tool_name}] {event.content}")
+            elif event.kind == "tool_result":
+                preview = event.content[:200]
+                if len(event.content) > 200:
+                    preview += "..."
+                c.info(f"  -> {preview}")
+            elif event.kind == "done":
+                if streaming_text:
+                    c.blank()
+                    streaming_text = False
+                if blank_after_done:
+                    c.blank()
+            elif event.kind == "error":
+                c.error(event.content)
+    except Exception as exc:
+        c.error(str(exc))
 
 
 def _list_sessions() -> None:
@@ -118,37 +184,7 @@ def run_one_shot_agent(
     c.kv("Prompt", prompt[:120] + ("..." if len(prompt) > 120 else ""))
     c.blank()
 
-    streaming_text = False
-    try:
-        for event in agent.chat(prompt):
-            if event.kind == "text_delta":
-                if not streaming_text:
-                    c.print("carl> ", end="")
-                    streaming_text = True
-                c.print(event.content, end="")
-            elif event.kind == "text":
-                c.blank()
-                from rich.markdown import Markdown
-
-                c.print(Markdown(f"**carl>** {event.content}"))
-            elif event.kind == "tool_call":
-                if streaming_text:
-                    c.blank()
-                    streaming_text = False
-                c.info(f"[{event.tool_name}] {_format_args(event.tool_args)}")
-            elif event.kind == "tool_result":
-                preview = event.content[:200]
-                if len(event.content) > 200:
-                    preview += "..."
-                c.info(f"  -> {preview}")
-            elif event.kind == "done":
-                if streaming_text:
-                    c.blank()
-                    streaming_text = False
-            elif event.kind == "error":
-                c.error(event.content)
-    except Exception as exc:
-        c.error(str(exc))
+    _pump_events(agent.chat(prompt), c)
 
     cost = agent.cost_summary
     if cost["turn_count"] > 0:
@@ -329,6 +365,23 @@ def chat_cmd(
             bootstrap_done = True
             move_key = parse_intro_selection(user_input)
 
+            # JRN-009 — session theme tracking. Map the intro selection to a
+            # stable label the agent persists with its session state so the
+            # system prompt and downstream analytics can reason about "which
+            # lane did the user start in."
+            _MOVE_KEY_TO_THEME: dict[str | None, str] = {
+                "e": "move:explore",
+                "t": "move:train",
+                "v": "move:evaluate",
+                "s": "move:sticky",
+                None: "free-form",
+            }
+            theme_label = _MOVE_KEY_TO_THEME.get(move_key, "free-form")
+            try:
+                agent.set_session_theme(theme_label)
+            except Exception:  # pragma: no cover — defensive
+                pass
+
             # "/s" or "s" short-circuits into the sticky queue — the user
             # signalled "queue this for the heartbeat loop", so we do not
             # spin up the agent at all for this turn. The raw input is
@@ -371,42 +424,13 @@ def chat_cmd(
                 c.warn(f"intro priming skipped: {exc}")
                 bootstrap_ctx = None
 
-        try:
-            streaming_text = False
-            for event in agent.chat(primed_input):
-                if event.kind == "text_delta":
-                    if not streaming_text:
-                        c.blank()
-                        c.print("carl> ", end="")
-                        streaming_text = True
-                    c.print(event.content, end="")
-                elif event.kind == "text":
-                    c.blank()
-                    from rich.markdown import Markdown
-
-                    c.print(Markdown(f"**carl>** {event.content}"))
-                    c.blank()
-                elif event.kind == "tool_call":
-                    if streaming_text:
-                        c.blank()
-                        streaming_text = False
-                    c.info(f"[{event.tool_name}] {_format_args(event.tool_args)}")
-                elif event.kind == "tool_blocked":
-                    c.warn(f"[{event.tool_name}] {event.content}")
-                elif event.kind == "tool_result":
-                    result_preview = event.content[:200]
-                    if len(event.content) > 200:
-                        result_preview += "..."
-                    c.info(f"  -> {result_preview}")
-                elif event.kind == "done":
-                    if streaming_text:
-                        c.blank()
-                        streaming_text = False
-                    c.blank()
-                elif event.kind == "error":
-                    c.error(event.content)
-        except Exception as exc:
-            c.error(str(exc))
+        _pump_events(
+            agent.chat(primed_input),
+            c,
+            surface_blocked=True,
+            blank_after_done=True,
+            carl_prefix_newline=True,
+        )
 
         # Bootstrap phase — apply the JIT frame patch AFTER turn-1 completes.
         # We only do this when the agent has no existing frame (or an empty
@@ -507,3 +531,27 @@ def _format_args(args: dict) -> str:
             val = val[:57] + "..."
         parts.append(f"{k}={val}")
     return ", ".join(parts)
+
+
+# Stable intro-move -> session-theme label mapping. Kept in sync with
+# ``carl_studio.cli.intro.INTRO_MOVES``. The full-word labels are the
+# canonical form; see the skilled-move taxonomy in WAVE-1 Phase-2.
+_MOVE_KEY_TO_THEME: dict[str, str] = {
+    "e": "move:explore",
+    "t": "move:train",
+    "v": "move:eval",
+    "s": "move:sticky",
+}
+
+
+def _session_theme_for_move(move_key: str | None) -> str:
+    """Map an intro selection key to a stable session-theme label.
+
+    Returns ``"free-form"`` when the user typed something that was not a
+    keyed intro move. The mapping is intentionally conservative — unknown
+    keys collapse to free-form rather than raising, because the user's
+    first turn should never fail on a taxonomy miss.
+    """
+    if not move_key:
+        return "free-form"
+    return _MOVE_KEY_TO_THEME.get(move_key, "free-form")

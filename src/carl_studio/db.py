@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -173,7 +174,22 @@ class LocalDB:
         self.path = Path(db_path) if db_path else DB_PATH
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
-        self._init_schema()
+        # Guards the shared single-connection hot path (REV-002).
+        # Acquired inside ``_connect()`` so every caller serializes on the
+        # same sqlite handle — sqlite3 Connection objects are *not*
+        # thread-safe when shared across threads.
+        self._lock = threading.Lock()
+        try:
+            self._init_schema()
+        except Exception:
+            # REV-008: If schema bootstrap blows up (corrupted db, disk
+            # full, readonly fs, …) we must not leave a half-open
+            # connection attached to ``self._conn`` — the next
+            # ``LocalDB(path)`` instantiation would inherit a broken
+            # connection. Tear it down so subsequent instances can
+            # start clean, then re-raise the original failure.
+            self.close()
+            raise
 
     def _init_schema(self) -> None:
         with self._connect() as conn:
@@ -181,18 +197,52 @@ class LocalDB:
 
     @contextmanager
     def _connect(self) -> Generator[sqlite3.Connection, None, None]:
-        if self._conn is None:
-            self._conn = sqlite3.connect(str(self.path))
-            self._conn.row_factory = sqlite3.Row
-        try:
-            yield self._conn
-        except Exception:
-            self._conn.rollback()
-            raise
+        # Serialize access across threads — sqlite3.Connection is not
+        # thread-safe by default, and we deliberately reuse a single
+        # connection per LocalDB instance. The lock is re-entrant-safe
+        # only for single-threaded reentry via the same thread because
+        # ``threading.Lock`` is non-reentrant; all current call sites
+        # are non-nested, which keeps this correct and simple.
+        with self._lock:
+            if self._conn is None:
+                # ``check_same_thread=False`` is required because the
+                # single shared connection may legitimately be reached
+                # from multiple threads (heartbeat worker, CLI main,
+                # MCP tool coroutines). The ``self._lock`` above
+                # serializes every call so sqlite never sees
+                # concurrent use — we pay only the safety check, not
+                # the actual race.
+                self._conn = sqlite3.connect(
+                    str(self.path),
+                    check_same_thread=False,
+                )
+                self._conn.row_factory = sqlite3.Row
+            try:
+                yield self._conn
+                # REV-002: commit on clean exit so write-side callers no
+                # longer have to remember an explicit ``conn.commit()``.
+                # Existing sites that already call ``conn.commit()``
+                # remain correct — sqlite treats the trailing commit as
+                # a no-op when no transaction is open.
+                self._conn.commit()
+            except Exception:
+                # REV-002: if rollback itself raises (e.g. closed conn
+                # during shutdown) swallow it so we preserve the
+                # *original* exception for the caller.
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+                raise
 
     def close(self) -> None:
         if self._conn:
-            self._conn.close()
+            try:
+                self._conn.close()
+            except Exception:
+                # Closing an already-broken connection must not mask
+                # the original fault (REV-008) — best-effort only.
+                pass
             self._conn = None
 
     # ─── Config ──────────────────────────────────────────────

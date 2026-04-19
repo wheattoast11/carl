@@ -30,9 +30,9 @@ import carl_studio.x402 as x402_module
 from carl_studio.x402 import X402Client, X402Config
 from carl_studio.x402_connection import (
     PaymentConnection,
+    X402SDKClient,
     create_payment_connection,
 )
-from carl_studio.x402_sdk import X402SDKClient
 
 
 # ---------------------------------------------------------------------------
@@ -336,14 +336,14 @@ class TestCreatePaymentConnection:
         assert conn.facilitator_url == "https://x402.org/facilitator"
         assert conn.chain_name == "base"
 
-    def test_create_payment_connection_reexport_on_sdk_module(self) -> None:
-        """The factory is also reachable from carl_studio.x402_sdk."""
-        from carl_studio.x402_sdk import (
-            create_payment_connection as sdk_factory,
+    def test_create_payment_connection_importable_from_x402_connection(self) -> None:
+        """The factory lives on carl_studio.x402_connection post-consolidation."""
+        from carl_studio.x402_connection import (
+            create_payment_connection as conn_factory,
         )
 
         config = X402Config(facilitator_url="https://x.io", chain="base")
-        conn = sdk_factory(config)
+        conn = conn_factory(config)
         assert isinstance(conn, PaymentConnection)
 
 
@@ -368,7 +368,7 @@ class TestLegacyClientsPreserved:
         assert client._chain == "base"  # noqa: SLF001
 
     def test_create_x402_client_still_returns_fallback_without_sdk(self) -> None:
-        from carl_studio.x402_sdk import create_x402_client
+        from carl_studio.x402_connection import create_x402_client
 
         config = X402Config(facilitator_url="https://f.io", chain="base")
         with patch.dict(sys.modules, {"x402": None}):

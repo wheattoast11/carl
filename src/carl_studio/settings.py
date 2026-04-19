@@ -11,7 +11,8 @@ from __future__ import annotations
 import os
 from enum import Enum
 from pathlib import Path
-from typing import Any, Self
+from types import UnionType
+from typing import Any, Self, Union, get_args, get_origin
 
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -19,6 +20,26 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from carl_studio.tier import Tier
 from carl_studio.types.config import ComputeTarget, normalize_compute_target
+
+
+# ---------------------------------------------------------------------------
+# Tier alias resolution — single source of truth for legacy tier names.
+# ---------------------------------------------------------------------------
+
+_TIER_ALIASES: dict[str, Tier] = {
+    "free": Tier.FREE,
+    "paid": Tier.PAID,
+    "pro": Tier.PAID,
+    "enterprise": Tier.PAID,
+}
+
+
+def _resolve_tier_alias(value: str) -> Tier:
+    """Accept legacy tier names while storing the active FREE/PAID model."""
+    normalized = value.strip().lower()
+    if normalized not in _TIER_ALIASES:
+        raise ValueError(f"Invalid tier '{value}'. Must be: free or paid")
+    return _TIER_ALIASES[normalized]
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +192,7 @@ class CARLSettings(BaseSettings):
     @classmethod
     def normalize_tier_alias(cls, v: Any) -> Any:
         if isinstance(v, str):
-            return _parse_tier_value(v)
+            return _resolve_tier_alias(v)
         return v
 
     @field_validator("log_level")
@@ -233,30 +254,24 @@ class CARLSettings(BaseSettings):
         """Load settings with full resolution chain.
 
         Priority: env vars -> ~/.carl/config.yaml -> carl.yaml -> defaults.
+
+        The project-local ``carl.yaml`` is filtered against
+        :data:`~pydantic.BaseModel.model_fields` so only keys declared on
+        this model are pulled in — any unrelated project-config keys are
+        ignored. New settings fields are picked up automatically without
+        an allow-list edit.
         """
         merged: dict[str, Any] = {}
 
-        # Layer 1: project-local carl.yaml (lowest file priority)
+        # Layer 1: project-local carl.yaml (lowest file priority).
+        # Filter by the declared model fields so the file can hold arbitrary
+        # project keys without polluting settings construction.
         local_config = _find_local_config()
         if local_config is not None:
             local_data = _load_yaml(local_config)
-            # Only pull settings-relevant keys (not full project config)
-            for key in (
-                "tier",
-                "log_level",
-                "default_compute",
-                "default_model",
-                "default_chat_model",
-                "hub_namespace",
-                "trackio_url",
-                "naming_prefix",
-                "observe_defaults",
-                "preset",
-                "hf_token",
-                "anthropic_api_key",
-            ):
-                if key in local_data:
-                    merged[key] = local_data[key]
+            allowed = local_data.keys() & cls.model_fields.keys()
+            for key in allowed:
+                merged[key] = local_data[key]
 
         # Layer 2: global ~/.carl/config.yaml (overrides project)
         if GLOBAL_CONFIG.is_file():
@@ -379,45 +394,75 @@ def _serialize_enums(data: dict[str, Any]) -> None:
             _serialize_enums(val)
 
 
-def _parse_tier_value(value: str) -> Tier:
-    """Accept legacy tier names while storing the active FREE/PAID model."""
-    normalized = value.strip().lower()
-    aliases = {
-        "free": Tier.FREE,
-        "paid": Tier.PAID,
-        "pro": Tier.PAID,
-        "enterprise": Tier.PAID,
-    }
-    if normalized not in aliases:
-        raise ValueError(f"Invalid tier '{value}'. Must be: free or paid")
-    return aliases[normalized]
-
-
 # ---------------------------------------------------------------------------
-# Settable fields (for carl config set)
+# Settable fields (for `carl config set`) — derived from model_fields
 # ---------------------------------------------------------------------------
 
-SETTABLE_FIELDS: dict[str, type | tuple[type, ...]] = {
-    "tier": (str,),  # Validated as Tier enum
-    "preset": (str,),
-    "default_compute": (str,),
-    "default_model": (str,),
-    "hub_namespace": (str,),
-    "trackio_url": (str,),
-    "naming_prefix": (str,),
-    "log_level": (str,),
-    "llm_model": (str,),
-    "llm_base_url": (str,),
-    "default_chat_model": (str,),
-    "supabase_url": (str,),
-    "supabase_anon_key": (str,),
-    "observe_defaults.show_entropy": (bool,),
-    "observe_defaults.show_phi": (bool,),
-    "observe_defaults.show_sparkline": (bool,),
-    "observe_defaults.show_discontinuity": (bool,),
-    "observe_defaults.default_poll_interval": (float,),
-    "observe_defaults.default_source": (str,),
-}
+# Fields excluded from the CLI settable surface. Secrets are never exposed
+# as settable; structured sub-models (``observe_defaults``) are expanded into
+# their nested leaves automatically.
+_SETTABLE_EXCLUDE: frozenset[str] = frozenset({
+    "hf_token",
+    "anthropic_api_key",
+    "openrouter_api_key",
+    "openai_api_key",
+})
+
+
+def _python_type_from_annotation(annotation: Any) -> type:
+    """Collapse a field annotation to the coerced scalar type.
+
+    ``bool`` / ``float`` / ``int`` are preserved verbatim; ``X | None`` and
+    ``Optional[X]`` unwrap to the non-``None`` arm; enums and strings alike
+    coerce through :class:`str` at the CLI boundary.
+    """
+    origin = get_origin(annotation)
+    if origin is Union or origin is UnionType:
+        args = [a for a in get_args(annotation) if a is not type(None)]
+        if len(args) == 1:
+            return _python_type_from_annotation(args[0])
+    if isinstance(annotation, type):
+        if annotation is bool:
+            return bool
+        if annotation is float:
+            return float
+        if annotation is int:
+            return int
+    return str
+
+
+def _build_settable_fields() -> dict[str, tuple[type, ...]]:
+    """Build the settable-field registry from ``CARLSettings.model_fields``.
+
+    Each top-level scalar field on the model contributes one entry. Nested
+    Pydantic models (e.g. ``ObserveDefaults``) contribute one entry per leaf
+    in the form ``"<parent>.<child>"``. New fields are picked up automatically
+    the next time this module is imported.
+    """
+    registry: dict[str, tuple[type, ...]] = {}
+    for name, field in CARLSettings.model_fields.items():
+        if name in _SETTABLE_EXCLUDE:
+            continue
+        annotation = field.annotation
+        origin_annotation = annotation
+        # Unwrap Optional so isinstance check below reaches the real class.
+        if get_origin(annotation) in (Union, UnionType):
+            origin_annotation = next(
+                (a for a in get_args(annotation) if a is not type(None)),
+                annotation,
+            )
+        if isinstance(origin_annotation, type) and issubclass(
+            origin_annotation, BaseModel
+        ):
+            for sub_name, sub_field in origin_annotation.model_fields.items():
+                sub_type = _python_type_from_annotation(sub_field.annotation)
+                registry[f"{name}.{sub_name}"] = (sub_type,)
+            continue
+        registry[name] = (_python_type_from_annotation(annotation),)
+    return registry
+
+
+SETTABLE_FIELDS: dict[str, tuple[type, ...]] = _build_settable_fields()
 
 
 def set_field(settings: CARLSettings, key: str, value: str) -> CARLSettings:
@@ -433,7 +478,7 @@ def set_field(settings: CARLSettings, key: str, value: str) -> CARLSettings:
     parsed: Any
     if key == "tier":
         try:
-            parsed = _parse_tier_value(value)
+            parsed = _resolve_tier_alias(value)
         except ValueError:
             raise ValueError(f"Invalid tier '{value}'. Must be: free or paid")
     elif key == "preset":

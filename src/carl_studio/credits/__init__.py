@@ -8,12 +8,13 @@ Credit balance stored in:
   2. Local SQLite (offline cache for display only)
 """
 
-from carl_studio.credits.balance import CreditBalance, CreditError
+from carl_studio.credits.balance import CreditBalance, CreditError, CreditNetworkError
 from carl_studio.credits.estimate import CreditEstimate, estimate_job_cost
 
 __all__ = [
     "CreditBalance",
     "CreditError",
+    "CreditNetworkError",
     "CreditEstimate",
     "estimate_job_cost",
 ]

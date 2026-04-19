@@ -89,6 +89,29 @@ class TestFlowCommand:
         for name in ops_mod.list_operations():
             assert f"/{name}" in result.output
 
+    def test_flow_list_shows_descriptions(self) -> None:
+        """JRN-007: ``carl flow --list`` prints ``/name  — description``.
+
+        The console wraps long lines, so we normalise whitespace before the
+        substring check and look for the opening fragment of each description.
+        """
+        _ensure_wired()
+        runner = CliRunner()
+        result = runner.invoke(app, ["flow", "--list"])
+        assert result.exit_code == 0
+        # Collapse wrapped lines so we can assert on descriptions regardless
+        # of the rendered terminal width.
+        flat = " ".join(result.output.split())
+        for name in ops_mod.list_operations():
+            desc = ops_mod.get_description(name)
+            assert desc, f"op /{name} must have a description"
+            opening = " ".join(desc.split())[:40]
+            assert opening in flat, (
+                f"description for /{name} missing from --list output (opening={opening!r})"
+            )
+        # At least one op produces a line with the em-dash separator.
+        assert "—" in result.output
+
     def test_missing_chain_errors(self) -> None:
         _ensure_wired()
         runner = CliRunner()
@@ -352,6 +375,11 @@ class TestFlowJsonMode:
         payload = json.loads(result.output)
         assert "ops" in payload
         assert "echo" in payload["ops"]
+        # JRN-007: descriptions are part of the JSON payload too.
+        assert "descriptions" in payload
+        assert payload["descriptions"]["echo"] == ops_mod.get_description("echo")
+        for name in payload["ops"]:
+            assert payload["descriptions"][name], f"/{name} missing description in JSON"
 
     def test_json_dry_run_emits_plan(self) -> None:
         _ensure_wired()

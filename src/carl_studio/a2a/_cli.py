@@ -81,11 +81,50 @@ def send(
     """Post an A2ATask to the LocalBus and print the task id."""
     from carl_studio.a2a.task import A2ATask
 
+    # UAT-050: ``json.loads`` returns ``object`` — the ``: dict`` annotation
+    # was a lie. A bare string, number, list, ``null``, or ``bool`` would
+    # reach ``A2ATask.inputs`` and crash the SkillRunner downstream with a
+    # cryptic ``**kwargs`` error. Validate at the CLI boundary where the
+    # error can be surfaced directly to the caller.
     try:
-        parsed_inputs: dict = json.loads(inputs)
+        parsed_inputs = json.loads(inputs)
     except json.JSONDecodeError as exc:
         _err(f"--inputs is not valid JSON: {exc}")
         raise typer.Exit(code=1) from exc
+
+    if not isinstance(parsed_inputs, dict):
+        _err(
+            "--inputs must be a JSON object (got "
+            f"{type(parsed_inputs).__name__})"
+        )
+        raise typer.Exit(code=1)
+
+    # UAT-050: verify the skill is actually registered before we burn a
+    # bus row. Without this check ``carl agent send made_up_skill`` would
+    # queue a task that can never execute and only surface the failure
+    # at ``carl agent run`` time — sometimes hours later.
+    try:
+        from carl_studio.skills.builtins import BUILTIN_SKILLS
+        from carl_studio.skills.runner import SkillRegistry
+
+        registry = SkillRegistry()
+        for builtin in BUILTIN_SKILLS:
+            registry.register(builtin)
+        registered = {s.name for s in registry.list_skills()}
+    except Exception as exc:  # pragma: no cover - skills extra missing
+        _err(
+            "Skills module unavailable — install the skills extra "
+            f"(pip install carl-studio[skills]): {exc}"
+        )
+        raise typer.Exit(code=1) from exc
+
+    if skill not in registered:
+        available = ", ".join(sorted(registered)) or "(none registered)"
+        _err(
+            f"unknown skill '{skill}'. Available: {available}. "
+            "Run 'carl agent card' or 'carl mcp list_skills' for details."
+        )
+        raise typer.Exit(code=1)
 
     task = A2ATask(
         id=str(uuid.uuid4()),

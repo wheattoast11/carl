@@ -112,6 +112,34 @@ class TestParseSelection:
         assert parse_intro_selection("\tevaluate\n") == "v"
 
 
+class TestRenderIntroRealConsole:
+    """Drive render_intro through a real Rich console — pins UAT-052.
+
+    UAT-052 regression: Rich interpreted ``[e]`` / ``[t]`` / ``[v]`` / ``[s]``
+    as style tags and silently dropped them, so end-users saw unlabelled
+    ``explore: …`` lines. The FakeConsole stub does not go through Rich,
+    so the original tests missed it. This class asserts that the literal
+    shortcut markers appear in the captured output via the real pipeline.
+    """
+
+    def test_shortcut_keys_visible_in_rendered_output(self) -> None:
+        from io import StringIO
+        from carl_studio.console import CampConsole
+
+        c = CampConsole()
+        buf = StringIO()
+        # CampConsole wraps a rich.Console; redirect its file to a buffer.
+        c._console.file = buf  # type: ignore[attr-defined]
+        render_intro(c)
+        output = buf.getvalue()
+        for key, _label, _desc in INTRO_MOVES:
+            marker = f"[{key}]"
+            assert marker in output, (
+                f"shortcut {marker!r} not visible in rendered intro — "
+                "Rich markup may be consuming it. See UAT-052."
+            )
+
+
 class TestIntroConstants:
     def test_intro_moves_shape(self) -> None:
         """Each move tuple must be (key, label, description) — all non-empty."""

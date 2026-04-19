@@ -32,7 +32,10 @@ def render_intro(c: CampConsole) -> None:
     c.info(INTRO_TITLE)
     c.info("what shall we do?")
     for key, label, desc in INTRO_MOVES:
-        c.kv(f"[{key}] {label}", desc)
+        # Backslash-escape the opening bracket so Rich's markup parser
+        # renders the literal shortcut key instead of consuming "[e]" etc.
+        # as a style tag. UAT-052 regression.
+        c.kv(f"\\[{key}] {label}", desc)
     c.info("  or type anything — i'll pick up the thread.")
     c.rule()
 
