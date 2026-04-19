@@ -218,6 +218,18 @@ class LocalDB:
             conn.executescript(_SCHEMA)
 
     @contextmanager
+    def connect(self) -> Generator[sqlite3.Connection, None, None]:
+        """Public thread-safe context manager over the shared SQLite handle.
+
+        Use this from modules outside ``carl_studio.db`` (e.g. ``sticky.py``,
+        heartbeat loop) so the access is not a private-attribute reach. The
+        underlying lock + commit/rollback semantics are identical to the
+        internal ``_connect``.
+        """
+        with self._connect() as conn:
+            yield conn
+
+    @contextmanager
     def _connect(self) -> Generator[sqlite3.Connection, None, None]:
         # Serialize access across threads — sqlite3.Connection is not
         # thread-safe by default, and we deliberately reuse a single

@@ -49,7 +49,12 @@ _LOG = logging.getLogger("carl.heartbeat.loop")
 # in-loop maintenance tick entirely — useful for tests and for deployments
 # that run ``carl db maintenance`` out of band. Values < 0 are clamped to 0.
 _MAINTENANCE_INTERVAL_ENV = "CARL_MAINTENANCE_INTERVAL_CYCLES"
+_MAINTENANCE_SECONDS_ENV = "CARL_MAINTENANCE_INTERVAL_SECONDS"
 _DEFAULT_MAINTENANCE_INTERVAL_CYCLES = 100
+# Idle-daemon safety net: even when the queue has been empty for hours, run
+# maintenance at least once per hour so WAL truncation and retention sweep
+# still happen. Cycle-trigger alone would starve a quiet deployment.
+_DEFAULT_MAINTENANCE_INTERVAL_SECONDS = 3600.0
 
 
 def _noop_status(_msg: str | dict[str, Any]) -> None:
@@ -119,6 +124,7 @@ class HeartbeatLoop:
         self._maintenance_interval_cycles = self._resolve_maintenance_interval(
             maintenance_interval_cycles,
         )
+        self._maintenance_interval_seconds = self._resolve_maintenance_seconds()
 
     @staticmethod
     def _resolve_maintenance_interval(explicit: int | None) -> int:
@@ -142,6 +148,22 @@ class HeartbeatLoop:
                     _DEFAULT_MAINTENANCE_INTERVAL_CYCLES,
                 )
         return _DEFAULT_MAINTENANCE_INTERVAL_CYCLES
+
+    @staticmethod
+    def _resolve_maintenance_seconds() -> float:
+        """Resolve the time-based maintenance cadence from env → default."""
+        raw = os.environ.get(_MAINTENANCE_SECONDS_ENV, "").strip()
+        if raw:
+            try:
+                return max(0.0, float(raw))
+            except ValueError:
+                _LOG.warning(
+                    "invalid %s=%r; falling back to default %.0fs",
+                    _MAINTENANCE_SECONDS_ENV,
+                    raw,
+                    _DEFAULT_MAINTENANCE_INTERVAL_SECONDS,
+                )
+        return _DEFAULT_MAINTENANCE_INTERVAL_SECONDS
 
     # -- public lifecycle -------------------------------------------------
 
@@ -222,20 +244,31 @@ class HeartbeatLoop:
         phase loop inside :meth:`_run_cycle` no longer short-circuits on
         ``stop`` — that used to leave the note half-processed, which
         defeats the point of graceful shutdown.
+
+        Maintenance fires on whichever trigger hits first: cycle count OR
+        wall-clock time. The time-based trigger guarantees idle daemons
+        still truncate WAL and run retention — the cycle trigger alone
+        would starve a quiet deployment indefinitely.
         """
         cycles_since_maintenance = 0
+        last_maintenance_monotonic = time.monotonic()
         while not self._stop_event.is_set():
             note = queue.dequeue()
             if note is None:
                 await self._sleep_interruptible(self._poll_interval_s)
-                continue
-            await self._run_cycle(queue, note)
-            cycles_since_maintenance += 1
-            if (
+            else:
+                await self._run_cycle(queue, note)
+                cycles_since_maintenance += 1
+
+            elapsed = time.monotonic() - last_maintenance_monotonic
+            cycle_trigger = (
                 self._maintenance_interval_cycles > 0
                 and cycles_since_maintenance >= self._maintenance_interval_cycles
-            ):
+            )
+            time_trigger = elapsed >= self._maintenance_interval_seconds
+            if cycle_trigger or time_trigger:
                 cycles_since_maintenance = 0
+                last_maintenance_monotonic = time.monotonic()
                 self._run_maintenance(queue)
 
     def _run_maintenance(self, queue: StickyQueue) -> None:
@@ -258,9 +291,7 @@ class HeartbeatLoop:
             retention_days = 0
         try:
             reclaimed = queue.reclaim_stale()
-            stats = queue._db.maintenance(  # pyright: ignore[reportPrivateUsage]
-                retention_days=retention_days,
-            )
+            stats = queue.maintenance(retention_days=retention_days)
             payload: dict[str, Any] = {
                 "event": "heartbeat.maintenance",
                 "reclaimed": reclaimed,

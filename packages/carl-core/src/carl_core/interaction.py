@@ -296,22 +296,7 @@ class InteractionChain:
 
 _REDACTED = "<redacted>"
 
-# Keys whose *name* implies the value is a secret. Matches ``errors._SENSITIVE_TOKENS``
-# so redaction is consistent across ``CARLError.to_dict`` and ``Step`` serialization.
-_SENSITIVE_NAME_TOKENS: tuple[str, ...] = (
-    "key",
-    "token",
-    "secret",
-    "password",
-    "authorization",
-    "bearer",
-)
-
-
-def _is_sensitive_key(name: Any) -> bool:
-    """Return True when *name* looks like a secret-bearing field."""
-    lowered = str(name).lower()
-    return any(tok in lowered for tok in _SENSITIVE_NAME_TOKENS)
+from carl_core.errors import _is_sensitive as _is_sensitive_key
 
 
 # Literal-secret shapes worth scrubbing from free-form strings. Order matters:
@@ -344,6 +329,12 @@ _SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+# Cheap sentinel probe — any secret shape in _SECRET_PATTERNS contains at least
+# one of these substrings. Scanning for them in C via `in` is ~100x faster than
+# running five regex .sub() calls on a string that doesn't contain any secret.
+_SECRET_SENTINELS: tuple[str, ...] = ("sk-", "hf_", "0x", "ey")
+
+
 def _scrub_secrets(text: str) -> str:
     """Replace literal secret shapes in *text* with a redacted preview.
 
@@ -351,7 +342,7 @@ def _scrub_secrets(text: str) -> str:
     ``"sk-ant"``, ``"0x742d"``) are kept as a debug aid — enough to
     confirm the shape that was found without leaking the credential.
     """
-    if not text:
+    if len(text) < 20 or not any(s in text for s in _SECRET_SENTINELS):
         return text
 
     def _sub(match: "re.Match[str]") -> str:

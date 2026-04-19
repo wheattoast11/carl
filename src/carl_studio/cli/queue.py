@@ -111,10 +111,7 @@ def queue_list(
 def queue_status() -> None:
     """Show bucket counts by status."""
     c = get_console()
-    notes = StickyQueue(LocalDB()).status(limit=500)
-    buckets: dict[str, int] = {s: 0 for s in _VALID_STATUSES}
-    for n in notes:
-        buckets[n.status] = buckets.get(n.status, 0) + 1
+    buckets = StickyQueue(LocalDB()).counts_by_status()
 
     c.header("Queue status")
     for key in _VALID_STATUSES:
@@ -139,18 +136,9 @@ def queue_clear(
 ) -> None:
     """Archive completed notes (safe) or every non-archived note (``--all``)."""
     c = get_console()
-    q = StickyQueue(LocalDB())
-
-    if done_only:
-        targets = q.status(limit=10_000, status="done")
-    else:
-        targets = [n for n in q.status(limit=10_000) if n.status != "archived"]
-
-    for n in targets:
-        q.archive(n.id)
-
+    n = StickyQueue(LocalDB()).archive_where(only_done=done_only)
     label = "done" if done_only else "non-archived"
-    c.ok(f"archived {len(targets)} {label} note(s)")
+    c.ok(f"archived {n} {label} note(s)")
 
 
 @queue_app.command("reclaim")

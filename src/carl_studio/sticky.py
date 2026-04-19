@@ -59,11 +59,13 @@ class StickyQueue:
 
     @contextmanager
     def _conn(self) -> Generator[sqlite3.Connection, None, None]:
-        """Thin wrapper around ``LocalDB._connect()`` for local scoping."""
-        # LocalDB intentionally exposes _connect as the shared SQLite handle;
-        # we isolate the access here so callers in this module read naturally.
-        with self._db._connect() as conn:  # pyright: ignore[reportPrivateUsage]
+        """Thin wrapper around ``LocalDB.connect()`` for local scoping."""
+        with self._db.connect() as conn:
             yield conn
+
+    def maintenance(self, *, retention_days: int = 30, vacuum: bool = False) -> dict[str, Any]:
+        """Delegate to ``LocalDB.maintenance`` without leaking ``_db`` to callers."""
+        return self._db.maintenance(retention_days=retention_days, vacuum=vacuum)
 
     def append(
         self,
@@ -215,6 +217,43 @@ class StickyQueue:
             )
             conn.commit()
             return int(cursor.rowcount)
+
+    def archive_where(self, *, only_done: bool = True) -> int:
+        """Archive notes in a single UPDATE.
+
+        ``only_done=True`` (default) archives just ``status='done'`` rows;
+        ``only_done=False`` archives every non-archived row. Replaces the
+        row-by-row ``for n in notes: q.archive(n.id)`` pattern that was
+        O(n) in locks + commits.
+        """
+        with self._conn() as conn:
+            if only_done:
+                cursor = conn.execute(
+                    "UPDATE sticky_notes SET status = 'archived' WHERE status = 'done'",
+                )
+            else:
+                cursor = conn.execute(
+                    "UPDATE sticky_notes SET status = 'archived' WHERE status != 'archived'",
+                )
+            conn.commit()
+            return int(cursor.rowcount)
+
+    def counts_by_status(self) -> dict[str, int]:
+        """Return ``{status: count}`` via a single ``GROUP BY`` query.
+
+        Used by ``carl queue status`` and ``carl doctor`` — avoids
+        materializing every row just to tally bucket sizes.
+        """
+        buckets: dict[str, int] = dict.fromkeys(
+            ("queued", "processing", "done", "archived"), 0
+        )
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT status, COUNT(*) FROM sticky_notes GROUP BY status"
+            ).fetchall()
+        for status_value, count in rows:
+            buckets[str(status_value)] = int(count)
+        return buckets
 
     def oldest_processing_age_seconds(self) -> float | None:
         """Return age (seconds) of the oldest ``processing`` note, or ``None``.
