@@ -105,6 +105,21 @@ CREATE TABLE IF NOT EXISTS contracts (
     envelope TEXT,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
 );
+
+CREATE TABLE IF NOT EXISTS sticky_notes (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued'
+        CHECK (status IN ('queued','processing','done','archived')),
+    priority INTEGER NOT NULL DEFAULT 5,
+    session_id TEXT,
+    jit_context TEXT,
+    result TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    started_at TEXT,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_sticky_status ON sticky_notes (status, priority DESC, created_at);
 """
 
 

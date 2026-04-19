@@ -36,6 +36,8 @@ class ActionType(str, Enum):
     CHECKPOINT = "checkpoint"         # trainer checkpoint / model save
     MEMORY_READ = "memory_read"       # memory recall (WORKING/LONG retrieval)
     MEMORY_WRITE = "memory_write"     # memory commit (write to any layer)
+    HEARTBEAT_CYCLE = "heartbeat_cycle"  # full sticky-note cycle boundary (start/end)
+    STICKY_NOTE = "sticky_note"       # note append / dequeue / status transition
 
 
 def _utcnow() -> datetime:
