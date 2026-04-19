@@ -16,6 +16,7 @@ import shlex
 import shutil
 import statistics
 import subprocess
+import sys
 import tempfile
 import time
 from typing import Any
@@ -301,7 +302,7 @@ class EvalSandbox:
                 with open(fpath, "w") as f:
                     f.write(code)
                 result = subprocess.run(
-                    ["python", fpath],
+                    [sys.executable, fpath],
                     capture_output=True,
                     text=True,
                     timeout=10,

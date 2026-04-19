@@ -1401,6 +1401,19 @@ class CARLAgent:
             logger.debug("one-shot suggest_learnings call failed: %s", exc)
             return ""
 
+        # Attribute cost/tokens so auxiliary calls (suggest_learnings etc.)
+        # count against the budget guard. Without this, the max_budget_usd
+        # cap is bypassable via any non-streaming path that invokes
+        # _one_shot_text.
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            try:
+                self._total_cost_usd += _compute_turn_cost(usage, self._model)
+                self._total_input_tokens += getattr(usage, "input_tokens", 0) or 0
+                self._total_output_tokens += getattr(usage, "output_tokens", 0) or 0
+            except Exception as exc:
+                logger.debug("one-shot cost attribution failed: %s", exc)
+
         # Best-effort text extraction across SDK shapes.
         content = getattr(response, "content", None) or []
         texts: list[str] = []
@@ -1967,6 +1980,12 @@ class CARLAgent:
                 pass
 
         cmd = ["carl", command, *stringified]
+        # Scrub the subprocess environment to prevent credential exfiltration
+        # by a model-invoked `carl` subcommand. The `carl` binary only needs
+        # PATH/HOME/LANG/USER/SHELL/LC_ALL (all in _SAFE_ENV_ALLOWLIST); it
+        # must NOT inherit ANTHROPIC_API_KEY, HF_TOKEN, OPENAI_API_KEY,
+        # OPENROUTER_API_KEY, CARL_WALLET_PASSPHRASE, etc. Parity with
+        # _tool_run (line ~1775) which already scrubs for run_analysis.
         try:
             proc = subprocess.run(
                 cmd,
@@ -1974,7 +1993,7 @@ class CARLAgent:
                 text=True,
                 timeout=timeout_s,
                 cwd=self._workdir,
-                env=os.environ.copy(),
+                env=_scrubbed_subprocess_env(),
             )
         except subprocess.TimeoutExpired:
             chain = self._get_chain()

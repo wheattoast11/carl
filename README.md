@@ -115,7 +115,7 @@ Run `carl start --inventory` for the full installed command map, or `carl flow -
 - **`carl-core`** — primitive layer. Typed errors, retry/backoff, safepath sandboxing, content hashing, tier gating, coherence math, interaction chains. Zero training deps.
 - **`carl-studio`** — the CLI, agent loop, training pipeline, MCP server, camp client, eval sandbox. Everything above builds on `carl-core`.
 
-`carl-core` is installed alongside `carl-studio`; public callers should import from `carl_core.*` rather than reach into `carl_studio.primitives`.
+`carl-core` is installed alongside `carl-studio`; public callers import from `carl_core.*` directly. The legacy `carl_studio.primitives` shim was removed after v0.5.0.
 
 ## Error contract
 

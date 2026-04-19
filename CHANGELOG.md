@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed
+
+- `carl_studio.primitives` compatibility shim. Originally added in 0.4.0 to bridge the `carl_core` extraction and marked for v0.5.0 removal, the shim had zero in-tree consumers remaining. Downstream callers must import from `carl_core.*` directly (e.g. `from carl_core import CoherenceProbe`, `from carl_core.errors import CARLError`, `from carl_core.interaction import InteractionChain`). The `DeprecationWarning` stub is gone; `import carl_studio.primitives` now raises `ModuleNotFoundError`. Tracks SIMP-001.
+
 ## [0.4.1] — 2026-04-18
 
 Security + correctness hotfix on top of 0.4.0. Driven by an ultrareview pass
@@ -185,7 +191,7 @@ coherence rewards layer on top regardless of backend.
 
 ### Migration notes
 
-- `from carl_studio.primitives import X` still works via shim, but prefer `from carl_core.X import ...`.
+- `from carl_studio.primitives import X` still works via shim in 0.4.x, but prefer `from carl_core.X import ...`. (The shim is removed in the next release — see the Unreleased section.)
 - `carl lab chat` removed in 0.3.0; use `carl lab repl` or `carl chat`.
 - First-run wizard: `carl init` walks through signup + extras + consent + project in under a minute.
 

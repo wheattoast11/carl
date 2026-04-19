@@ -46,13 +46,18 @@ class AgentLog:
     details: dict = field(default_factory=dict)
 
 
-class CARLAgent:
+class AutonomyAgent:
     """Autonomous agent loop. PAID tier only.
 
     7-state FSM: IDLE -> OBSERVE -> HYPOTHESIZE -> EXECUTE -> GATE -> PROMOTE -> SHADOW
 
     Each state handler returns the next state. The tick() method
     validates transitions and logs state changes.
+
+    Not to be confused with :class:`carl_studio.chat_agent.CARLAgent`, which
+    is the Anthropic-backed interactive chat loop used by all CLI paths.
+    ``AutonomyAgent`` is the background autonomy FSM gated behind the
+    experiment feature flag.
     """
 
     def __init__(self, scheduler: Scheduler | None = None):

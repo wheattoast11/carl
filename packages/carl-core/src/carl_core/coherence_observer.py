@@ -16,7 +16,7 @@ a metrics window to Claude for interpretation. Returns structured assessments
 of coherence health.
 
 Usage:
-    from carl_studio.primitives import CoherenceProbe, CoherenceObserver
+    from carl_core import CoherenceProbe, CoherenceObserver
 
     probe = CoherenceProbe(vocab_size=128000)
     observer = CoherenceObserver(api_key="sk-ant-...", observe_every=50)

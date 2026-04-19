@@ -274,7 +274,12 @@ class CARLSettings(BaseSettings):
         target.parent.mkdir(parents=True, exist_ok=True)
 
         data = self.model_dump(
-            exclude={"hf_token", "anthropic_api_key"},  # Never persist secrets
+            exclude={
+                "hf_token",
+                "anthropic_api_key",
+                "openrouter_api_key",
+                "openai_api_key",
+            },  # Never persist secrets
             exclude_defaults=False,
             mode="json",
         )

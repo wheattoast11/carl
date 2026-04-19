@@ -26,3 +26,7 @@ env/
 * 3.json
 * 2.md
 * 3.md
+
+# Ad-hoc scratch / patch scripts at repo root (do not commit)
+/fix_*.py
+/patch_*.py

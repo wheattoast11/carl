@@ -31,7 +31,7 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
   `errors`, `retry`, `safepath`, `hashing`, `tier`, coherence math, interaction
   chain. `py.typed` marker published; pyright needs the editable install.
 - `src/carl_studio/__init__.py` keeps top-level imports light and lazy-loads heavy modules.
-- `src/carl_studio/primitives/` — thin shim re-exporting from `carl_core` for back-compat. All in-tree consumers migrated; emits `DeprecationWarning`; slated for removal in v0.5.0.
+- `src/carl_studio/primitives/` — removed. All in-tree consumers migrated to `carl_core.*` imports. Downstream callers must import from `carl_core` directly.
 - `src/carl_studio/freshness.py` — typed `FreshnessReport`/`FreshnessIssue` with stable issue codes under `carl.freshness.*`.
 - `src/carl_studio/types/config.py` — Pydantic training config surface.
 - `src/carl_studio/training/` — trainer, pipeline, rewards, cascade.
@@ -127,8 +127,8 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
   input snapshot, output, success flag, and duration.
 - `carl_core` is the primitive boundary: import from `carl_core.errors`,
   `carl_core.retry`, `carl_core.safepath`, `carl_core.hashing`,
-  `carl_core.tier`, and `carl_core.interaction` rather than reaching into
-  `carl_studio.primitives` (which is a shim).
+  `carl_core.tier`, and `carl_core.interaction` directly. The legacy
+  `carl_studio.primitives` shim has been removed (was marked for v0.5.0).
 - `py.typed` marker ships on `carl-core`. Pyright will not see the package
   unless it has the editable install (`pip install -e packages/carl-core`),
   which `pip install -e ".[dev]"` handles transitively via the workspace.

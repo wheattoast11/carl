@@ -368,8 +368,8 @@ class SendItPipeline:
             )
             return run.phase == RunPhase.COMPLETE
         except Exception as e:
-            logger.warning("Eval gate failed: %s. Falling back to completion check.", e)
-            return run.phase == RunPhase.COMPLETE
+            logger.warning("Eval gate failed: %s. Treating as FAIL.", e)
+            return False
 
     async def _push_model(self, run: TrainingRun) -> None:
         """Push model to Hub if output_repo is configured."""

@@ -105,7 +105,7 @@ class CascadeRewardManager:
             self._gate_fired = False
             self._gate_fired_at = None
 
-        self.warmup_steps = warmup_steps
+        self.warmup_steps = max(1, warmup_steps)
         self._step: int = 0
 
     def _compute_adaptive_threshold(self) -> float:

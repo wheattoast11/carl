@@ -21,7 +21,6 @@ The foundational layer of the CARL stack. Pure coherence math + interaction trac
 
 ## Depends on us
 
-- `carl_studio.primitives` — thin shim re-exporting our symbols for back-compat
 - `carl_studio.training.*` — rewards, probes, trace callback
 - `carl_studio.eval.runner` — evaluation gating
 - `carl_studio.observe.*` — training dashboard
