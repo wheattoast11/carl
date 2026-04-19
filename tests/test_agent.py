@@ -112,9 +112,39 @@ class TestCARLAgentToolDispatch:
         assert "a.txt" in result
         assert "b.csv" in result
 
-    def test_tool_list_files_not_dir(self, agent: CARLAgent) -> None:
-        result = agent._dispatch_tool("list_files", {"path": "/nonexistent"})
+    def test_tool_list_files_not_dir(self, agent: CARLAgent, tmp_path: Path) -> None:
+        # list_files is sandboxed — use a path inside the workdir that points
+        # at a non-existent subdirectory so we hit the "not a directory"
+        # branch instead of the sandbox-escape branch.
+        missing = tmp_path / "nowhere"
+        result = agent._dispatch_tool("list_files", {"path": str(missing)})
         assert "not a directory" in result.lower()
+
+    def test_tool_list_files_rejects_path_outside_workdir(
+        self, agent: CARLAgent,
+    ) -> None:
+        """list_files must refuse to enumerate paths outside the sandbox."""
+        result = agent._dispatch_tool("list_files", {"path": "/"})
+        assert "blocked" in result.lower()
+        assert "outside the working directory" in result.lower()
+
+    def test_tool_list_files_rejects_absolute_glob_pattern(
+        self, agent: CARLAgent, tmp_path: Path,
+    ) -> None:
+        """A pattern that starts with '/' is rejected."""
+        result = agent._dispatch_tool(
+            "list_files", {"path": str(tmp_path), "pattern": "/etc/*"},
+        )
+        assert "blocked" in result.lower()
+
+    def test_tool_list_files_rejects_traversal_pattern(
+        self, agent: CARLAgent, tmp_path: Path,
+    ) -> None:
+        """A pattern containing '..' is rejected."""
+        result = agent._dispatch_tool(
+            "list_files", {"path": str(tmp_path), "pattern": "../*"},
+        )
+        assert "blocked" in result.lower()
 
     def test_tool_run_analysis(self, agent: CARLAgent) -> None:
         result = agent._dispatch_tool("run_analysis", {"code": "print(2 + 2)"})

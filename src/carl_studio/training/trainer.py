@@ -221,7 +221,7 @@ class CARLTrainer:
         )
 
         consecutive_failures = 0
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout_s
 
         while True:
@@ -241,34 +241,14 @@ class CARLTrainer:
 
             try:
                 status = await async_retry(_check, policy=policy)
-            except policy.retryable as exc:
-                consecutive_failures += 1
-                logger.warning(
-                    "Status check failed (%d/%d consecutive): %s",
-                    consecutive_failures,
-                    max_consecutive_failures,
-                    exc,
-                )
-                if consecutive_failures >= max_consecutive_failures:
-                    raise CARLError(
-                        f"watch exhausted after {consecutive_failures} consecutive failures",
-                        code="carl.watch_exhausted",
-                        context={
-                            "job_id": self.run.hub_job_id,
-                            "consecutive_failures": consecutive_failures,
-                            "last_error_type": type(exc).__name__,
-                            "last_error_message": str(exc),
-                        },
-                        cause=exc,
-                    ) from exc
-                await asyncio.sleep(min(interval_s, max(0.0, deadline - loop.time())))
-                continue
             except CARLError:
                 raise
             except Exception as exc:
+                retryable = isinstance(exc, policy.retryable)
                 consecutive_failures += 1
                 logger.warning(
-                    "Status check raised non-retryable (%d/%d consecutive): %s",
+                    "Status check %s (%d/%d consecutive): %s",
+                    "failed" if retryable else "raised non-retryable",
                     consecutive_failures,
                     max_consecutive_failures,
                     exc,
@@ -282,6 +262,7 @@ class CARLTrainer:
                             "consecutive_failures": consecutive_failures,
                             "last_error_type": type(exc).__name__,
                             "last_error_message": str(exc),
+                            "retryable": retryable,
                         },
                         cause=exc,
                     ) from exc
@@ -793,6 +774,19 @@ class CARLTrainer:
         raised — masking the caller's original exception would be worse
         than losing the crash-state snapshot.
         """
+        def _safe_capture(label: str, fn: Any) -> Any:
+            """Call fn() and return its result; log and return None on any failure."""
+            try:
+                return fn()
+            except Exception as cap_exc:
+                logger.debug("checkpoint: could not capture %s: %s", label, cap_exc)
+                return None
+
+        def _numpy_rng() -> Any:
+            import numpy as _np
+
+            return _np.random.get_state()
+
         try:
             import random as _random
             from datetime import datetime, timezone
@@ -813,43 +807,19 @@ class CARLTrainer:
                 if isinstance(log_history, list):
                     metrics = list(log_history[-50:])
 
-            optimizer_state = None
-            try:
-                opt = getattr(trainer, "optimizer", None)
-                if opt is not None and hasattr(opt, "state_dict"):
-                    optimizer_state = opt.state_dict()
-            except Exception as opt_exc:
-                logger.warning("Failed to snapshot optimizer state: %s", opt_exc)
-
-            scheduler_state = None
-            try:
-                sched = getattr(trainer, "lr_scheduler", None)
-                if sched is not None and hasattr(sched, "state_dict"):
-                    scheduler_state = sched.state_dict()
-            except Exception as sched_exc:
-                logger.warning("Failed to snapshot scheduler state: %s", sched_exc)
-
-            rng_state: dict[str, Any] = {}
-            try:
-                rng_state["torch"] = torch.get_rng_state()
-            except Exception as rng_exc:
-                logger.debug("Could not capture torch RNG state: %s", rng_exc)
-            try:
-                rng_state["python"] = _random.getstate()
-            except Exception as rng_exc:
-                logger.debug("Could not capture python RNG state: %s", rng_exc)
-            try:
-                import numpy as _np
-
-                rng_state["numpy"] = _np.random.get_state()
-            except Exception as rng_exc:
-                logger.debug("Could not capture numpy RNG state: %s", rng_exc)
-
             payload = {
                 "step": step,
-                "optimizer_state_dict": optimizer_state,
-                "scheduler_state_dict": scheduler_state,
-                "rng_state": rng_state,
+                "optimizer_state_dict": _safe_capture(
+                    "optimizer", lambda: trainer.optimizer.state_dict()
+                ),
+                "scheduler_state_dict": _safe_capture(
+                    "scheduler", lambda: trainer.lr_scheduler.state_dict()
+                ),
+                "rng_state": {
+                    "torch": _safe_capture("torch_rng", lambda: torch.get_rng_state()),
+                    "python": _safe_capture("python_rng", lambda: _random.getstate()),
+                    "numpy": _safe_capture("numpy_rng", _numpy_rng),
+                },
                 "metrics": metrics,
                 "exception_type": type(exc).__name__,
                 "exception_message": str(exc),

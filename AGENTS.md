@@ -46,7 +46,7 @@ pytest --lf -q --tb=short
 - Run pytest from repo root. `tests/conftest.py` reads `src/carl_studio/__init__.py` via repo-relative path.
 - Pytest is configured with `importlib` import mode (in `pyproject.toml`) — tests under `packages/carl-core/tests/` and `tests/` both resolve without `__init__.py` collisions.
 - For fast feedback, run a single file or node ID first, then broaden if needed.
-- Test baseline: 1556 tests in `tests/` plus the `carl-core` suite under `packages/carl-core/tests/`.
+- Test baseline: 1864 tests passing across `tests/` + `packages/carl-core/tests/`.
 
 ## Lint and format
 ```bash

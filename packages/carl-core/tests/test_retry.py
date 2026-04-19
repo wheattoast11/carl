@@ -417,3 +417,138 @@ def test_circuit_breaker_exports_in_package() -> None:
     assert carl_core.retry is retry
     assert carl_core.async_retry is async_retry
     assert carl_core.poll is poll
+
+
+# ---- CircuitBreaker.tracked_exceptions ----------------------------------
+
+
+def test_breaker_ignores_untracked_exceptions() -> None:
+    """Breaker scoped to ValueError must not trip on TypeError bursts.
+
+    Programming bugs (AttributeError, TypeError, KeyError, ...) are
+    deterministic — gating them behind a breaker just delays the real
+    traceback. A breaker configured with ``tracked_exceptions=(ValueError,)``
+    should count ValueErrors and let everything else propagate untouched.
+    """
+    clock = _FakeClock()
+    cb = CircuitBreaker(
+        failure_threshold=3,
+        reset_s=10.0,
+        clock=clock,
+        tracked_exceptions=(ValueError,),
+    )
+
+    # Ten TypeErrors in a row — well past the threshold — must leave the
+    # breaker CLOSED and the failure counter at zero.
+    for i in range(10):
+        with pytest.raises(TypeError):
+            with cb:
+                raise TypeError(f"programming bug {i}")
+
+    assert cb.state == CircuitState.CLOSED
+    assert cb._consecutive_failures == 0
+
+
+def test_breaker_counts_tracked_exceptions() -> None:
+    """The tracked exception family still trips the breaker."""
+    clock = _FakeClock()
+    cb = CircuitBreaker(
+        failure_threshold=5,
+        reset_s=10.0,
+        clock=clock,
+        tracked_exceptions=(ValueError,),
+    )
+
+    for i in range(4):
+        with pytest.raises(ValueError):
+            with cb:
+                raise ValueError(f"tracked {i}")
+        assert cb.state == CircuitState.CLOSED
+
+    # Fifth failure opens the breaker.
+    with pytest.raises(ValueError):
+        with cb:
+            raise ValueError("tracked 4")
+    assert cb.state == CircuitState.OPEN
+
+
+def test_breaker_mixed_tracked_and_untracked() -> None:
+    """Untracked exceptions interleaved with tracked ones don't affect the count."""
+    clock = _FakeClock()
+    cb = CircuitBreaker(
+        failure_threshold=3,
+        reset_s=10.0,
+        clock=clock,
+        tracked_exceptions=(ConnectionError,),
+    )
+
+    with pytest.raises(ConnectionError):
+        with cb:
+            raise ConnectionError("net 1")
+    assert cb._consecutive_failures == 1
+
+    # Untracked exception must not change the counter.
+    with pytest.raises(AttributeError):
+        with cb:
+            raise AttributeError("bug")
+    assert cb._consecutive_failures == 1
+    assert cb.state == CircuitState.CLOSED
+
+    with pytest.raises(ConnectionError):
+        with cb:
+            raise ConnectionError("net 2")
+    with pytest.raises(ConnectionError):
+        with cb:
+            raise ConnectionError("net 3")
+    assert cb.state == CircuitState.OPEN
+
+
+def test_default_behavior_unchanged() -> None:
+    """Back-compat: no tracked_exceptions arg → every Exception counts."""
+    clock = _FakeClock()
+    cb = CircuitBreaker(failure_threshold=3, reset_s=10.0, clock=clock)
+
+    # These are all bare Exception subclasses; old behaviour counts them all.
+    with pytest.raises(RuntimeError):
+        with cb:
+            raise RuntimeError("r")
+    with pytest.raises(ValueError):
+        with cb:
+            raise ValueError("v")
+    assert cb.state == CircuitState.CLOSED
+    assert cb._consecutive_failures == 2
+
+    with pytest.raises(TypeError):
+        with cb:
+            raise TypeError("t")
+    # Third Exception-subclass failure trips the default breaker.
+    assert cb.state == CircuitState.OPEN
+
+
+def test_breaker_success_resets_after_untracked_errors() -> None:
+    """A clean exit still resets the counter even if untracked errors preceded it."""
+    clock = _FakeClock()
+    cb = CircuitBreaker(
+        failure_threshold=2,
+        reset_s=10.0,
+        clock=clock,
+        tracked_exceptions=(ConnectionError,),
+    )
+
+    with pytest.raises(ConnectionError):
+        with cb:
+            raise ConnectionError("net 1")
+    assert cb._consecutive_failures == 1
+
+    # Untracked exceptions don't increment the counter but also don't clear
+    # it — the counter still reflects the real failure that preceded them.
+    with pytest.raises(TypeError):
+        with cb:
+            raise TypeError("bug")
+    assert cb._consecutive_failures == 1
+
+    # A clean exit clears everything.
+    with cb:
+        pass
+    assert cb._consecutive_failures == 0
+    assert cb.state == CircuitState.CLOSED

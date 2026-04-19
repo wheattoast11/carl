@@ -14,11 +14,11 @@ from .protocol import AdapterError, BackendJob, BackendStatus
 from ._common import (
     JobState,
     load_state,
+    logs_common,
     new_run_id,
     now_iso,
-    refresh_pid_status,
     save_state,
-    tail_log,
+    status_common,
 )
 
 
@@ -61,17 +61,10 @@ class TRLAdapter:
         return state.to_job()
 
     def status(self, run_id: str) -> BackendJob:
-        state = load_state(self.name, run_id)
-        state = refresh_pid_status(state)
-        save_state(state)
-        return state.to_job()
+        return status_common(self.name, run_id)
 
     def logs(self, run_id: str, *, tail: int = 100) -> list[str]:
-        state = load_state(self.name, run_id)
-        return tail_log(
-            None if state.log_path is None else __import__("pathlib").Path(state.log_path),
-            tail,
-        )
+        return logs_common(self.name, run_id, tail=tail)
 
     def cancel(self, run_id: str) -> bool:
         """Mark the run canceled. In-process cancellation of CARLTrainer

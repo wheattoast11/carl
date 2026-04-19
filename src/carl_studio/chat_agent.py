@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -84,6 +85,51 @@ _TOOL_TIMEOUTS_S: dict[str, float] = {
 _FORBIDDEN_SHELL_METAS: tuple[str, ...] = (
     ";", "&", "|", ">", "<", "`", "$(", "\n", "\r",
 )
+
+# Environment keys that the model should NEVER inherit via run_analysis. Any
+# env var whose UPPERCASED name contains one of these substrings is stripped
+# before spawning the subprocess. Explicit whitelist entries below survive.
+_SENSITIVE_ENV_SUBSTRINGS: tuple[str, ...] = (
+    "KEY",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSPHRASE",
+    "AUTHORIZATION",
+    "BEARER",
+    "API_KEY",
+)
+
+# Keys that always survive the sensitive-env scrub. They are infrastructure
+# plumbing (PATH, HOME, LANG, ...) the child process needs to function.
+_SAFE_ENV_ALLOWLIST: frozenset[str] = frozenset({
+    "PATH", "HOME", "LANG", "PWD", "TMPDIR", "USER", "SHELL", "LC_ALL",
+})
+
+
+def _is_sensitive_env_key(key: str) -> bool:
+    """Return True when ``key`` looks like a credential/secret env var.
+
+    Membership in the explicit allowlist wins; otherwise any substring match
+    in :data:`_SENSITIVE_ENV_SUBSTRINGS` marks the key as sensitive.
+    """
+    if not key:
+        return False
+    if key in _SAFE_ENV_ALLOWLIST:
+        return False
+    upper = key.upper()
+    return any(marker in upper for marker in _SENSITIVE_ENV_SUBSTRINGS)
+
+
+def _scrubbed_subprocess_env() -> dict[str, str]:
+    """Copy of ``os.environ`` with credentials stripped.
+
+    Preserves :data:`_SAFE_ENV_ALLOWLIST` keys and drops anything that
+    :func:`_is_sensitive_env_key` flags. Never mutates ``os.environ``.
+    """
+    return {
+        k: v for k, v in os.environ.items() if not _is_sensitive_env_key(k)
+    }
 
 # Conservative max output tokens assumed for the budget pre-check.
 _BUDGET_PRECHECK_MAX_OUTPUT_TOKENS = 64000
@@ -174,6 +220,9 @@ class SessionStore:
         self._dir = Path(sessions_dir) if sessions_dir else _SESSIONS_DIR
         self._dir.mkdir(parents=True, exist_ok=True)
         self._quarantine_dir = self._dir / _QUARANTINE_SUBDIR
+        # Stashed by _quarantine_path so load_session can surface a visible
+        # warning to the user. None means "load did not quarantine".
+        self._last_quarantine_dest: Path | None = None
 
     # -- helpers -----------------------------------------------------------
 
@@ -181,16 +230,22 @@ class SessionStore:
         """Move ``path`` into the quarantine directory. Returns the destination.
 
         Never raises — quarantine is best-effort. On OS failure we log a
-        warning and the caller still sees a None-load result.
+        warning and the caller still sees a None-load result. The last
+        quarantine destination is stashed on the instance so
+        :meth:`CARLAgent.load_session` can surface it to the UI.
         """
         try:
             self._quarantine_dir.mkdir(parents=True, exist_ok=True)
             dest = self._quarantine_dir / f"{session_id}-{_quarantine_stamp()}.json"
             shutil.move(str(path), str(dest))
-            logger.warning("Quarantined corrupted session %s -> %s", session_id, dest)
+            logger.warning(
+                "Quarantined corrupted session %s -> %s", session_id, dest,
+            )
+            self._last_quarantine_dest = dest
             return dest
         except OSError as exc:
             logger.warning("Failed to quarantine %s: %s", path, exc)
+            self._last_quarantine_dest = path
             return path
 
     # -- public API --------------------------------------------------------
@@ -219,8 +274,10 @@ class SessionStore:
 
         Returns ``None`` when the file is missing, malformed, or of an
         unsupported schema version. Corrupted files are moved to the
-        quarantine subdirectory.
+        quarantine subdirectory; the destination path is stashed on
+        :attr:`_last_quarantine_dest` for the caller to surface.
         """
+        self._last_quarantine_dest = None
         path = self._dir / f"{session_id}.json"
         if not path.is_file():
             return None
@@ -571,7 +628,13 @@ class CARLAgent:
       - **Streaming resilience**: partial state preserved on mid-stream errors
       - **Tool timeouts**: per-tool deadlines; hook exceptions never kill loop
       - **Arg validation**: malformed tool args become typed error results
+      - **Knowledge bound**: LRU cap on the in-memory knowledge list
+      - **DENY terminal**: all-tools-denied turns fail fast after a few rounds
     """
+
+    # Class defaults — overridable via constructor kwargs.
+    _KNOWLEDGE_MAX_CHUNKS: int = 2000
+    _MAX_CONSECUTIVE_ALL_DENIED: int = 5
 
     def __init__(
         self,
@@ -586,6 +649,7 @@ class CARLAgent:
         session_id: str = "",
         memory_store: MemoryStore | None = None,
         constitution: Constitution | None = None,
+        max_knowledge_chunks: int | None = None,
         _client: Any | None = None,
     ) -> None:
         # -- Resolve model from settings when not explicitly passed ----------
@@ -632,6 +696,28 @@ class CARLAgent:
         self._messages: list[dict[str, Any]] = []
         self._knowledge: list[dict[str, Any]] = []  # {text, source, words}
         self._token_count = 0
+
+        # Knowledge chunk cap — overridable per-instance, falls back to class.
+        if max_knowledge_chunks is not None:
+            if max_knowledge_chunks < 1:
+                raise ValueError(
+                    "max_knowledge_chunks must be >= 1 when provided",
+                )
+            self._max_knowledge_chunks: int = max_knowledge_chunks
+        else:
+            self._max_knowledge_chunks = self._KNOWLEDGE_MAX_CHUNKS
+        # Fire the eviction warning at most once per agent instance to avoid
+        # log spam when the knowledge base is consistently full.
+        self._knowledge_evicted_warned: bool = False
+
+        # Terminal guard: if the model keeps requesting tools that are all
+        # DENIED by the permission hook, break out after N consecutive turns.
+        self._consecutive_all_denied: int = 0
+
+        # Surfaced by load_session when the underlying file was corrupt and
+        # was rolled into the quarantine directory. Callers (CLI) read this
+        # flag to print a visible warning instead of silently starting fresh.
+        self._last_load_quarantined: bool = False
 
         # Cost tracking
         self._total_cost_usd = 0.0
@@ -967,6 +1053,9 @@ class CARLAgent:
 
             if not tool_use_blocks:
                 self._messages.append({"role": "assistant", "content": assistant_content})
+                # A turn that made no tool calls resets the all-denied counter:
+                # the model exited the reflexive retry loop on its own.
+                self._consecutive_all_denied = 0
                 yield AgentEvent(kind="done", content=f"${self._total_cost_usd:.4f}")
                 return
 
@@ -974,8 +1063,14 @@ class CARLAgent:
             self._messages.append({"role": "assistant", "content": assistant_content})
 
             tool_results: list[dict[str, Any]] = []
+            # Track whether this turn's tool calls were all denied. When 100%
+            # of tool_use blocks hit DENY for enough turns in a row, terminate
+            # so a misbehaving model + restrictive policy cannot loop forever.
+            turn_denied = 0
+            turn_attempted = 0
             for block in tool_use_blocks:
                 tool_input = block.input if isinstance(block.input, dict) else {}
+                turn_attempted += 1
 
                 # Pre-tool hook — never let an exception kill the loop.
                 permission: ToolPermission = ToolPermission.ALLOW
@@ -1002,6 +1097,7 @@ class CARLAgent:
                         "content": result,
                         "is_error": True,
                     })
+                    turn_denied += 1
                     continue
 
                 # Validate args against the tool schema.
@@ -1051,6 +1147,62 @@ class CARLAgent:
                         )
 
             self._messages.append({"role": "user", "content": tool_results})
+
+            # ------- Terminal all-denied guard ------------------------------
+            # When every tool in this turn was blocked by the permission hook,
+            # bump the counter. Any allowed tool resets it. After N consecutive
+            # all-denied turns, terminate with a typed error so a misbehaving
+            # model + restrictive hook cannot retry forever.
+            if turn_attempted > 0 and turn_denied == turn_attempted:
+                self._consecutive_all_denied += 1
+            elif turn_attempted > 0:
+                self._consecutive_all_denied = 0
+
+            if self._consecutive_all_denied >= self._MAX_CONSECUTIVE_ALL_DENIED:
+                msg = (
+                    f"Terminating: permission policy denied every tool call "
+                    f"for {self._consecutive_all_denied} consecutive turns. "
+                    f"The model cannot make progress under the current hook."
+                )
+                try:
+                    from carl_core.errors import CARLError
+
+                    logger.warning(
+                        "all_tools_denied: %s",
+                        CARLError(msg, code="carl.all_tools_denied", context={
+                            "consecutive_turns": self._consecutive_all_denied,
+                            "limit": self._MAX_CONSECUTIVE_ALL_DENIED,
+                        }),
+                    )
+                except Exception:  # pragma: no cover — carl_core optional
+                    pass
+
+                # Record an InteractionChain step so the session trace shows
+                # the termination even when no downstream observer listens.
+                chain = self._get_chain()
+                if chain is not None:
+                    try:
+                        from carl_core.interaction import ActionType
+
+                        chain.record(
+                            ActionType.CLI_CMD,
+                            "agent.chat:all_tools_denied",
+                            input={
+                                "consecutive_turns": self._consecutive_all_denied,
+                                "limit": self._MAX_CONSECUTIVE_ALL_DENIED,
+                            },
+                            output={"terminated": True},
+                            success=False,
+                        )
+                    except Exception:
+                        pass
+
+                yield AgentEvent(
+                    kind="error",
+                    content=msg,
+                    code="carl.all_tools_denied",
+                )
+                return
 
             if getattr(response, "stop_reason", None) == "end_turn":
                 yield AgentEvent(kind="done", content=f"${self._total_cost_usd:.4f}")
@@ -1564,8 +1716,33 @@ class CARLAgent:
             })
             mod = getattr(c, "modality", "text")
             modalities[mod] = modalities.get(mod, 0) + 1
+        evicted = self._enforce_knowledge_cap()
         summary = ", ".join(f"{v} {k}" for k, v in sorted(modalities.items()))
-        return f"Ingested {len(chunks)} chunks from {path} ({summary})"
+        trailer = f" (evicted {evicted} oldest to cap {self._max_knowledge_chunks})" if evicted else ""
+        return f"Ingested {len(chunks)} chunks from {path} ({summary}){trailer}"
+
+    def _enforce_knowledge_cap(self) -> int:
+        """Evict oldest knowledge chunks until ``len <= max``. Returns evicted count.
+
+        Logs a single warning per agent instance on the first eviction so a
+        long-running session doesn't flood the log. The cap is intended as a
+        memory/O(n)-scan safety net, not as a correctness guarantee — callers
+        that need durable search should back the store with a vector DB.
+        """
+        cap = self._max_knowledge_chunks
+        excess = len(self._knowledge) - cap
+        if excess <= 0:
+            return 0
+        # Drop the oldest entries (front of the list is oldest by insertion).
+        del self._knowledge[:excess]
+        if not self._knowledge_evicted_warned:
+            logger.warning(
+                "CARLAgent knowledge cap reached (%d): evicted %d oldest chunk(s); "
+                "further evictions will be silent for this session.",
+                cap, excess,
+            )
+            self._knowledge_evicted_warned = True
+        return excess
 
     def _tool_query(self, question: str) -> str:
         if not self._knowledge:
@@ -1589,12 +1766,20 @@ class CARLAgent:
     def _tool_run(self, code: str) -> str:
         # TimeoutExpired here bubbles up to _dispatch_tool_safe which maps it
         # to a model-recoverable is_error tool_result. Do not swallow here.
+        #
+        # Use sys.executable so the subprocess matches the interpreter running
+        # CARL (the ``python`` binary on PATH may not exist, or may resolve to
+        # a different venv in CI sandboxes). Strip credential env vars so the
+        # model's code has no backchannel to exfiltrate ANTHROPIC_API_KEY,
+        # CARL_WALLET_PASSPHRASE, OPENAI_API_KEY, HF_TOKEN, etc.
+        env = _scrubbed_subprocess_env()
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         result = subprocess.run(
-            ["python", "-c", code],
+            [sys.executable, "-c", code],
             capture_output=True,
             timeout=_TOOL_TIMEOUTS_S["run_analysis"],
             cwd=self._workdir,
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            env=env,
         )
         stdout = result.stdout.decode(errors="replace")[:6000]
         stderr = result.stderr.decode(errors="replace")[:2000]
@@ -1603,12 +1788,18 @@ class CARLAgent:
         return f"Exit code {result.returncode}\nstdout:\n{stdout}\nstderr:\n{stderr}"
 
     def _resolve_safe_path(self, path: str) -> Path | None:
-        """Resolve path against workdir and reject traversal attempts."""
+        """Resolve path against workdir and reject traversal attempts.
+
+        Symlinks are rejected (``follow_symlinks=False``). The sandbox does
+        not model-own every inode in the workdir — users can drop a symlink
+        that points at ``/`` between resolve and open (TOCTOU). The model has
+        create_file capability, so it could plant such a link itself.
+        """
         try:
             from carl_core.safepath import PathEscape, safe_resolve
 
             try:
-                return safe_resolve(path, self._workdir, follow_symlinks=True)
+                return safe_resolve(path, self._workdir, follow_symlinks=False)
             except PathEscape:
                 return None
         except Exception:
@@ -1652,10 +1843,36 @@ class CARLAgent:
         return f"Frame set: {frame.domain}/{frame.function}/{frame.role}"
 
     def _tool_list(self, path: str, pattern: str) -> str:
-        p = Path(path)
-        if not p.is_dir():
+        # Route through the same sandbox guard as every other file tool.
+        # Without this, the model could enumerate arbitrary directories on
+        # the host (e.g. '/' or '/etc') outside the working directory.
+        resolved = self._resolve_safe_path(path or ".")
+        if resolved is None:
+            return f"Blocked: path '{path}' is outside the working directory."
+        if not resolved.is_dir():
             return f"Not a directory: {path}"
-        files = sorted(p.glob(pattern))[:50]
+        # Reject absolute globs / glob expressions that would escape the
+        # sandbox. Path.glob accepts a relative pattern; absolute patterns
+        # raise or ignore the anchor — forbid them upfront to be safe.
+        if pattern.startswith(("/", os.sep)) or ".." in pattern.split(os.sep):
+            return f"Blocked: pattern '{pattern}' is not a relative glob."
+        try:
+            files = sorted(resolved.glob(pattern))[:50]
+        except (OSError, ValueError) as exc:
+            return f"Blocked: invalid glob pattern '{pattern}': {exc}"
+        # Secondary defense: drop any match that somehow escaped the sandbox
+        # (symlinks resolved through safe_resolve cannot appear here, but
+        # glob may surface paths that contain them).
+        workdir = Path(self._workdir)
+        safe_files: list[Path] = []
+        for f in files:
+            try:
+                f_abs = f.resolve()
+            except OSError:
+                continue
+            if f_abs == workdir or str(f_abs).startswith(str(workdir) + os.sep):
+                safe_files.append(f)
+        files = safe_files
         if not files:
             return f"No files matching '{pattern}' in {path}"
         lines = []
@@ -1880,9 +2097,27 @@ class CARLAgent:
     def load_session(
         self, session_id: str, store: SessionStore | None = None
     ) -> bool:
-        """Load a saved session. Returns True if found."""
+        """Load a saved session.
+
+        Returns ``True`` when the session loaded successfully. Returns
+        ``False`` when it was missing, unreadable, or corrupt. When the
+        underlying file was corrupt and got quarantined, sets
+        ``self._last_load_quarantined = True`` so the caller can surface a
+        visible warning to the user.
+        """
+        # Reset the quarantine flag on every attempt so stale state from a
+        # previous load cannot leak through.
+        self._last_load_quarantined = False
+
         s = store or SessionStore()
         state = s.load(session_id)
+        # Whenever SessionStore quarantined during this load, capture the
+        # destination so the CLI can print a visible "corrupted, quarantined
+        # to ..., starting fresh" message. The store resets this flag at the
+        # top of every .load() call, so it reflects the current attempt only.
+        if getattr(s, "_last_quarantine_dest", None) is not None:
+            self._last_load_quarantined = True
+
         if state is None:
             return False
 
@@ -1893,6 +2128,11 @@ class CARLAgent:
         self._total_input_tokens = state.get("total_input_tokens", 0)
         self._total_output_tokens = state.get("total_output_tokens", 0)
         self._turn_count = state.get("turn_count", 0)
+
+        # A resumed session can carry more chunks than the current cap (the
+        # owner may have downsized max_knowledge_chunks) — trim aggressively
+        # so we don't blow the budget mid-turn.
+        self._enforce_knowledge_cap()
 
         frame_data = state.get("frame")
         if frame_data:

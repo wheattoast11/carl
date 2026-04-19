@@ -1,40 +1,39 @@
 """Tinker adapter.
 
 Thinking Machines' Tinker exposes a Python API for fine-tuning runs. The
-public API surface is still evolving; this adapter validates availability
-and translates carl.yaml into a Tinker-shaped dict, but raises a clear
-error from ``submit()`` pointing at the install+API docs rather than
-guessing at an unstable API.
+public API surface is still evolving — this adapter validates availability
+and translates ``carl.yaml`` into a Tinker-shaped dict, but ``submit()``
+deliberately raises a clear :class:`AdapterError` with code
+``carl.adapter.tinker_not_implemented`` rather than guessing at an
+unstable API.
 
-Once the Tinker API stabilizes, swap the ``NotImplementedError`` branch
-in ``submit()`` for a real call — translation + state machinery is
-already wired up.
+Scaffolding policy: we do NOT persist any stub state from ``submit()``.
+Persisting state that nobody can observe via ``status()``/``logs()`` (the
+run_id is never returned to the caller) creates zombie files and misleads
+operators. Once Tinker's API stabilizes, flip ``submit()`` to a real
+implementation — translation plumbing is already wired up and callers of
+``translate()`` continue to work.
 """
 
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 from typing import Any
 
-from .protocol import AdapterError, BackendJob, BackendStatus
+from .protocol import AdapterError, BackendJob
 from ._common import (
-    JobState,
-    cancel_pid,
-    load_state,
-    new_run_id,
-    now_iso,
-    refresh_pid_status,
-    save_state,
-    state_dir,
-    tail_log,
-    unavailable,
+    cancel_common,
+    logs_common,
+    require_str,
+    status_common,
 )
 
 
 _INSTALL_HINT = (
     "pip install tinker  (see https://thinkingmachines.ai/tinker for current install)"
 )
+
+_DOCS_URL = "https://thinkingmachines.ai/tinker"
 
 
 def translate_config(carl_config: dict[str, Any]) -> dict[str, Any]:
@@ -51,25 +50,8 @@ def translate_config(carl_config: dict[str, Any]) -> dict[str, Any]:
             context={"backend": "tinker", "type": type(carl_config).__name__},
         )
 
-    try:
-        model = str(carl_config["base_model"]).strip()
-    except KeyError as exc:
-        raise AdapterError(
-            "carl config is missing 'base_model'",
-            code="carl.adapter.translation",
-            context={"backend": "tinker"},
-            cause=exc,
-        ) from exc
-
-    try:
-        dataset = str(carl_config["dataset_repo"]).strip()
-    except KeyError as exc:
-        raise AdapterError(
-            "carl config is missing 'dataset_repo'",
-            code="carl.adapter.translation",
-            context={"backend": "tinker"},
-            cause=exc,
-        ) from exc
+    model = require_str(carl_config, "base_model", backend="tinker")
+    dataset = require_str(carl_config, "dataset_repo", backend="tinker")
 
     method = str(carl_config.get("method", "sft")).lower().strip()
     if method not in {"sft", "dpo", "grpo"}:
@@ -129,6 +111,16 @@ def translate_config(carl_config: dict[str, Any]) -> dict[str, Any]:
 
 
 class TinkerAdapter:
+    """Scaffolded Tinker adapter.
+
+    Availability is derived from whether the ``tinker`` module is importable
+    (the Python package is installed). ``submit()`` always raises
+    :class:`AdapterError` with code ``carl.adapter.tinker_not_implemented``
+    — translation is wired up and available via :meth:`translate`, but the
+    submission path will remain scaffolded until Tinker's Python API
+    stabilizes.
+    """
+
     name = "tinker"
 
     def available(self) -> bool:
@@ -141,67 +133,28 @@ class TinkerAdapter:
         return translate_config(carl_config)
 
     def submit(self, carl_config: dict[str, Any]) -> BackendJob:
+        # Validate translation first so the caller still gets a translation
+        # error on malformed configs even though we never submit.
         translated = translate_config(carl_config)
-
-        if not self.available():
-            raise unavailable(self.name, hint=_INSTALL_HINT)
-
-        # Tinker's Python API is still stabilizing. We persist state and a
-        # clear marker so operators know the run was accepted at the
-        # adapter layer but needs a manual kick via the Tinker SDK.
-        run_id = new_run_id("tinker")
-        run_dir = state_dir(self.name) / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        log_path = run_dir / "run.log"
-        log_path.write_text(
-            "tinker adapter: translation recorded; submission to the Tinker "
-            "API is not yet wired. Update carl_studio.adapters.tinker_adapter "
-            "once the API surface stabilizes.\n",
-            encoding="utf-8",
-        )
-
-        state = JobState(
-            run_id=run_id,
-            backend=self.name,
-            status=BackendStatus.PENDING,
-            submitted_at=now_iso(),
-            log_path=str(log_path),
-            config=dict(carl_config),
-            raw={"translated": translated, "note": "tinker API wire-up pending"},
-        )
-        save_state(state)
-
         raise AdapterError(
-            "tinker submission path is not yet implemented — translation "
-            "was recorded under " + str(run_dir),
-            code="carl.adapter.submit",
+            "Tinker adapter is scaffolded but not yet implemented — "
+            f"see {_DOCS_URL} for the current Python API. Use "
+            "TinkerAdapter().translate(carl_config) to render the spec "
+            "without submitting.",
+            code="carl.adapter.tinker_not_implemented",
             context={
                 "backend": self.name,
-                "run_id": run_id,
-                "run_dir": str(run_dir),
+                "docs_url": _DOCS_URL,
+                "install_hint": _INSTALL_HINT,
+                "translated_keys": sorted(translated.keys()),
             },
         )
 
     def status(self, run_id: str) -> BackendJob:
-        state = load_state(self.name, run_id)
-        state = refresh_pid_status(state)
-        save_state(state)
-        return state.to_job()
+        return status_common(self.name, run_id)
 
     def logs(self, run_id: str, *, tail: int = 100) -> list[str]:
-        state = load_state(self.name, run_id)
-        return tail_log(
-            Path(state.log_path) if state.log_path else None,
-            tail,
-        )
+        return logs_common(self.name, run_id, tail=tail)
 
     def cancel(self, run_id: str) -> bool:
-        state = load_state(self.name, run_id)
-        if BackendStatus.is_terminal(state.status):
-            return False
-        cancelled = cancel_pid(state)
-        if not cancelled:
-            state.status = BackendStatus.CANCELED
-            state.completed_at = now_iso()
-        save_state(state)
-        return True
+        return cancel_common(self.name, run_id)

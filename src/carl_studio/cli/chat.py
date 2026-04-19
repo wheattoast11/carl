@@ -264,7 +264,21 @@ def chat_cmd(
 
     # Resume session if requested
     if session:
-        if agent.load_session(session):
+        resumed = agent.load_session(session)
+        # _last_load_quarantined becomes True when the underlying session
+        # file was corrupt and got moved into the quarantine directory.
+        # The user needs to see this — silent quarantine is a footgun that
+        # masquerades as a fresh session start.
+        if getattr(agent, "_last_load_quarantined", False):
+            quarantine_dir = (
+                __import__("pathlib").Path.home()
+                / ".carl" / "sessions" / ".quarantine"
+            )
+            c.warn(
+                f"Session '{session}' was corrupted and has been quarantined "
+                f"to {quarantine_dir}. Starting fresh."
+            )
+        if resumed:
             c.ok(f"Resumed session: {session}")
         else:
             c.info(f"New session: {session}")

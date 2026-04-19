@@ -213,14 +213,53 @@ def test_atropos_submit_when_unavailable_raises_adapter_unavailable():
     assert excinfo.value.code == "carl.adapter.unavailable"
 
 
-def test_tinker_submit_unavailable_raises_adapter_unavailable():
-    with patch(
-        "carl_studio.adapters.tinker_adapter.importlib.util.find_spec",
-        return_value=None,
-    ):
+def test_tinker_submit_raises_not_implemented_cleanly(tmp_path: Path):
+    """Tinker's submission path is deliberately scaffolded.
+
+    Option B (current policy): ``submit()`` raises
+    ``carl.adapter.tinker_not_implemented`` immediately after validating
+    translation. We must NOT persist any JobState for a run the caller
+    cannot observe (no run_id is returned on failure).
+    """
+    # Spy on save_state to catch any accidental state persistence.
+    from carl_studio.adapters import _common as common
+
+    saved: list[str] = []
+    original_save = common.save_state
+
+    def _capture(state):
+        saved.append(state.run_id)
+        return original_save(state)
+
+    with patch.object(common, "save_state", side_effect=_capture):
         with pytest.raises(AdapterError) as excinfo:
             TinkerAdapter().submit(_SAMPLE_CARL_CFG)
-    assert excinfo.value.code == "carl.adapter.unavailable"
+
+    assert excinfo.value.code == "carl.adapter.tinker_not_implemented"
+    assert "docs_url" in excinfo.value.context
+    assert excinfo.value.context["backend"] == "tinker"
+    # No state may have been persisted — zombie state files are forbidden.
+    assert saved == []
+    # And the on-disk state dir for tinker must be empty (or non-existent).
+    tinker_state = Path(
+        __import__("os").environ["CARL_ADAPTER_STATE_DIR"]
+    ) / "tinker"
+    if tinker_state.exists():
+        assert list(tinker_state.glob("*.json")) == []
+        assert list(tinker_state.glob("*/run.log")) == []
+
+
+def test_tinker_submit_still_validates_translation():
+    """Even though submission raises not_implemented, translation errors
+    still surface before the not-implemented error so operators see the
+    real problem first."""
+    bad = {"base_model": "x"}  # missing dataset_repo
+    with pytest.raises(AdapterError) as excinfo:
+        TinkerAdapter().submit(bad)
+    assert excinfo.value.code in {
+        "carl.adapter.translation",
+        "carl.adapter.missing_required",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +306,12 @@ def test_axolotl_translation_missing_required_raises_translation_error():
     bad = {"base_model": "x"}  # no dataset_repo
     with pytest.raises(AdapterError) as excinfo:
         axolotl_translate(bad)
-    assert excinfo.value.code == "carl.adapter.translation"
+    # The shared ``require_str`` helper surfaces missing-required failures
+    # with a distinct code so callers can branch on it. The older
+    # ``carl.adapter.translation`` code is still used for shape/type errors.
+    assert excinfo.value.code == "carl.adapter.missing_required"
+    assert excinfo.value.context.get("key") == "dataset_repo"
+    assert excinfo.value.context.get("backend") == "axolotl"
 
 
 def test_axolotl_translation_rejects_unknown_method():
@@ -311,6 +355,69 @@ def test_unsloth_translation_rejects_unknown_method():
     with pytest.raises(AdapterError) as excinfo:
         unsloth_translate(cfg)
     assert excinfo.value.code == "carl.adapter.translation"
+
+
+@pytest.mark.parametrize("method", ["dpo", "kto", "orpo"])
+def test_unsloth_rejects_unsupported_method(method: str):
+    """dpo/kto/orpo are validated-but-unimplemented at translation time.
+
+    The entrypoint template only handles sft and grpo, so we fail fast at
+    translation rather than spawning a subprocess that sys.exit(3)s.
+    """
+    cfg = dict(_SAMPLE_CARL_CFG, method=method)
+
+    # Via translate_config:
+    with pytest.raises(AdapterError) as excinfo:
+        unsloth_translate(cfg)
+    assert excinfo.value.code == "carl.adapter.translation"
+    assert excinfo.value.context.get("method") == method
+    assert excinfo.value.context.get("supported") == ["grpo", "sft"]
+
+    # Via UnslothAdapter.submit: availability is mocked True so we verify
+    # the error surfaces BEFORE spawning anything.
+    fake_spec = object()
+    with patch(
+        "carl_studio.adapters.unsloth_adapter.importlib.util.find_spec",
+        return_value=fake_spec,
+    ):
+        with patch("carl_studio.adapters.unsloth_adapter.spawn") as spawn_mock:
+            with pytest.raises(AdapterError) as excinfo2:
+                UnslothAdapter().submit(cfg)
+            assert spawn_mock.called is False
+    assert excinfo2.value.code == "carl.adapter.translation"
+
+
+def test_unsloth_quantization_4bit_only():
+    """load_in_4bit=True wins — 8bit is forced off even if also requested."""
+    cfg = dict(
+        _SAMPLE_CARL_CFG,
+        method="sft",
+        quantization={"load_in_4bit": True, "load_in_8bit": True},
+    )
+    out = unsloth_translate(cfg)
+    assert out["load_in_4bit"] is True
+    assert out["load_in_8bit"] is False
+
+
+def test_unsloth_quantization_8bit_default():
+    """Empty/unspecified quantization section defaults to 8-bit on only."""
+    cfg = dict(_SAMPLE_CARL_CFG, method="sft")
+    cfg.pop("quantization", None)
+    out = unsloth_translate(cfg)
+    assert out["load_in_4bit"] is False
+    assert out["load_in_8bit"] is True
+
+
+def test_unsloth_quantization_neither():
+    """Explicit load_in_8bit=False, no 4bit -> full precision (both False)."""
+    cfg = dict(
+        _SAMPLE_CARL_CFG,
+        method="sft",
+        quantization={"load_in_8bit": False, "load_in_4bit": False},
+    )
+    out = unsloth_translate(cfg)
+    assert out["load_in_4bit"] is False
+    assert out["load_in_8bit"] is False
 
 
 def test_tinker_translation_preserves_extras():

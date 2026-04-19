@@ -416,6 +416,39 @@ def test_watch_timeout_path() -> None:
     assert exc_info.value.context.get("job_id") == "job-slow"
 
 
+def test_watch_loop_uses_running_loop_not_legacy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_watch_loop must use asyncio.get_running_loop(), not asyncio.get_event_loop().
+
+    Py 3.12+ raises RuntimeError for asyncio.get_event_loop() without a running
+    loop context. Since _watch_loop runs inside an async function, it must use
+    get_running_loop(). This test monkeypatches get_event_loop to raise and
+    asserts the loop still works — i.e., the trainer never calls the legacy API.
+    """
+    trainer = CARLTrainer(_make_config(compute_target="l4x1"))
+    trainer.run.hub_job_id = "job-running-loop"
+
+    backend = MagicMock()
+    backend.status = AsyncMock(return_value="completed")
+
+    def _boom(*_a: Any, **_kw: Any) -> Any:
+        raise RuntimeError(
+            "asyncio.get_event_loop() must not be called from within async "
+            "contexts in Py 3.12+"
+        )
+
+    monkeypatch.setattr(asyncio, "get_event_loop", _boom)
+
+    with _patch_get_backend(backend):
+        run = asyncio.run(
+            trainer.watch(poll_interval_s=0.01, timeout_s=5.0, max_consecutive_failures=5)
+        )
+
+    assert run.phase == RunPhase.COMPLETE
+    backend.status.assert_awaited()
+
+
 # ---------------------------------------------------------------------------
 # WS-P1 -- Credits synchronous deduction
 # ---------------------------------------------------------------------------

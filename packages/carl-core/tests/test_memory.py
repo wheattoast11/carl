@@ -312,3 +312,64 @@ def test_write_rejects_non_string_content(store: MemoryStore) -> None:
     with pytest.raises(ValidationError) as exc:
         store.write(12345, layer=MemoryLayer.SHORT)  # type: ignore[arg-type]
     assert exc.value.code == "carl.memory.bad_content"
+
+
+def test_decay_pass_does_not_drop_concurrent_writes(store: MemoryStore) -> None:
+    """Regression: decay_pass() must not lose writes that land while it runs.
+
+    Before the per-instance lock, decay_pass() read the JSONL, wrote survivors
+    to a ``.tmp`` sibling, and atomically replaced the live file. Any write()
+    whose append landed between the read and the replace was silently dropped.
+    This test hammers write() against ECHOIC from one thread while another
+    thread repeatedly runs decay_pass(); the final count must equal the total
+    number of successful writes.
+    """
+    total_writes = 500
+    stop = threading.Event()
+    errors: list[BaseException] = []
+    fresh_ts = datetime.now(timezone.utc)
+
+    def writer() -> None:
+        try:
+            for j in range(total_writes):
+                # Use a fresh timestamp so decay_pass keeps every survivor —
+                # this isolates the test to the race, not the decay rule.
+                store.write(
+                    f"w-{j}",
+                    layer=MemoryLayer.ECHOIC,
+                    created_at=fresh_ts,
+                )
+        except BaseException as e:  # noqa: BLE001 - surface to parent
+            errors.append(e)
+        finally:
+            stop.set()
+
+    def decayer() -> None:
+        try:
+            # Keep sweeping until the writer is done. Every iteration is a
+            # full read-rewrite cycle and is the exact thing that used to
+            # race with append().
+            while not stop.is_set():
+                store.decay_pass()
+            # One final sweep after writer finishes to catch any tail.
+            store.decay_pass()
+        except BaseException as e:  # noqa: BLE001 - surface to parent
+            errors.append(e)
+
+    w = threading.Thread(target=writer)
+    d = threading.Thread(target=decayer)
+    d.start()
+    w.start()
+    w.join()
+    d.join()
+
+    assert not errors, f"worker threads raised: {errors}"
+    items = store.list_layer(MemoryLayer.ECHOIC)
+    assert len(items) == total_writes, (
+        f"expected {total_writes} survivors, got {len(items)} — decay_pass "
+        "dropped concurrent writes"
+    )
+    # All IDs are unique and every content tag is present exactly once.
+    contents = sorted(i.content for i in items)
+    expected = sorted(f"w-{j}" for j in range(total_writes))
+    assert contents == expected

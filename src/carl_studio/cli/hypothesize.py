@@ -75,7 +75,7 @@ def hypothesize_cmd(
     from carl_studio.chat_agent import CARLAgent
 
     try:
-        agent = CARLAgent(api_key="", model=model, frame=None, max_budget_usd=0.50)
+        agent = CARLAgent(api_key=None, model=model, frame=None, max_budget_usd=0.50)
     except ImportError as exc:
         c.error_with_hint(
             "CARLAgent unavailable",

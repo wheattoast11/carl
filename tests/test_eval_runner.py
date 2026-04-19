@@ -169,6 +169,174 @@ class TestExecuteToolEscapeHandling:
 
 
 # ---------------------------------------------------------------------------
+# run_shell: shell-injection hardening (P0)
+#
+# The sandbox is a tempdir, not a jail. Model-generated shell commands that
+# include metacharacters (`;`, `|`, `$(...)`, backticks, redirection) can
+# reach outside the tempdir, exfiltrate secrets, or delete sibling sandboxes.
+# The fix replaces `shell=True` with a metachar reject + `shlex.split` +
+# `shell=False`. These tests pin that contract.
+# ---------------------------------------------------------------------------
+
+
+class TestRunShellHardening:
+    def test_run_shell_rejects_metacharacters(self) -> None:
+        """`ls ; rm -rf /` is rejected before any subprocess is spawned."""
+        sandbox = EvalSandbox()
+        try:
+            with patch("carl_studio.eval.runner.subprocess.run") as mock_run:
+                result = sandbox.execute_tool(
+                    "run_shell", {"command": "ls ; rm -rf /"}
+                )
+            assert result.startswith("Error:")
+            assert "metacharacters" in result
+            assert sandbox.tool_failures == 1
+            # Critical: the subprocess must never have been invoked.
+            assert mock_run.call_count == 0
+        finally:
+            sandbox.cleanup()
+
+    def test_run_shell_rejects_backticks(self) -> None:
+        """Backtick command substitution is rejected."""
+        sandbox = EvalSandbox()
+        try:
+            with patch("carl_studio.eval.runner.subprocess.run") as mock_run:
+                result = sandbox.execute_tool(
+                    "run_shell", {"command": "ls `whoami`"}
+                )
+            assert result.startswith("Error:")
+            assert "metacharacters" in result
+            assert sandbox.tool_failures == 1
+            assert mock_run.call_count == 0
+        finally:
+            sandbox.cleanup()
+
+    def test_run_shell_rejects_command_substitution(self) -> None:
+        """`$(...)` command substitution is rejected."""
+        sandbox = EvalSandbox()
+        try:
+            with patch("carl_studio.eval.runner.subprocess.run") as mock_run:
+                result = sandbox.execute_tool(
+                    "run_shell", {"command": "echo $(cat /etc/passwd)"}
+                )
+            assert result.startswith("Error:")
+            assert "metacharacters" in result
+            assert sandbox.tool_failures == 1
+            assert mock_run.call_count == 0
+        finally:
+            sandbox.cleanup()
+
+    def test_run_shell_rejects_redirection(self) -> None:
+        """Output redirection (`>`, `>>`) is rejected."""
+        sandbox = EvalSandbox()
+        try:
+            with patch("carl_studio.eval.runner.subprocess.run") as mock_run:
+                result = sandbox.execute_tool(
+                    "run_shell", {"command": "echo x > /tmp/escape"}
+                )
+            assert result.startswith("Error:")
+            assert "metacharacters" in result
+            assert sandbox.tool_failures == 1
+            assert mock_run.call_count == 0
+        finally:
+            sandbox.cleanup()
+
+    def test_run_shell_rejects_pipe(self) -> None:
+        """Pipes are rejected — model should use `execute_code` for pipelines."""
+        sandbox = EvalSandbox()
+        try:
+            with patch("carl_studio.eval.runner.subprocess.run") as mock_run:
+                result = sandbox.execute_tool(
+                    "run_shell", {"command": "ls | grep foo"}
+                )
+            assert result.startswith("Error:")
+            assert "metacharacters" in result
+            assert sandbox.tool_failures == 1
+            assert mock_run.call_count == 0
+        finally:
+            sandbox.cleanup()
+
+    def test_run_shell_accepts_simple_command(self) -> None:
+        """A plain `ls -la` executes via tokens, shell=False, in the sandbox."""
+        sandbox = EvalSandbox()
+        try:
+            # Drop a file so `ls` produces deterministic non-empty output.
+            (Path(sandbox.workdir) / "hello.txt").write_text("hi")
+            result = sandbox.execute_tool("run_shell", {"command": "ls -la"})
+            # Real subprocess: expect successful stdout, not an error string.
+            assert not result.startswith("Error:")
+            assert "hello.txt" in result
+            assert sandbox.tool_failures == 0
+            assert sandbox.task_completed is True
+        finally:
+            sandbox.cleanup()
+
+    def test_run_shell_parses_quoted_args(self) -> None:
+        """`echo "hello world"` is shlex-split into ["echo", "hello world"]."""
+        sandbox = EvalSandbox()
+        try:
+            with patch("carl_studio.eval.runner.subprocess.run") as mock_run:
+                mock_run.return_value = SimpleNamespace(
+                    returncode=0, stdout="hello world\n", stderr=""
+                )
+                result = sandbox.execute_tool(
+                    "run_shell", {"command": 'echo "hello world"'}
+                )
+            assert result == "hello world\n"
+            assert sandbox.tool_failures == 0
+            # Verify the call used tokens, shell=False, and the sandbox cwd.
+            assert mock_run.call_count == 1
+            call_args, call_kwargs = mock_run.call_args
+            tokens = call_args[0]
+            assert tokens == ["echo", "hello world"]
+            assert call_kwargs.get("shell") is False
+            assert call_kwargs.get("cwd") == sandbox.workdir
+        finally:
+            sandbox.cleanup()
+
+    def test_run_shell_unparseable_returns_error(self) -> None:
+        """An unterminated quote reports a parse error, never crashes."""
+        sandbox = EvalSandbox()
+        try:
+            with patch("carl_studio.eval.runner.subprocess.run") as mock_run:
+                result = sandbox.execute_tool(
+                    "run_shell", {"command": 'echo "unclosed'}
+                )
+            assert result.startswith("Error:")
+            assert "parse" in result.lower() or "quotation" in result.lower()
+            assert sandbox.tool_failures == 1
+            assert mock_run.call_count == 0
+        finally:
+            sandbox.cleanup()
+
+    def test_run_shell_empty_command_rejected(self) -> None:
+        """Empty / whitespace-only command strings are rejected pre-exec."""
+        sandbox = EvalSandbox()
+        try:
+            with patch("carl_studio.eval.runner.subprocess.run") as mock_run:
+                r_empty = sandbox.execute_tool("run_shell", {"command": ""})
+                r_ws = sandbox.execute_tool("run_shell", {"command": "   "})
+            assert r_empty.startswith("Error:") and "empty" in r_empty
+            assert r_ws.startswith("Error:") and "empty" in r_ws
+            assert sandbox.tool_failures == 2
+            assert mock_run.call_count == 0
+        finally:
+            sandbox.cleanup()
+
+    def test_run_shell_non_string_command_rejected(self) -> None:
+        """A non-string `command` arg is rejected, no crash."""
+        sandbox = EvalSandbox()
+        try:
+            with patch("carl_studio.eval.runner.subprocess.run") as mock_run:
+                result = sandbox.execute_tool("run_shell", {"command": 42})
+            assert result.startswith("Error:")
+            assert sandbox.tool_failures == 1
+            assert mock_run.call_count == 0
+        finally:
+            sandbox.cleanup()
+
+
+# ---------------------------------------------------------------------------
 # GPU tensor cleanup on timeout
 # ---------------------------------------------------------------------------
 

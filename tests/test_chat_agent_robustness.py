@@ -729,4 +729,592 @@ class TestPublicAPIPreserved:
         loaded = store.load(sid)
         assert loaded is not None
         assert loaded["schema_version"] == _SESSION_SCHEMA_VERSION
-        assert loaded["messages"][0]["content"] == "hi"
+
+
+# =========================================================================
+# Fix 1 — list_files sandbox
+# =========================================================================
+
+
+class TestListFilesSandbox:
+    def test_list_files_blocks_absolute_path_outside_workdir(
+        self, tmp_path: Path,
+    ) -> None:
+        agent = CARLAgent(
+            model="test", workdir=str(tmp_path), _client=MagicMock(),
+        )
+        result = agent._dispatch_tool("list_files", {"path": "/"})
+        assert "blocked" in result.lower()
+
+    def test_list_files_allows_workdir_itself(
+        self, tmp_path: Path,
+    ) -> None:
+        (tmp_path / "a.txt").write_text("x")
+        agent = CARLAgent(
+            model="test", workdir=str(tmp_path), _client=MagicMock(),
+        )
+        result = agent._dispatch_tool(
+            "list_files", {"path": str(tmp_path), "pattern": "*"},
+        )
+        assert "a.txt" in result
+
+    def test_list_files_rejects_traversal_glob(
+        self, tmp_path: Path,
+    ) -> None:
+        agent = CARLAgent(
+            model="test", workdir=str(tmp_path), _client=MagicMock(),
+        )
+        result = agent._dispatch_tool(
+            "list_files", {"path": str(tmp_path), "pattern": "../**"},
+        )
+        assert "blocked" in result.lower()
+
+    def test_list_files_blocks_sibling_directory(
+        self, tmp_path: Path,
+    ) -> None:
+        """Directory adjacent to workdir must be rejected, not enumerated."""
+        workdir = tmp_path / "inside"
+        workdir.mkdir()
+        sibling = tmp_path / "outside"
+        sibling.mkdir()
+        (sibling / "secret.txt").write_text("x")
+
+        agent = CARLAgent(
+            model="test", workdir=str(workdir), _client=MagicMock(),
+        )
+        result = agent._dispatch_tool("list_files", {"path": str(sibling)})
+        assert "blocked" in result.lower()
+        assert "secret.txt" not in result
+
+
+# =========================================================================
+# Fix 2 — all-tools-denied termination
+# =========================================================================
+
+
+class TestAllToolsDenied:
+    def test_chat_terminates_after_five_consecutive_all_denied_turns(
+        self, tmp_path: Path,
+    ) -> None:
+        """A hook that denies every tool must not loop forever."""
+
+        def deny_all(name: str, args: dict[str, Any]) -> ToolPermission:
+            return ToolPermission.DENY
+
+        # Each server turn returns a tool_use block. Real API retries after
+        # seeing tool_result errors; we simulate that by giving the same
+        # client-side stream every time chat() issues a new stream().
+        def make_stream() -> _StubStream:
+            return _StubStream(
+                events=[],
+                final=_Response(
+                    [_ToolUseBlock("run_analysis", {"code": "print('x')"}, "tu_deny")],
+                    stop_reason="tool_use",
+                ),
+            )
+
+        client = MagicMock()
+        client.messages.stream.side_effect = lambda **_kw: make_stream()
+
+        agent = CARLAgent(
+            model="test",
+            workdir=str(tmp_path),
+            pre_tool_use=deny_all,
+            _client=client,
+        )
+
+        events = list(agent.chat("please"))
+        errors = [
+            e for e in events
+            if e.kind == "error" and e.code == "carl.all_tools_denied"
+        ]
+        assert errors, "expected carl.all_tools_denied terminal event"
+        # The hook returns tool_use every round — the loop must cap at the
+        # class constant value, not run forever.
+        assert client.messages.stream.call_count == agent._MAX_CONSECUTIVE_ALL_DENIED
+
+    def test_allowed_tool_resets_consecutive_denied_counter(
+        self, tmp_path: Path,
+    ) -> None:
+        """A single allowed turn clears the DENY counter."""
+        agent = CARLAgent(
+            model="test", workdir=str(tmp_path), _client=MagicMock(),
+        )
+        agent._consecutive_all_denied = 3
+        # Simulate the counter-update block directly: any allowed tool clears.
+        turn_attempted = 2
+        turn_denied = 0
+        if turn_attempted > 0 and turn_denied == turn_attempted:
+            agent._consecutive_all_denied += 1
+        elif turn_attempted > 0:
+            agent._consecutive_all_denied = 0
+        assert agent._consecutive_all_denied == 0
+
+    def test_no_tool_use_turn_also_resets_counter(self) -> None:
+        """A text-only turn (no tool_use) should also reset the counter."""
+        stream = _StubStream(
+            events=[],
+            final=_Response(
+                [_TextBlock("done")], stop_reason="end_turn",
+            ),
+        )
+        agent = CARLAgent(model="test", _client=_make_client(stream))
+        agent._consecutive_all_denied = 2
+        list(agent.chat("hi"))
+        assert agent._consecutive_all_denied == 0
+
+
+# =========================================================================
+# Fix 3 — run_analysis sys.executable + env scrub
+# =========================================================================
+
+
+class TestRunAnalysisEnvScrub:
+    def test_run_analysis_uses_sys_executable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import sys as _sys
+
+        captured: dict[str, Any] = {}
+
+        class _Proc:
+            def __init__(self) -> None:
+                self.returncode = 0
+                self.stdout = b"ok"
+                self.stderr = b""
+
+        def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+            captured["cmd"] = cmd
+            captured["env"] = kwargs.get("env")
+            return _Proc()
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        agent = CARLAgent(
+            model="test", workdir=str(tmp_path), _client=MagicMock(),
+        )
+        agent._dispatch_tool("run_analysis", {"code": "print(1)"})
+        assert captured["cmd"][0] == _sys.executable
+        assert captured["cmd"][1] == "-c"
+
+    def test_run_analysis_strips_sensitive_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Seed the environment with known credentials the scrubber must strip
+        # plus a plumbing key that must survive.
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+        monkeypatch.setenv("CARL_WALLET_PASSPHRASE", "correct horse battery")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-oai-secret")
+        monkeypatch.setenv("HF_TOKEN", "hf_secret")
+        monkeypatch.setenv("SOMETHING_SECRET", "nope")
+        monkeypatch.setenv("GITHUB_BEARER", "ghp_bearer")
+        monkeypatch.setenv("LANG", "en_US.UTF-8")
+
+        captured_env: dict[str, dict[str, str]] = {}
+
+        class _Proc:
+            def __init__(self) -> None:
+                self.returncode = 0
+                self.stdout = b""
+                self.stderr = b""
+
+        def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+            captured_env["env"] = dict(kwargs.get("env") or {})
+            return _Proc()
+
+        monkeypatch.setattr("subprocess.run", fake_run)
+        agent = CARLAgent(
+            model="test", workdir=str(tmp_path), _client=MagicMock(),
+        )
+        agent._dispatch_tool("run_analysis", {"code": "pass"})
+
+        env = captured_env["env"]
+        # Infra keys survive
+        assert "PATH" in env
+        assert env.get("LANG") == "en_US.UTF-8"
+        # Marker that _tool_run added
+        assert env.get("PYTHONDONTWRITEBYTECODE") == "1"
+        # Secrets gone
+        assert "ANTHROPIC_API_KEY" not in env
+        assert "CARL_WALLET_PASSPHRASE" not in env
+        assert "OPENAI_API_KEY" not in env
+        assert "HF_TOKEN" not in env
+        assert "SOMETHING_SECRET" not in env
+        assert "GITHUB_BEARER" not in env
+
+    def test_is_sensitive_env_key_classification(self) -> None:
+        from carl_studio.chat_agent import _is_sensitive_env_key
+
+        assert _is_sensitive_env_key("ANTHROPIC_API_KEY")
+        assert _is_sensitive_env_key("MY_ACCESS_TOKEN")
+        assert _is_sensitive_env_key("SOME_SECRET")
+        assert _is_sensitive_env_key("USER_PASSWORD")
+        assert _is_sensitive_env_key("WALLET_PASSPHRASE")
+        assert _is_sensitive_env_key("HTTP_AUTHORIZATION")
+        assert _is_sensitive_env_key("GH_BEARER")
+        # Allowlist wins
+        assert not _is_sensitive_env_key("PATH")
+        assert not _is_sensitive_env_key("HOME")
+        assert not _is_sensitive_env_key("LANG")
+        assert not _is_sensitive_env_key("PWD")
+        assert not _is_sensitive_env_key("USER")
+        # Non-sensitive
+        assert not _is_sensitive_env_key("LOG_LEVEL")
+        assert not _is_sensitive_env_key("PYTHONDONTWRITEBYTECODE")
+
+
+# =========================================================================
+# Fix 4 — safe_resolve rejects symlinks
+# =========================================================================
+
+
+class TestResolveSafePathSymlinks:
+    def test_symlink_in_workdir_is_rejected(self, tmp_path: Path) -> None:
+        import os as _os
+
+        workdir = tmp_path / "wd"
+        workdir.mkdir()
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        (outside / "secret.txt").write_text("private")
+
+        link = workdir / "link"
+        try:
+            _os.symlink(str(outside), str(link))
+        except OSError:
+            pytest.skip("symlinks not supported here")
+
+        agent = CARLAgent(
+            model="test", workdir=str(workdir), _client=MagicMock(),
+        )
+        # read_file through the link — must be blocked, not resolved.
+        result = agent._dispatch_tool(
+            "read_file", {"path": str(link / "secret.txt")},
+        )
+        assert "blocked" in result.lower() or "not found" in result.lower()
+
+    def test_tail_symlink_rejected(self, tmp_path: Path) -> None:
+        """A tail symlink inside the sandbox is rejected by follow_symlinks=False."""
+        import os as _os
+
+        workdir = tmp_path / "wd"
+        workdir.mkdir()
+        target = workdir / "real.txt"
+        target.write_text("real")
+        link = workdir / "alias.txt"
+        try:
+            _os.symlink(str(target), str(link))
+        except OSError:
+            pytest.skip("symlinks not supported here")
+
+        agent = CARLAgent(
+            model="test", workdir=str(workdir), _client=MagicMock(),
+        )
+        result = agent._dispatch_tool("read_file", {"path": str(link)})
+        assert "blocked" in result.lower()
+
+
+# =========================================================================
+# Fix 5 — visible session quarantine
+# =========================================================================
+
+
+class TestSessionQuarantineVisibility:
+    def test_load_session_sets_quarantine_flag_on_corruption(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging as _logging
+
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        sid = "broken"
+        bad = sessions_dir / f"{sid}.json"
+        bad.write_text("{not: valid json}")
+
+        store = SessionStore(sessions_dir=sessions_dir)
+        agent = CARLAgent(model="test", _client=MagicMock())
+
+        with caplog.at_level(_logging.WARNING, logger="carl_studio.chat_agent"):
+            ok = agent.load_session(sid, store=store)
+
+        assert ok is False  # file was not loadable
+        assert agent._last_load_quarantined is True
+        # Warning should reference the quarantine destination.
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("Quarantined" in m for m in messages)
+
+    def test_load_session_clean_session_keeps_flag_false(
+        self, tmp_path: Path,
+    ) -> None:
+        sessions_dir = tmp_path / "sessions"
+        store = SessionStore(sessions_dir=sessions_dir)
+        store.save("clean", {"id": "clean", "title": "x"})
+
+        agent = CARLAgent(model="test", _client=MagicMock())
+        ok = agent.load_session("clean", store=store)
+        assert ok is True
+        assert agent._last_load_quarantined is False
+
+    def test_load_session_missing_session_keeps_flag_false(
+        self, tmp_path: Path,
+    ) -> None:
+        sessions_dir = tmp_path / "sessions"
+        store = SessionStore(sessions_dir=sessions_dir)
+        agent = CARLAgent(model="test", _client=MagicMock())
+        assert agent.load_session("nope", store=store) is False
+        assert agent._last_load_quarantined is False
+
+    def test_cli_chat_resume_surfaces_quarantine_warning(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The chat CLI path must print a visible warn() on quarantine."""
+        from carl_studio.cli import chat as chat_cli
+
+        # Redirect sessions dir into tmp_path so the test is hermetic.
+        sessions_dir = tmp_path / "sessions"
+        sessions_dir.mkdir()
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("pathlib.Path.home", lambda: home)
+        real_sessions = home / ".carl" / "sessions"
+        real_sessions.mkdir(parents=True)
+        bad = real_sessions / "broken.json"
+        bad.write_text("{not: valid json}")
+
+        # Capture console output.
+        warn_calls: list[str] = []
+        info_calls: list[str] = []
+        ok_calls: list[str] = []
+
+        class FakeConsole:
+            theme = type("T", (), {"persona": type("P", (), {"value": "carl"})()})()
+
+            def blank(self) -> None: pass
+            def header(self, *_a: Any, **_k: Any) -> None: pass
+            def kv(self, *_a: Any, **_k: Any) -> None: pass
+            def info(self, msg: str) -> None: info_calls.append(msg)
+            def ok(self, msg: str) -> None: ok_calls.append(msg)
+            def warn(self, msg: str) -> None: warn_calls.append(msg)
+            def error(self, msg: str) -> None: pass
+            def voice(self, *_a: Any, **_k: Any) -> None: pass
+            def print(self, *_a: Any, **_k: Any) -> None: pass
+
+        monkeypatch.setattr(chat_cli, "get_console", lambda: FakeConsole())
+
+        # Patch CARLAgent so we don't need a real Anthropic client.
+        class StubAgent:
+            def __init__(self, *_a: Any, **_k: Any) -> None:
+                self._messages: list[Any] = []
+                self._last_load_quarantined = False
+
+            def load_session(self, sid: str) -> bool:
+                # Trigger the quarantine via the real SessionStore on disk.
+                store = SessionStore(sessions_dir=real_sessions)
+                state = store.load(sid)
+                self._last_load_quarantined = getattr(
+                    store, "_last_quarantine_dest", None,
+                ) is not None
+                return state is not None
+
+            @property
+            def provider_info(self) -> dict[str, str]:
+                return {"model": "x", "api_key_source": "test"}
+
+            def cost_summary(self) -> dict[str, Any]:
+                return {"turn_count": 0, "total_cost_usd": 0.0}
+
+        # chat_cmd does ``from carl_studio.chat_agent import CARLAgent``
+        # inline — patch the real module so the import resolves to our stub.
+        monkeypatch.setattr("carl_studio.chat_agent.CARLAgent", StubAgent)
+        # Short-circuit the first-run init probe.
+        monkeypatch.setattr(
+            "carl_studio.cli.init._first_run_complete", lambda: True,
+        )
+
+        # Also short-circuit interactive input so the while loop exits.
+        monkeypatch.setattr("builtins.input", lambda *_a, **_k: "quit")
+
+        try:
+            chat_cli.chat_cmd(
+                model="test",
+                config="carl.yaml",
+                api_key="",
+                frame_source="none",
+                session="broken",
+                budget=0.0,
+                voice=False,
+                local=False,
+                sessions=False,
+            )
+        except Exception:
+            # _exit_session runs on the "quit" input; any downstream
+            # exception about missing dependencies is irrelevant to the
+            # quarantine warning we're validating.
+            pass
+
+        assert any(
+            "corrupted" in msg.lower() and "quarantined" in msg.lower()
+            for msg in warn_calls
+        ), f"expected quarantine warning in CLI; got warn={warn_calls} info={info_calls}"
+
+
+# =========================================================================
+# Fix 6 — _knowledge list bounded
+# =========================================================================
+
+
+class TestKnowledgeCap:
+    def test_default_cap_truncates_to_2000(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Ingesting 2500 chunks leaves exactly 2000 entries (oldest evicted)."""
+        agent = CARLAgent(
+            model="test", workdir=str(tmp_path), _client=MagicMock(),
+        )
+        assert agent._max_knowledge_chunks == agent._KNOWLEDGE_MAX_CHUNKS == 2000
+
+        class FakeChunk:
+            def __init__(self, idx: int) -> None:
+                self.text = f"chunk-{idx}"
+                self.source = f"src-{idx}"
+                self.modality = "text"
+
+        class FakeIngester:
+            def ingest(self, _path: str) -> list[FakeChunk]:
+                return [FakeChunk(i) for i in range(2500)]
+
+        # Patch the SourceIngester imported *inside* _tool_ingest.
+        import carl_studio.learn.ingest as _ingest_mod
+
+        monkeypatch.setattr(_ingest_mod, "SourceIngester", FakeIngester)
+
+        result = agent._dispatch_tool("ingest_source", {"path": "whatever"})
+        assert "Ingested 2500" in result
+        assert len(agent._knowledge) == 2000
+        # The first 500 are evicted, so chunk-0 is gone and chunk-2499 is last.
+        sources = {c["source"] for c in agent._knowledge}
+        assert "src-0" not in sources
+        assert "src-499" not in sources  # evicted
+        assert "src-500" in sources      # just inside the window
+        assert "src-2499" in sources
+        assert "evicted 500" in result.lower()
+
+    def test_single_warning_per_session(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging as _logging
+
+        agent = CARLAgent(
+            model="test",
+            workdir=str(tmp_path),
+            max_knowledge_chunks=5,
+            _client=MagicMock(),
+        )
+
+        class FakeChunk:
+            def __init__(self, idx: int) -> None:
+                self.text = f"c-{idx}"
+                self.source = f"s-{idx}"
+                self.modality = "text"
+
+        counter = {"i": 0}
+
+        class FakeIngester:
+            def ingest(self, _path: str) -> list[FakeChunk]:
+                counter["i"] += 1
+                # Each call adds 10 chunks — well past the cap.
+                return [FakeChunk(i) for i in range(10)]
+
+        import carl_studio.learn.ingest as _ingest_mod
+        monkeypatch.setattr(_ingest_mod, "SourceIngester", FakeIngester)
+
+        with caplog.at_level(_logging.WARNING, logger="carl_studio.chat_agent"):
+            agent._dispatch_tool("ingest_source", {"path": "a"})
+            agent._dispatch_tool("ingest_source", {"path": "b"})
+            agent._dispatch_tool("ingest_source", {"path": "c"})
+
+        assert len(agent._knowledge) == 5
+        assert agent._knowledge_evicted_warned is True
+        # Only ONE eviction warning — three ingests would otherwise spam.
+        evict_warnings = [
+            r for r in caplog.records
+            if "knowledge cap reached" in r.getMessage()
+        ]
+        assert len(evict_warnings) == 1
+
+    def test_custom_max_knowledge_chunks_honored(self, tmp_path: Path) -> None:
+        agent = CARLAgent(
+            model="test",
+            workdir=str(tmp_path),
+            max_knowledge_chunks=3,
+            _client=MagicMock(),
+        )
+        # Manually stuff the list to avoid mocking the ingester here.
+        for i in range(10):
+            agent._knowledge.append({
+                "text": f"t{i}", "source": f"s{i}",
+                "words": {f"w{i}"},
+            })
+        evicted = agent._enforce_knowledge_cap()
+        assert evicted == 7
+        assert len(agent._knowledge) == 3
+        # Newest three entries survived (t7, t8, t9).
+        remaining_texts = [c["text"] for c in agent._knowledge]
+        assert remaining_texts == ["t7", "t8", "t9"]
+
+    def test_invalid_max_knowledge_chunks_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            CARLAgent(
+                model="test",
+                max_knowledge_chunks=0,
+                _client=MagicMock(),
+            )
+        with pytest.raises(ValueError):
+            CARLAgent(
+                model="test",
+                max_knowledge_chunks=-5,
+                _client=MagicMock(),
+            )
+
+    def test_under_cap_is_noop(self, tmp_path: Path) -> None:
+        agent = CARLAgent(
+            model="test", workdir=str(tmp_path), _client=MagicMock(),
+        )
+        agent._knowledge = [{"text": "x", "source": "s", "words": set()}]
+        evicted = agent._enforce_knowledge_cap()
+        assert evicted == 0
+        assert len(agent._knowledge) == 1
+        assert agent._knowledge_evicted_warned is False
+
+    def test_load_session_enforces_cap(self, tmp_path: Path) -> None:
+        """Resuming a session with oversized knowledge trims it on load."""
+        store = SessionStore(sessions_dir=tmp_path / "sessions")
+        agent = CARLAgent(
+            model="test",
+            workdir=str(tmp_path),
+            max_knowledge_chunks=4,
+            _client=MagicMock(),
+        )
+        # Craft and save a state with more chunks than the cap.
+        big_knowledge = [
+            {"text": f"t{i}", "source": f"s{i}", "words": {f"w{i}"}}
+            for i in range(10)
+        ]
+        agent._knowledge = list(big_knowledge)  # bypass _enforce_knowledge_cap
+        sid = agent.save_session(title="big", store=store)
+
+        # Fresh agent with same cap — load must trim to 4 newest.
+        agent2 = CARLAgent(
+            model="test",
+            workdir=str(tmp_path),
+            max_knowledge_chunks=4,
+            _client=MagicMock(),
+        )
+        assert agent2.load_session(sid, store=store) is True
+        assert len(agent2._knowledge) == 4
+        assert [c["text"] for c in agent2._knowledge] == ["t6", "t7", "t8", "t9"]

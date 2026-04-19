@@ -463,3 +463,140 @@ class TestInferResearchFlags:
             "No eval_report.json" in result.output
             or "no eval_report" in result.output.lower()
         )
+
+
+# ---------------------------------------------------------------------------
+# api_key=None env-var fallback
+# ---------------------------------------------------------------------------
+
+
+class TestApiKeyEnvFallback:
+    """The CLI must not block ANTHROPIC_API_KEY env-var fallback by passing "".
+
+    Passing api_key="" to anthropic.Anthropic() disables its own env var fallback;
+    passing api_key=None preserves it. The CLI research-cycle entrypoints
+    (hypothesize, commit --from-session) rely on CARLAgent delegating to
+    settings.anthropic_api_key (which reads ANTHROPIC_API_KEY) when unset.
+    """
+
+    def test_hypothesize_passes_none_for_api_key(
+        self,
+        app: typer.Typer,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-env-fallback")
+
+        captured_kwargs: dict[str, Any] = {}
+
+        def _capturing_factory(*args: Any, **kwargs: Any) -> _FakeAgent:
+            captured_kwargs.update(kwargs)
+            return _FakeAgent(
+                events_factory=lambda _p: [_make_event("text", _VALID_YAML)]
+            )
+
+        out = tmp_path / "carl.yaml"
+        with patch(
+            "carl_studio.chat_agent.CARLAgent",
+            side_effect=_capturing_factory,
+        ):
+            result = runner.invoke(
+                app, ["hypothesize", "coh beats ent", "-o", str(out)]
+            )
+
+        assert result.exit_code == 0, result.output
+        # The CLI must pass api_key=None (not ""). "" blocks env fallback.
+        assert "api_key" in captured_kwargs
+        assert captured_kwargs["api_key"] is None, (
+            f'hypothesize must pass api_key=None to preserve env fallback; '
+            f'got {captured_kwargs["api_key"]!r}'
+        )
+
+    def test_commit_from_session_passes_none_for_api_key(
+        self,
+        app: typer.Typer,
+        runner: CliRunner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-env-fallback")
+
+        fake_home = tmp_path / "home"
+        sessions_dir = fake_home / ".carl" / "sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        session_id = "env-fb"
+        (sessions_dir / f"{session_id}.json").write_text(
+            json.dumps(
+                {
+                    "messages": [
+                        {"role": "user", "content": "learn stuff"},
+                        {"role": "assistant", "content": "ok"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+        overlay = tmp_path / "constitution.yaml"
+        monkeypatch.setattr(
+            "carl_studio.constitution.USER_OVERLAY", overlay, raising=False
+        )
+
+        captured_kwargs: dict[str, Any] = {}
+
+        def _capturing_factory(*args: Any, **kwargs: Any) -> _FakeAgent:
+            captured_kwargs.update(kwargs)
+            return _FakeAgent(events_factory=lambda _p: [_make_event("text", "[]")])
+
+        with patch(
+            "carl_studio.chat_agent.CARLAgent",
+            side_effect=_capturing_factory,
+        ):
+            result = runner.invoke(app, ["commit", "--from-session", session_id])
+
+        assert result.exit_code == 0, result.output
+        assert "api_key" in captured_kwargs
+        assert captured_kwargs["api_key"] is None, (
+            f"commit --from-session must pass api_key=None to preserve env "
+            f'fallback; got {captured_kwargs["api_key"]!r}'
+        )
+
+    def test_carlagent_respects_env_var_when_api_key_is_none(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Integration seam: CARLAgent(api_key=None) must consult settings,
+        which in turn reads ANTHROPIC_API_KEY from the environment.
+        """
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-integration-env-key")
+        # Isolate ~/.carl so no user config overrides the env var.
+        fake_home = tmp_path / "home"
+        fake_home.mkdir()
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: fake_home))
+
+        # Stub anthropic.Anthropic to capture the api_key it receives.
+        received_keys: list[Any] = []
+
+        class _StubAnthropic:
+            def __init__(self, *, api_key: Any = None, **_kw: Any) -> None:
+                received_keys.append(api_key)
+
+        try:
+            import anthropic  # noqa: F401
+        except ImportError:
+            pytest.skip("anthropic SDK not installed")
+
+        monkeypatch.setattr("anthropic.Anthropic", _StubAnthropic)
+
+        from carl_studio.chat_agent import CARLAgent
+
+        agent = CARLAgent(api_key=None, frame=None)
+        # CARLAgent records the effective resolution path for telemetry.
+        assert agent._api_key_source in {"settings", "default"}
+        assert received_keys, "anthropic.Anthropic should have been constructed"
+        # Either the env-derived key flowed through, or the client got None
+        # (which allows the SDK's own env fallback to engage). Either way,
+        # the empty string "" must NOT have been passed.
+        assert received_keys[0] != "", (
+            'CARLAgent passed api_key="" which blocks anthropic SDK env fallback'
+        )

@@ -71,16 +71,52 @@ def test_load_missing_user_overlay_uses_other_sources(tmp_path: Path) -> None:
     assert "reliability.typed_errors" in ids
 
 
-def test_load_corrupt_user_overlay_raises_config_error(tmp_path: Path) -> None:
-    """A corrupt user overlay YAML must surface as ConfigError with stable code."""
+def test_load_corrupt_user_overlay_surfaces_precise_inner_code(tmp_path: Path) -> None:
+    """Invalid YAML from `_load_yaml_rules` must surface its precise inner code
+    (carl.constitution.bad_yaml), not be rewrapped with a coarser outer code.
+    """
+    from carl_core.errors import ValidationError
+
     repo_root = _write_markdown_repo(tmp_path / "repo", claude_md="")
     overlay = tmp_path / "bad.yaml"
     overlay.write_text("rules: {this is: not a list\n- broken", encoding="utf-8")
+
+    with pytest.raises(ValidationError) as excinfo:
+        Constitution.load(repo_root=repo_root, user_overlay=overlay)
+
+    # Precise code from _load_yaml_rules, not the coarser bad_user_overlay.
+    assert excinfo.value.code == "carl.constitution.bad_yaml"
+
+
+def test_load_user_overlay_os_error_wraps_with_outer_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plain OSError during overlay read must wrap to carl.constitution.bad_user_overlay.
+
+    (Distinct from invalid YAML, which gets the precise inner bad_yaml code.)
+    The outer handler narrows on (OSError, yaml.YAMLError), so a non-CARL
+    exception from the inner call triggers the rewrap.
+    """
+    from carl_studio import constitution as const_mod
+
+    repo_root = _write_markdown_repo(tmp_path / "repo", claude_md="")
+    overlay = tmp_path / "unreadable.yaml"
+    overlay.write_text("rules: []\n", encoding="utf-8")
+
+    real_loader = const_mod._load_yaml_rules
+
+    def _selective_raise(path: Path, *, source: str) -> list[ConstitutionalRule]:
+        if source == "user":
+            raise OSError("simulated read failure")
+        return real_loader(path, source=source)
+
+    monkeypatch.setattr(const_mod, "_load_yaml_rules", _selective_raise)
 
     with pytest.raises(ConfigError) as excinfo:
         Constitution.load(repo_root=repo_root, user_overlay=overlay)
 
     assert excinfo.value.code == "carl.constitution.bad_user_overlay"
+    assert "unreadable.yaml" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,121 @@
 # Changelog
 
+## [0.4.1] — 2026-04-18
+
+Security + correctness hotfix on top of 0.4.0. Driven by an ultrareview pass
+across the 7-commit 0.4.0 window. Closes 2 P0 security holes, 9 P1 correctness
+issues, and 3 P2 tech-debt items. Adds 53 new tests (1864 → 1917).
+
+### 🔒 Security (P0)
+
+- **`list_files` sandbox bypass** (`chat_agent.py`): the `_tool_list` handler
+  called `Path(path).glob(pattern)` directly, letting a prompt-injected model
+  enumerate `/`, `/etc`, etc. Now routes through `_resolve_safe_path` and
+  rejects absolute/traversal globs; every match is re-verified inside workdir.
+
+- **`run_shell` in eval sandbox** (`eval/runner.py`): `subprocess.run(cmd,
+  shell=True, ...)` on model-generated strings allowed shell metacharacters
+  (`;`, `|`, `$(`, backticks, `>`, `<`) to escape the tempdir. Now hard-rejects
+  metacharacters, tokenizes via `shlex.split`, runs with `shell=False`.
+  Eval datasets that relied on pipelines must migrate to `execute_code`.
+
+### 🛡 Correctness (P1)
+
+- **Infinite denial loop**: when the permission hook denied every tool in a
+  turn, the agent retried forever. `_MAX_CONSECUTIVE_ALL_DENIED=5` terminates
+  with `carl.all_tools_denied` error event; counter resets on any allowed tool.
+
+- **`asyncio.get_event_loop()` inside async fn** (`trainer.py:_watch_loop`):
+  would raise `RuntimeError` on Python 3.12+. Switched to
+  `asyncio.get_running_loop()`.
+
+- **`run_analysis` environment leak** (`chat_agent.py`): child subprocess
+  inherited ANTHROPIC_API_KEY, HF_TOKEN, CARL_WALLET_PASSPHRASE, etc. Now
+  scrubs sensitive env vars (substring match on KEY/TOKEN/SECRET/PASSWORD/
+  PASSPHRASE/AUTHORIZATION/BEARER/API_KEY) and uses `sys.executable` instead
+  of bare `"python"`.
+
+- **`_resolve_safe_path` TOCTOU** (`chat_agent.py`): was passing
+  `follow_symlinks=True`, defeating the protection carl_core.safepath's
+  default provides. Now `follow_symlinks=False`; legitimate symlink use
+  requires explicit opt-in.
+
+- **Session quarantine silent data loss** (`chat_agent.py` + `cli/chat.py`):
+  corrupted sessions were moved to `.quarantine/` with no user-visible warning.
+  Now logs a warning with the destination path, exposes
+  `_last_load_quarantined` on CARLAgent, and surfaces a visible CLI message
+  on resume.
+
+- **`_knowledge` list unbounded** (`chat_agent.py`): every `ingest_source`
+  appended without cap. Added `_KNOWLEDGE_MAX_CHUNKS=2000` with LRU eviction
+  and configurable `max_knowledge_chunks` kwarg. One-warning-per-session policy.
+
+- **`MemoryStore.decay_pass` races with `write`** (`carl_core/memory.py`):
+  tmp-replace pattern dropped concurrent appends. Added per-instance
+  `threading.RLock` guarding both `write` and `decay_pass`.
+
+- **TinkerAdapter zombie state** (`adapters/tinker_adapter.py`): `submit()`
+  persisted PENDING state then unconditionally raised "not yet implemented",
+  leaking state files nobody could observe. Now raises immediately with
+  `carl.adapter.tinker_not_implemented` after translation validation, no
+  state written.
+
+- **UnslothAdapter silent sys.exit(3)** (`adapters/unsloth_adapter.py`):
+  entrypoint template handled only `sft`/`grpo` but allowlist accepted
+  `dpo`/`kto`/`orpo`. Now validates method at translation time and raises
+  `carl.adapter.method_unsupported` before subprocess spawn.
+
+### 🧹 P2 tech debt
+
+- **`CircuitBreaker` counted programming errors**: `AttributeError`/`TypeError`
+  tripped the breaker. Added `tracked_exceptions` tuple
+  (default `(Exception,)` for back-compat); callers can scope to
+  `(NetworkError, TimeoutError, ...)`. x402 facilitator breaker now scoped
+  to infrastructure failures only.
+
+- **Unsloth quantization double-flag**: `load_in_4bit=True` + `load_in_8bit=True`
+  passed to FastLanguageModel. Rewrote as mutually exclusive precedence chain.
+
+- **`api_key=""` pattern** (`cli/hypothesize.py`, `cli/commit.py`): passing
+  empty string blocked Anthropic SDK's env-var fallback. Now `api_key=None`
+  per CLAUDE.md convention.
+
+### 🧼 Simplifications
+
+- **Adapter shared boilerplate** (`adapters/_common.py`): extracted
+  `status_common`, `logs_common`, `cancel_common`, `require_str`. Each
+  adapter's status/logs/cancel is now a one-line delegate (~80 LOC removed
+  across 5 adapters).
+
+- **`trainer._watch_loop` duplicate branches**: collapsed retryable vs
+  non-retryable except blocks into a single `isinstance` dispatch (~35 → 18 LOC).
+
+- **`trainer._save_carl_checkpoint` nested try/except**: extracted
+  `_safe_capture(label, fn)` helper; five nested blocks → one-liners.
+
+- **`constitution.py` overlay error wrap**: narrowed catch-all so precise
+  inner `ConfigError` / `ValidationError` codes (`bad_yaml`, `bad_rule`)
+  propagate instead of being overwritten by coarser `bad_user_overlay`.
+
+### 📋 Docs
+
+- `AGENTS.md` test baseline updated to current reality (1864 → 1917 post-fix).
+
+### Test counts
+
+- v0.4.0: 1864 passing
+- v0.4.1: **1917 passing** (+53 new covering every fix above)
+
+### Migration notes
+
+- Eval datasets using `run_shell` with pipes/redirection/substitution must
+  migrate to `execute_code` (Python). Plain commands (`ls`, `cat`, `python
+  script.py`, `echo hello`) continue to work.
+- Symlinks inside a chat agent workdir are now rejected by file tools by
+  default.
+
+[0.4.1]: https://github.com/wheattoast11/carl/releases/tag/carl-studio@0.4.1
+
 ## [0.4.0] — 2026-04-18
 
 The "intelligence loop" release. carl-studio is now a proper research hub with

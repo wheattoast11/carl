@@ -93,7 +93,11 @@ class Constitution(BaseModel):
             try:
                 for rule in _load_yaml_rules(overlay, source="user"):
                     merged[rule.id] = rule
-            except Exception as exc:
+            except (ConfigError, ValidationError):
+                # Let precise inner codes (carl.constitution.bad_yaml,
+                # carl.constitution.bad_rule) surface unmodified.
+                raise
+            except (OSError, yaml.YAMLError) as exc:
                 raise ConfigError(
                     f"failed to load user constitution at {overlay}",
                     code="carl.constitution.bad_user_overlay",

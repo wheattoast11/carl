@@ -14,9 +14,21 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from carl_core.errors import NetworkError
 from carl_core.interaction import ActionType, InteractionChain
+from carl_core.retry import CircuitBreaker
 
 _X402_CONFIG_KEY = "x402_config"
+
+# Module-level breaker for facilitator calls. Only infrastructure failures
+# count against the threshold — programming bugs in our own code (attribute
+# errors, type errors, ...) propagate unchanged so callers see the real
+# traceback instead of a misleading "circuit_open" error.
+_FACILITATOR_BREAKER = CircuitBreaker(
+    failure_threshold=5,
+    reset_s=60.0,
+    tracked_exceptions=(NetworkError, ConnectionError, TimeoutError, IOError),
+)
 
 
 class X402Error(Exception):

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import threading
 import time
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -210,6 +211,11 @@ class MemoryStore:
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        # Per-instance reentrant lock. Serialises write() appends against
+        # decay_pass() read-rewrite cycles so appends that land between the
+        # read and the atomic rename are never lost. recall() is intentionally
+        # lock-free — it only reads and tolerates line-level concurrency.
+        self._lock: threading.RLock = threading.RLock()
 
     # ---- paths / ids -------------------------------------------------------
 
@@ -266,9 +272,13 @@ class MemoryStore:
         path = self._path(layer)
         line = json.dumps(item.to_dict(), sort_keys=True, ensure_ascii=False) + "\n"
         # Append-only is safe under concurrent single-line writes on POSIX
-        # when each call opens/closes its own file handle.
-        with path.open("a", encoding="utf-8") as f:
-            f.write(line)
+        # when each call opens/closes its own file handle. The lock guards
+        # against decay_pass() racing with the append — without it, a
+        # concurrent decay_pass that has already snapshotted survivors would
+        # atomically replace the file after the append lands, losing the item.
+        with self._lock:
+            with path.open("a", encoding="utf-8") as f:
+                f.write(line)
         return item
 
     # ---- iteration / scoring ----------------------------------------------
@@ -419,26 +429,35 @@ class MemoryStore:
         """
         removed = 0
         now = datetime.now(timezone.utc)
-        for layer in _DECAY_PRUNED_LAYERS:
-            path = self._path(layer)
-            if not path.exists():
-                continue
-            survivors: list[dict[str, Any]] = []
-            layer_removed = 0
-            for item in self._iter_layer(layer):
-                if _recency_weight(item, now=now) >= min_score:
-                    survivors.append(item.to_dict())
-                else:
-                    layer_removed += 1
-            if layer_removed == 0:
-                # Nothing to do; skip the rewrite so we don't churn mtime.
-                continue
-            tmp = path.with_suffix(".tmp")
-            with tmp.open("w", encoding="utf-8") as f:
-                for rec in survivors:
-                    f.write(json.dumps(rec, sort_keys=True, ensure_ascii=False) + "\n")
-            tmp.replace(path)
-            removed += layer_removed
+        # Hold the lock across the entire read-rewrite cycle for every layer.
+        # The RLock permits reentry from _iter_layer below (which also acquires
+        # it). Concurrent write() calls will serialise on the same lock, so
+        # appends either land fully before the snapshot or fully after the
+        # atomic replace — never between, where they would be silently dropped.
+        with self._lock:
+            for layer in _DECAY_PRUNED_LAYERS:
+                path = self._path(layer)
+                if not path.exists():
+                    continue
+                survivors: list[dict[str, Any]] = []
+                layer_removed = 0
+                for item in self._iter_layer(layer):
+                    if _recency_weight(item, now=now) >= min_score:
+                        survivors.append(item.to_dict())
+                    else:
+                        layer_removed += 1
+                if layer_removed == 0:
+                    # Nothing to do; skip the rewrite so we don't churn mtime.
+                    continue
+                tmp = path.with_suffix(".tmp")
+                with tmp.open("w", encoding="utf-8") as f:
+                    for rec in survivors:
+                        f.write(
+                            json.dumps(rec, sort_keys=True, ensure_ascii=False)
+                            + "\n"
+                        )
+                tmp.replace(path)
+                removed += layer_removed
         return removed
 
     # ---- admin / export ----------------------------------------------------

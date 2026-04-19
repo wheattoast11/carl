@@ -8,7 +8,6 @@ config from stdin when the path argument is ``-``.
 from __future__ import annotations
 
 import shutil
-from pathlib import Path
 from typing import Any
 
 import yaml
@@ -16,15 +15,15 @@ import yaml
 from .protocol import AdapterError, BackendJob, BackendStatus
 from ._common import (
     JobState,
-    cancel_pid,
-    load_state,
+    cancel_common,
+    logs_common,
     new_run_id,
     now_iso,
-    refresh_pid_status,
+    require_str,
     save_state,
     spawn,
     state_dir,
-    tail_log,
+    status_common,
     unavailable,
 )
 
@@ -60,25 +59,8 @@ def translate_config(carl_config: dict[str, Any]) -> dict[str, Any]:
             context={"backend": "axolotl", "type": type(carl_config).__name__},
         )
 
-    try:
-        base_model = str(carl_config["base_model"]).strip()
-    except KeyError as exc:
-        raise AdapterError(
-            "carl config is missing 'base_model'",
-            code="carl.adapter.translation",
-            context={"backend": "axolotl"},
-            cause=exc,
-        ) from exc
-
-    try:
-        dataset = str(carl_config["dataset_repo"]).strip()
-    except KeyError as exc:
-        raise AdapterError(
-            "carl config is missing 'dataset_repo'",
-            code="carl.adapter.translation",
-            context={"backend": "axolotl"},
-            cause=exc,
-        ) from exc
+    base_model = require_str(carl_config, "base_model", backend="axolotl")
+    dataset = require_str(carl_config, "dataset_repo", backend="axolotl")
 
     method = str(carl_config.get("method", "sft")).lower().strip()
     if method not in _RL_TRAINER_MAP:
@@ -216,22 +198,10 @@ class AxolotlAdapter:
         return state.to_job()
 
     def status(self, run_id: str) -> BackendJob:
-        state = load_state(self.name, run_id)
-        state = refresh_pid_status(state)
-        save_state(state)
-        return state.to_job()
+        return status_common(self.name, run_id)
 
     def logs(self, run_id: str, *, tail: int = 100) -> list[str]:
-        state = load_state(self.name, run_id)
-        return tail_log(
-            Path(state.log_path) if state.log_path else None,
-            tail,
-        )
+        return logs_common(self.name, run_id, tail=tail)
 
     def cancel(self, run_id: str) -> bool:
-        state = load_state(self.name, run_id)
-        if BackendStatus.is_terminal(state.status):
-            return False
-        result = cancel_pid(state)
-        save_state(state)
-        return result
+        return cancel_common(self.name, run_id)

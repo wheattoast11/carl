@@ -118,7 +118,7 @@ def _learnings_from_session(session_id: str) -> list[Any]:
     )
 
     try:
-        agent = CARLAgent(api_key="", frame=None, max_budget_usd=0.30)
+        agent = CARLAgent(api_key=None, frame=None, max_budget_usd=0.30)
     except ImportError:
         return []
     agent._tools = []  # type: ignore[attr-defined]

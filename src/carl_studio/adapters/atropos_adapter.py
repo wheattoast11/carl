@@ -9,21 +9,20 @@ from __future__ import annotations
 
 import json
 import shutil
-from pathlib import Path
 from typing import Any
 
 from .protocol import AdapterError, BackendJob, BackendStatus
 from ._common import (
     JobState,
-    cancel_pid,
-    load_state,
+    cancel_common,
+    logs_common,
     new_run_id,
     now_iso,
-    refresh_pid_status,
+    require_str,
     save_state,
     spawn,
     state_dir,
-    tail_log,
+    status_common,
     unavailable,
 )
 
@@ -41,15 +40,7 @@ def translate_config(carl_config: dict[str, Any]) -> dict[str, Any]:
             context={"backend": "atropos", "type": type(carl_config).__name__},
         )
 
-    try:
-        model = str(carl_config["base_model"]).strip()
-    except KeyError as exc:
-        raise AdapterError(
-            "carl config is missing 'base_model'",
-            code="carl.adapter.translation",
-            context={"backend": "atropos"},
-            cause=exc,
-        ) from exc
+    model = require_str(carl_config, "base_model", backend="atropos")
 
     method = str(carl_config.get("method", "grpo")).lower().strip()
     # Atropos is primarily RL-oriented; SFT is still accepted as a warmup path.
@@ -133,22 +124,10 @@ class AtroposAdapter:
         return state.to_job()
 
     def status(self, run_id: str) -> BackendJob:
-        state = load_state(self.name, run_id)
-        state = refresh_pid_status(state)
-        save_state(state)
-        return state.to_job()
+        return status_common(self.name, run_id)
 
     def logs(self, run_id: str, *, tail: int = 100) -> list[str]:
-        state = load_state(self.name, run_id)
-        return tail_log(
-            Path(state.log_path) if state.log_path else None,
-            tail,
-        )
+        return logs_common(self.name, run_id, tail=tail)
 
     def cancel(self, run_id: str) -> bool:
-        state = load_state(self.name, run_id)
-        if BackendStatus.is_terminal(state.status):
-            return False
-        result = cancel_pid(state)
-        save_state(state)
-        return result
+        return cancel_common(self.name, run_id)

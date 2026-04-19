@@ -161,11 +161,23 @@ class CircuitBreaker:
     When open, entering the context raises CARLError(code="carl.circuit_open").
     After reset_s elapses, transitions to half-open and allows one probe; on
     success closes, on failure reopens.
+
+    ``tracked_exceptions`` narrows which exception types count as failures.
+    Programming bugs (``AttributeError``, ``TypeError``, ``KeyError`` etc.) are
+    typically deterministic and will repeat regardless of backoff, so tripping
+    the breaker on them just delays the real traceback. Pass the infrastructure
+    exception tuple you actually want to gate on — e.g.
+    ``tracked_exceptions=(NetworkError, ConnectionError, TimeoutError, IOError)``.
+    The default ``(Exception,)`` preserves the legacy "count everything"
+    behaviour so existing callers are unaffected. Non-tracked exceptions
+    propagate without resetting *or* incrementing the failure counter; a later
+    tracked success still closes the breaker.
     """
 
     failure_threshold: int = 5
     reset_s: float = 30.0
     clock: Callable[[], float] = field(default=time.monotonic)
+    tracked_exceptions: tuple[type[BaseException], ...] = (Exception,)
     _state: str = field(default=CircuitState.CLOSED, init=False)
     _consecutive_failures: int = field(default=0, init=False)
     _opened_at: float | None = field(default=None, init=False)
@@ -207,14 +219,23 @@ class CircuitBreaker:
     ) -> None:
         with self._lock:
             if exc_type is None:
+                # Clean exit: a success always closes the breaker and resets
+                # the failure counter, regardless of tracking configuration.
                 self._state = CircuitState.CLOSED
                 self._consecutive_failures = 0
                 self._opened_at = None
-            else:
-                self._consecutive_failures += 1
-                if self._consecutive_failures >= self.failure_threshold:
-                    self._state = CircuitState.OPEN
-                    self._opened_at = self.clock()
+                return
+            # Only count failures we were asked to gate on. Programming errors
+            # (AttributeError, TypeError, ...) propagate unchanged so a single
+            # real bug in the wrapped call can't trip the breaker on the
+            # first invocation and hide the underlying traceback behind
+            # "circuit_open" noise.
+            if not issubclass(exc_type, self.tracked_exceptions):
+                return
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.failure_threshold:
+                self._state = CircuitState.OPEN
+                self._opened_at = self.clock()
 
 
 __all__ = [

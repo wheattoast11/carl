@@ -270,3 +270,57 @@ def unavailable(backend: str, *, hint: str) -> AdapterError:
         code="carl.adapter.unavailable",
         context={"backend": backend, "install_hint": hint},
     )
+
+
+# ---------------------------------------------------------------------------
+# Shared adapter method bodies (status / logs / cancel / config validation)
+# ---------------------------------------------------------------------------
+
+
+def status_common(backend: str, run_id: str) -> BackendJob:
+    """Default ``status()`` body: load → refresh pid liveness → persist → emit."""
+    state = load_state(backend, run_id)
+    state = refresh_pid_status(state)
+    save_state(state)
+    return state.to_job()
+
+
+def logs_common(backend: str, run_id: str, *, tail: int) -> list[str]:
+    """Default ``logs()`` body: load state, tail the recorded log path."""
+    state = load_state(backend, run_id)
+    log_path = Path(state.log_path) if state.log_path else None
+    return tail_log(log_path, tail)
+
+
+def cancel_common(backend: str, run_id: str, *, via_pid: bool = True) -> bool:
+    """Default ``cancel()`` body.
+
+    If the run is already terminal, returns False (nothing to cancel).
+    Otherwise, optionally SIGTERMs the recorded pid, marks state CANCELED,
+    persists, and returns True.
+    """
+    state = load_state(backend, run_id)
+    if BackendStatus.is_terminal(state.status):
+        return False
+    if via_pid and state.pid is not None:
+        cancel_pid(state)
+    if state.status != BackendStatus.CANCELED:
+        state.status = BackendStatus.CANCELED
+        state.completed_at = state.completed_at or now_iso()
+    save_state(state)
+    return True
+
+
+def require_str(cfg: dict[str, Any], key: str, *, backend: str) -> str:
+    """Fetch ``cfg[key]`` as a stripped string, raising a consistent
+    translation-stage :class:`AdapterError` on missing keys.
+    """
+    try:
+        return str(cfg[key]).strip()
+    except KeyError as exc:
+        raise AdapterError(
+            f"carl config is missing {key!r}",
+            code="carl.adapter.missing_required",
+            context={"backend": backend, "key": key},
+            cause=exc,
+        ) from exc
