@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import random
 from collections import defaultdict
-from typing import Sequence
 
 from carl_studio.data.types import DifficultyTier, Domain, Modality, UnifiedSample
 

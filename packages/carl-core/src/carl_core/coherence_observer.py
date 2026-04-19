@@ -43,7 +43,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from .coherence_probe import CoherenceSnapshot
-from .constants import DEFECT_THRESHOLD, KAPPA, SIGMA
+from .constants import KAPPA, SIGMA
 
 
 # ============================================================

@@ -6,13 +6,12 @@ structured result output for paper figures.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
 
-from carl_core.constants import KAPPA, SIGMA, T_STAR
+from carl_core.constants import KAPPA, SIGMA
 
 
 class ExperimentResult(BaseModel):

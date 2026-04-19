@@ -24,17 +24,14 @@ Usage:
 """
 from __future__ import annotations
 
-import math
-import sys
 from dataclasses import dataclass
-from typing import Any
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Horizontal, Vertical
+from textual.containers import Container
 from textual.reactive import reactive
-from textual.widgets import Footer, Header, Label, Static, RichLog
+from textual.widgets import Label, Static
 from textual_plotext import PlotextPlot
 
 

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from carl_studio.shadow.traffic_log import TrafficEntry, TrafficLogger
-from carl_studio.shadow.weight_fork import PromotionStatus, ShadowCycle, WeightForker
+from carl_studio.shadow.weight_fork import ShadowCycle, WeightForker
 
 
 @dataclass

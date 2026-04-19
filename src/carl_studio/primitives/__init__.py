@@ -18,19 +18,19 @@ from __future__ import annotations
 
 import warnings
 
-warnings.warn(
-    "carl_studio.primitives is a compatibility shim and will be removed in v0.5.0. "
-    "Import from carl_core.* directly instead.",
-    DeprecationWarning,
-    stacklevel=2,
-)
-
 from carl_core.coherence_observer import CoherenceObserver
 from carl_core.coherence_probe import CoherenceProbe, CoherenceSnapshot
 from carl_core.coherence_trace import CoherenceTrace, select_traces
 from carl_core.constants import DEFECT_THRESHOLD, KAPPA, SIGMA, T_STAR
 from carl_core.frame_buffer import FrameBuffer, FrameRecord
 from carl_core.math import compute_phi
+
+warnings.warn(
+    "carl_studio.primitives is a compatibility shim and will be removed in v0.5.0. "
+    "Import from carl_core.* directly instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 __all__ = [
     "CoherenceObserver",

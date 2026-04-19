@@ -13,7 +13,6 @@ import importlib
 import logging
 import warnings
 from pathlib import Path
-from typing import Any
 
 from carl_studio.data.adapters.base import DataAdapter
 from carl_studio.data.types import DataSource, Domain, Modality

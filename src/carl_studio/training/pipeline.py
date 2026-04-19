@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 import os
-import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable
@@ -142,7 +141,6 @@ class SendItPipeline:
 
     async def run(self) -> TrainingRun:
         """Execute the full pipeline. Returns the final TrainingRun."""
-        from carl_studio.training.trainer import CARLTrainer
 
         # Stage 1: Validate
         self._emit(PipelineStage.VALIDATE, "Validating config...", 0.0)

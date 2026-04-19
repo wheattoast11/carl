@@ -13,9 +13,8 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-from carl_core.constants import DEFECT_THRESHOLD
 from carl_core.math import compute_phi
 
 
@@ -251,7 +250,7 @@ class PhaseTransitionProbe:
             try:
                 logits = _generate_logits(model, tokenizer, prompt, device)
                 phi_values.append(_compute_mean_phi(logits))
-            except Exception as e:
+            except Exception:
                 phi_values.append(0.0)
 
         # Find first prompt level where Phi crosses threshold

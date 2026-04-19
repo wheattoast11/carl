@@ -320,7 +320,7 @@ class EvalSandbox:
             return "Error: execution timed out (10s limit)"
         except FileNotFoundError:
             self.tool_failures += 1
-            return f"Error: file not found"
+            return "Error: file not found"
         except Exception as e:
             self.tool_failures += 1
             return f"Error: {e}"
@@ -444,7 +444,6 @@ def _compute_phase1_metrics(
     samples: list[dict[str, Any]],
 ) -> dict[str, float]:
     """Phase 1 metrics: format validity, tool selection accuracy, chain completion."""
-    from carl_studio.training.rewards.base import extract_json
     from carl_studio.training.rewards.task import (
         tool_call_format_reward,
         tool_selection_reward,

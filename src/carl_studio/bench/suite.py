@@ -7,9 +7,9 @@ The CARL Trainability Index (CTI) is a weighted composite:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 
 from carl_studio.bench.probes import (
     AdaptationRateProbe,

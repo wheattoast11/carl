@@ -20,8 +20,8 @@ Requires terminals-runtime for LoRAMicroUpdate implementation.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass, field
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any
 
 try:
     import torch

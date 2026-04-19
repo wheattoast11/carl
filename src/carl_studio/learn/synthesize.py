@@ -6,7 +6,6 @@ from templates, validate in sandbox, output JSONL.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from pydantic import BaseModel

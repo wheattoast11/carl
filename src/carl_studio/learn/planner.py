@@ -6,7 +6,6 @@ this module interprets the intent and produces a structured LearningPlan.
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 

@@ -13,7 +13,7 @@ import re
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from carl_studio.learn.ingest import SourceChunk
 

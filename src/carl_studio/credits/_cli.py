@@ -18,11 +18,10 @@ import typer
 
 from carl_studio.cli.shared import _warn_legacy_command_alias
 from carl_studio.console import get_console
-from carl_studio.credits.balance import CreditBalance, CreditError, get_credit_balance
+from carl_studio.credits.balance import CreditError, get_credit_balance
 from carl_studio.credits.estimate import (
     BUNDLES,
     METHOD_STEP_SECONDS,
-    CreditEstimate,
     best_bundle,
     estimate_job_cost,
 )

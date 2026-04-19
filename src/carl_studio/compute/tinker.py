@@ -1,7 +1,6 @@
 """Tinker compute backend — managed training API."""
 from __future__ import annotations
 
-import os
 
 
 class TinkerBackend:
