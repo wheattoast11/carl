@@ -35,6 +35,21 @@ def doctor(
     project = summary["project"]
     dependencies = summary["dependencies"]
 
+    # Sticky-note queue — never let the queue subsystem break doctor.
+    queue_pending: int | None
+    queue_error: str | None = None
+    try:
+        from carl_studio.db import LocalDB
+        from carl_studio.sticky import StickyQueue
+
+        _queue_notes = StickyQueue(LocalDB()).status(limit=500)
+        queue_pending = sum(
+            1 for n in _queue_notes if n.status in ("queued", "processing")
+        )
+    except Exception as exc:  # noqa: BLE001 — doctor must never crash on subsystem errors
+        queue_pending = None
+        queue_error = str(exc)
+
     doctor_payload = {
         "guided_workbench": readiness["guided_workbench"],
         "blocking_issues": readiness["blocking_issues"],
@@ -48,6 +63,10 @@ def doctor(
             "remote_jobs": readiness["remote_jobs"],
             "live_observe": readiness["live_observe"],
             "diagnose": readiness["diagnose"],
+        },
+        "queue": {
+            "pending": queue_pending,
+            "error": queue_error,
         },
     }
 
@@ -94,6 +113,18 @@ def doctor(
         else "install carl-studio[observe] and export ANTHROPIC_API_KEY",
     )
     table.add_row("Camp", _camp_status_label(summary), "carl camp login")
+    if queue_error is not None:
+        table.add_row("Queue", "error", queue_error)
+    elif queue_pending is None:
+        table.add_row("Queue", "unavailable", "sticky queue unavailable")
+    else:
+        queue_status = "empty" if queue_pending == 0 else "ready"
+        queue_detail = (
+            "no sticky notes pending"
+            if queue_pending == 0
+            else f"{queue_pending} pending"
+        )
+        table.add_row("Queue", queue_status, queue_detail)
     c.print(table)
     c.blank()
 

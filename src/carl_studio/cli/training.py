@@ -433,6 +433,11 @@ def train(
         "--backend",
         help="Training backend adapter: trl (default), unsloth, axolotl, tinker, atropos.",
     ),
+    from_queue: bool = typer.Option(
+        False,
+        "--from-queue",
+        help="Load training config from the pending FeedbackEngine proposal.",
+    ),
 ) -> None:
     """Start a CARL training run. Use --send-it for full autonomous pipeline."""
     import yaml
@@ -445,6 +450,26 @@ def train(
             raw = yaml.safe_load(f) or {}
     else:
         raw = {}
+
+    # --from-queue: load the pending FeedbackEngine proposal (if any) and
+    # merge its suggested_config into the raw training config. The proposal
+    # path runs before CLI overrides so explicit flags still win.
+    if from_queue:
+        from carl_studio.db import LocalDB
+        from carl_studio.feedback import FeedbackEngine
+
+        c_fq = get_console()
+        proposal = FeedbackEngine(LocalDB()).pending_proposal()
+        if proposal is None:
+            c_fq.error(
+                "No pending training proposal -- enqueue one via `carl queue` first."
+            )
+            raise typer.Exit(2)
+        c_fq.info(
+            f"Applying proposal for note {proposal.note_id}: {proposal.gap_summary}"
+        )
+        for key, value in proposal.suggested_config.items():
+            raw.setdefault(key, value)  # pyright: ignore[reportUnknownMemberType]
 
     # Resolve the training backend early so unknown names fail fast (exit 2).
     backend_name = (backend or str(raw.get("backend", "") or "trl")).strip().lower()

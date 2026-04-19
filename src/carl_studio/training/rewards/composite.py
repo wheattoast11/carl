@@ -144,6 +144,188 @@ class CARLReward:
 
 
 # ---------------------------------------------------------------------------
+# Phase-adaptive composite (SEM-010)
+# ---------------------------------------------------------------------------
+
+
+class PhaseAdaptiveCARLReward(CARLReward):
+    """Phase-adaptive weighting of the CARL composite reward.
+
+    Reads current Kuramoto-R from the most recent CoherenceTrace batch
+    and shifts weights to match the detected phase:
+
+      - GASEOUS (R < 0.30):        reward commitment — discontinuity dominates.
+      - LIQUID  (0.30 <= R < 0.70): balanced — all three components contribute.
+      - CRYSTALLINE (R >= 0.70):    reward stability — multiscale dominates.
+
+    Fall-back (no traces yet): behave like static CARLReward using the weights
+    supplied at construction time.
+
+    Trace capture: the parent ``CARLReward`` does not maintain ``_last_traces``
+    itself (only the ``make_carl_reward`` closure does). This subclass caches
+    the most recently scored trace(s) on every ``score``/``score_from_trace``
+    call so that the phase classifier can consult them on the next invocation
+    and so that external callbacks (e.g. ``ResonanceLRCallback``) can poll
+    ``self._last_traces`` for Kuramoto-R.
+    """
+
+    # Per-phase weight profiles. Sum = 1.0. Order: (multiscale, cloud, discontinuity).
+    _PROFILE_GASEOUS: tuple[float, float, float] = (0.20, 0.30, 0.50)
+    _PROFILE_LIQUID: tuple[float, float, float] = (0.40, 0.30, 0.30)
+    _PROFILE_CRYSTALLINE: tuple[float, float, float] = (0.60, 0.30, 0.10)
+
+    _GASEOUS_MAX_R: float = 0.30
+    _LIQUID_MAX_R: float = 0.70
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._last_weights: tuple[float, float, float] = (
+            self.weight_multiscale,
+            self.weight_cloud,
+            self.weight_discontinuity,
+        )
+        # Trace cache used by the phase classifier and external callbacks.
+        # Empty until the first score_*() call lands. Entries may be ``None``
+        # when tests / callers stub out a batch slot, so the classifier is
+        # None-tolerant (see ``_current_R``).
+        self._last_traces: list[CoherenceTrace | None] = []
+
+    # ------------------------------------------------------------------
+    # Phase classification
+    # ------------------------------------------------------------------
+
+    def _phase_weights_from_R(
+        self, R: float
+    ) -> tuple[float, float, float]:
+        """Map Kuramoto-R to a (w_mc, w_cq, w_disc) profile."""
+        if R < self._GASEOUS_MAX_R:
+            return self._PROFILE_GASEOUS
+        if R < self._LIQUID_MAX_R:
+            return self._PROFILE_LIQUID
+        return self._PROFILE_CRYSTALLINE
+
+    def _current_R(self) -> float | None:
+        """Mean Kuramoto-R across cached traces, or None if unavailable.
+
+        Robust to:
+          - No traces cached yet (returns None, static weights retained).
+          - Trace objects whose ``kuramoto_R`` raises (returns None).
+          - ``None`` entries in the trace list.
+        """
+        traces = self._last_traces
+        if not traces:
+            return None
+        try:
+            Rs: list[float] = []
+            for t in traces:
+                if t is None:
+                    continue
+                R_val = t.kuramoto_R()
+                if not math.isfinite(R_val):
+                    continue
+                Rs.append(float(R_val))
+            if not Rs:
+                return None
+            return sum(Rs) / len(Rs)
+        except Exception as exc:  # noqa: BLE001 -- classifier must never crash training
+            logger.debug(
+                "PhaseAdaptiveCARLReward: kuramoto_R read failed, retaining weights: %s",
+                exc,
+            )
+            return None
+
+    def _apply_phase_weights(self) -> None:
+        """Consult cached traces; shift weights if phase is determinable.
+
+        Silently retains current weights on fallback (no traces / error)."""
+        R = self._current_R()
+        if R is None:
+            return
+        w_mc, w_cq, w_disc = self._phase_weights_from_R(R)
+        self.weight_multiscale = w_mc
+        self.weight_cloud = w_cq
+        self.weight_discontinuity = w_disc
+        self._last_weights = (w_mc, w_cq, w_disc)
+
+    # ------------------------------------------------------------------
+    # Scoring overrides -- shift weights BEFORE delegating, cache AFTER.
+    # ------------------------------------------------------------------
+
+    def score_from_trace(
+        self, trace: CoherenceTrace
+    ) -> tuple[float, dict[str, float]]:
+        # Classify phase from previously-cached traces, then delegate.
+        self._apply_phase_weights()
+        result = super().score_from_trace(trace)
+        # Cache this trace so the NEXT call reflects the most recent phase.
+        self._last_traces = [trace]
+        return result
+
+    def score(
+        self, logits: np.ndarray, token_ids: np.ndarray
+    ) -> tuple[float, dict[str, float]]:
+        # Same classify-then-delegate-then-cache pattern; the base class
+        # builds the trace inside score(), so we must rebuild and cache
+        # explicitly to keep the cache consistent across both entry points.
+        self._apply_phase_weights()
+        logits_2d = _ensure_2d_logits(logits)
+        token_ids_arr = np.asarray(token_ids)
+        if token_ids_arr.ndim == 2:
+            token_ids_arr = token_ids_arr[-1]
+        trace = CoherenceTrace.from_logits(logits_2d, token_ids_arr)
+        result = super().score_from_trace(trace)
+        self._last_traces = [trace]
+        return result
+
+    # ------------------------------------------------------------------
+    # Batch entry point (used by parent factory and agentic callers).
+    # ------------------------------------------------------------------
+
+    def compute(
+        self, traces: list[CoherenceTrace]
+    ) -> list[float]:
+        """Batch scoring entry point for phase-adaptive composite.
+
+        Accepts a list of pre-built CoherenceTrace objects, classifies
+        the phase from the ``_last_traces`` cache (populated by a prior
+        call or manually), shifts weights, then scores each trace and
+        caches the full batch for the next invocation.
+
+        This is a sibling of ``score_from_trace`` that handles the
+        batch-level protocol used by TRL-style reward functions.
+        """
+        self._apply_phase_weights()
+        scores: list[float] = []
+        for trace in traces:
+            score_val, _components = super().score_from_trace(trace)
+            scores.append(float(score_val))
+        # Cache the whole batch so the next compute() sees the current R.
+        self._last_traces = list(traces)
+        return scores
+
+    # ------------------------------------------------------------------
+    # Introspection -- read-only views into current phase + weights.
+    # ------------------------------------------------------------------
+
+    @property
+    def current_weights(self) -> tuple[float, float, float]:
+        """Most recently applied (w_multiscale, w_cloud, w_discontinuity)."""
+        return self._last_weights
+
+    @property
+    def current_phase(self) -> str:
+        """Detected phase name: 'gaseous' | 'liquid' | 'crystalline' | 'unknown'."""
+        R = self._current_R()
+        if R is None:
+            return "unknown"
+        if R < self._GASEOUS_MAX_R:
+            return "gaseous"
+        if R < self._LIQUID_MAX_R:
+            return "liquid"
+        return "crystalline"
+
+
+# ---------------------------------------------------------------------------
 # TRL-compatible factory
 # ---------------------------------------------------------------------------
 

@@ -23,6 +23,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from carl_core.constants import SIGMA
 from carl_core.errors import CARLError
 from carl_core.interaction import ActionType, InteractionChain
 from carl_core.safepath import PathEscape, safe_resolve
@@ -76,6 +77,54 @@ class EvalConfig(BaseModel):
         description="SFT adapter to merge before GRPO adapter",
     )
 
+    # Coherence gate: CARL's reward/eval isomorphism. The eval gate MUST check
+    # the same coherence field the training rewards optimize for — otherwise a
+    # model can game the correctness signal and pass eval while producing
+    # incoherent outputs.
+    coherence_phi_floor: float = Field(
+        default=SIGMA,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum phi_mean (order parameter) required to pass the gate. "
+            "Default SIGMA = 3/16 — the semantic quantum from the conservation law."
+        ),
+    )
+    discontinuity_min: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Lower bound for mean discontinuity score. Below this the model is "
+            "frozen (no phase transitions) — it is not learning new structure."
+        ),
+    )
+    discontinuity_max: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Upper bound for mean discontinuity score. Above this the model is "
+            "thrashing (too many crystallizations) — outputs are unstable."
+        ),
+    )
+    require_coherence_gate: bool = Field(
+        default=True,
+        description=(
+            "If True, gate requires BOTH primary metric AND coherence floor. "
+            "Set False for legacy evals that only exercise correctness metrics."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_discontinuity_band(self) -> EvalConfig:
+        if self.discontinuity_min > self.discontinuity_max:
+            raise ValueError(
+                f"discontinuity_min ({self.discontinuity_min}) must be "
+                f"<= discontinuity_max ({self.discontinuity_max})"
+            )
+        return self
+
     @model_validator(mode="before")
     @classmethod
     def apply_default_threshold(cls, data: Any) -> Any:
@@ -110,11 +159,35 @@ class EvalReport(BaseModel):
     threshold: float
     passed: bool
     coherence: dict[str, float] | None = None
+    gate_reason: str | None = Field(
+        default=None,
+        description=(
+            "Human-readable reason from EvalGate.check() explaining which "
+            "dimension (primary metric, phi floor, discontinuity band) "
+            "passed or failed. Populated on every gate.check() call."
+        ),
+    )
     detail: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class EvalGate:
-    """Applies pass/fail threshold to an EvalReport."""
+    """Applies pass/fail threshold to an EvalReport.
+
+    Correctness-only mode (legacy): pass when ``primary_value >= threshold``.
+
+    Coherence-aware mode (default when ``require_coherence_gate`` is True on
+    the supplied config): pass when BOTH the primary metric threshold is met
+    AND the coherence field falls inside the configured band:
+
+      phi_mean >= coherence_phi_floor         (ordered enough)
+      discontinuity_min <= discontinuity_score <= discontinuity_max
+                                              (learning, not frozen or thrashing)
+
+    The gate is the eval-side half of the reward/eval isomorphism. Training
+    rewards optimize for the same coherence field the gate now checks — so
+    a model that games the correctness signal while producing incoherent
+    outputs can no longer ship.
+    """
 
     # Default thresholds per phase
     PHASE_DEFAULTS: dict[str, float] = {
@@ -123,7 +196,12 @@ class EvalGate:
         "2prime": 0.30,
     }
 
-    def __init__(self, threshold: float | None = None, phase: str = "2prime") -> None:
+    def __init__(
+        self,
+        threshold: float | None = None,
+        phase: str = "2prime",
+        config: EvalConfig | None = None,
+    ) -> None:
         if threshold is not None:
             if not 0.0 <= threshold <= 1.0:
                 raise ValueError(f"threshold must be in [0, 1], got {threshold}")
@@ -131,9 +209,81 @@ class EvalGate:
         else:
             self.threshold = self.PHASE_DEFAULTS.get(phase, 0.5)
 
+        # When no config is supplied we behave exactly like the legacy gate.
+        # Callers that want the coherence check pass the config they built.
+        self.config = config
+        self.phase = phase
+
     def check(self, report: EvalReport) -> bool:
-        """Return True if the report's primary metric meets the threshold."""
-        return report.primary_value >= self.threshold
+        """Return True iff the report satisfies the active gate policy.
+
+        Side effect: writes a human-readable ``gate_reason`` back onto the
+        report so callers/logs can see which dimension failed.
+        """
+        primary_ok = report.primary_value >= self.threshold
+
+        require_coherence = (
+            self.config is not None and self.config.require_coherence_gate
+        )
+
+        if not require_coherence:
+            report.gate_reason = (
+                "PASS"
+                if primary_ok
+                else (
+                    f"FAIL primary={primary_ok} "
+                    f"(primary_value={report.primary_value:.3f} "
+                    f"threshold={self.threshold:.3f})"
+                )
+            )
+            return primary_ok
+
+        # Coherence-aware gate — require the config to spell out the band.
+        assert self.config is not None  # narrowed by the require_coherence check
+        if report.coherence:
+            phi = float(report.coherence.get("phi_mean", 0.0))
+            disc = float(report.coherence.get("discontinuity_score", 0.5))
+            has_coherence = True
+        else:
+            # No coherence field computed — fail closed when the gate is
+            # required. A missing field is not a free pass.
+            phi = 0.0
+            disc = 0.5
+            has_coherence = False
+
+        phi_ok = phi >= self.config.coherence_phi_floor
+        disc_ok = (
+            self.config.discontinuity_min
+            <= disc
+            <= self.config.discontinuity_max
+        )
+        coherence_ok = has_coherence and phi_ok and disc_ok
+
+        passed = primary_ok and coherence_ok
+
+        if passed:
+            report.gate_reason = (
+                f"PASS primary_value={report.primary_value:.3f}>={self.threshold:.3f} "
+                f"phi={phi:.3f}>={self.config.coherence_phi_floor:.3f} "
+                f"disc={disc:.3f} in "
+                f"[{self.config.discontinuity_min:.2f},{self.config.discontinuity_max:.2f}]"
+            )
+        else:
+            if not has_coherence:
+                coh_detail = "coherence=MISSING"
+            else:
+                coh_detail = (
+                    f"phi={phi:.3f}>={self.config.coherence_phi_floor:.3f}:{phi_ok} "
+                    f"disc={disc:.3f} in "
+                    f"[{self.config.discontinuity_min:.2f},"
+                    f"{self.config.discontinuity_max:.2f}]:{disc_ok}"
+                )
+            report.gate_reason = (
+                f"FAIL primary={primary_ok} coherence={coherence_ok} "
+                f"(primary_value={report.primary_value:.3f} "
+                f"threshold={self.threshold:.3f} | {coh_detail})"
+            )
+        return passed
 
 
 # ---------------------------------------------------------------------------

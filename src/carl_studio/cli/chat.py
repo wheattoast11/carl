@@ -298,6 +298,16 @@ def chat_cmd(
     c.info("Type 'quit' or Ctrl+C to exit.")
     c.blank()
 
+    # Env-baked intro — rendered ONCE before the first input() for a
+    # zero-latency greeting. Resumed sessions skip the intro because the
+    # user is mid-conversation; a fresh "/s"-style priming would be noise.
+    from carl_studio.cli.intro import parse_intro_selection, render_intro
+    from carl_studio.jit_context import JITContext, extract
+
+    bootstrap_done = bool(session)  # resumed sessions skip bootstrap priming
+    if not bootstrap_done:
+        render_intro(c)
+
     while True:
         try:
             user_input = input("  you> ").strip()
@@ -310,9 +320,60 @@ def chat_cmd(
             _exit_session(c, agent)
             break
 
+        # Bootstrap phase: on the FIRST turn of a fresh session, classify
+        # the input against the intro moves and prime the agent. Subsequent
+        # turns fall through to the normal path.
+        primed_input = user_input
+        bootstrap_ctx: JITContext | None = None
+        if not bootstrap_done:
+            bootstrap_done = True
+            move_key = parse_intro_selection(user_input)
+
+            # "/s" or "s" short-circuits into the sticky queue — the user
+            # signalled "queue this for the heartbeat loop", so we do not
+            # spin up the agent at all for this turn. The raw input is
+            # treated as the note content (when the user typed just "s" or
+            # "sticky" with no body, we prompt once for the note).
+            if move_key == "s":
+                try:
+                    from carl_studio.db import LocalDB
+                    from carl_studio.sticky import StickyQueue
+
+                    note_body = user_input
+                    # Strip the bare selection token so "s" alone does
+                    # not become the note content.
+                    stripped = user_input.strip().lower()
+                    if stripped in ("s", "sticky", "/s", "/sticky"):
+                        try:
+                            note_body = input("  note> ").strip()
+                        except (KeyboardInterrupt, EOFError):
+                            note_body = ""
+                    if note_body:
+                        queue = StickyQueue(LocalDB())
+                        queue.append(note_body, session_id=session or None)
+                        c.ok("queued")
+                    else:
+                        c.info("nothing queued (empty note)")
+                except Exception as exc:
+                    c.error(f"sticky append failed: {exc}")
+                continue
+
+            # Extract JIT context and prime the agent's next system prompt.
+            try:
+                bootstrap_ctx = extract(user_input, move_key=move_key)
+                prompt_ext = bootstrap_ctx.system_prompt_extension()
+                if prompt_ext and hasattr(agent, "_system_prompt_extension"):
+                    # CARLAgent exposes `_system_prompt_extension` explicitly
+                    # as the public primer surface for CLI bootstrap paths.
+                    agent._system_prompt_extension = prompt_ext  # pyright: ignore[reportPrivateUsage]
+            except Exception as exc:
+                # JIT extraction is best-effort; never block the chat on it.
+                c.warn(f"intro priming skipped: {exc}")
+                bootstrap_ctx = None
+
         try:
             streaming_text = False
-            for event in agent.chat(user_input):
+            for event in agent.chat(primed_input):
                 if event.kind == "text_delta":
                     if not streaming_text:
                         c.blank()
@@ -346,6 +407,29 @@ def chat_cmd(
                     c.error(event.content)
         except Exception as exc:
             c.error(str(exc))
+
+        # Bootstrap phase — apply the JIT frame patch AFTER turn-1 completes.
+        # We only do this when the agent has no existing frame (or an empty
+        # one); an explicit pre-existing WorkFrame wins over a JIT guess.
+        if bootstrap_ctx is not None and bootstrap_ctx.frame_patch:
+            try:
+                from carl_studio.frame import WorkFrame
+
+                current = getattr(agent, "_frame", None) or WorkFrame()
+                # Only apply the patch if the frame is currently inactive —
+                # respect an explicit frame set via --frame or set_frame().
+                if not getattr(current, "active", False):
+                    # CARLAgent intentionally exposes these attributes for CLI
+                    # bootstrap priming; the leading underscore is a module
+                    # convention, not a hard access gate.
+                    agent._frame = current.model_copy(update=bootstrap_ctx.frame_patch)  # pyright: ignore[reportPrivateUsage]
+                    # Invalidate any cached constitution prompt so
+                    # frame-topic rule selection picks up the new domain.
+                    if hasattr(agent, "_constitution_prompt"):
+                        agent._constitution_prompt = None  # pyright: ignore[reportPrivateUsage]
+            except Exception as exc:
+                c.warn(f"frame bootstrap skipped: {exc}")
+        bootstrap_ctx = None  # one-shot — never re-apply on later turns
 
 
 def _exit_session(c: Any, agent: Any) -> None:

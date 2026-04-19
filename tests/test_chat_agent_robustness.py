@@ -1,4 +1,4 @@
-"""Robustness tests for carl_studio.chat_agent — WS-R1..R6.
+"""Robustness tests for carl_studio.chat_agent — WS-R1..R6 + REV-004/REV-010.
 
 Covers the six production-hardening passes:
 
@@ -8,6 +8,8 @@ Covers the six production-hardening passes:
 * WS-R4 — Tool timeout + cancellation, hook isolation
 * WS-R5 — Tool arg schema validation
 * WS-R6 — dispatch_cli agent tool
+* REV-004 — Greeting fires on turn_count==1, never on a resumed session
+* REV-010 — Frame mutation invalidates the cached constitution prompt
 """
 from __future__ import annotations
 
@@ -1318,3 +1320,149 @@ class TestKnowledgeCap:
         assert agent2.load_session(sid, store=store) is True
         assert len(agent2._knowledge) == 4
         assert [c["text"] for c in agent2._knowledge] == ["t6", "t7", "t8", "t9"]
+
+
+# =========================================================================
+# REV-004 — Greeting gate uses turn_count, not message history length
+# =========================================================================
+
+
+class TestGreetingFiresOnTurnCount:
+    def test_greeting_fires_on_fresh_session_turn_one(self) -> None:
+        """Turn 1 of a fresh session must emit the SESSION START block."""
+        agent = CARLAgent(model="test", _client=MagicMock())
+        # Simulate the chat() prologue — turn_count incremented to 1.
+        agent._turn_count = 1
+        prompt = agent._build_system_prompt()
+        assert "SESSION START BEHAVIOR" in prompt
+        assert "CARL" in prompt
+
+    def test_greeting_does_not_fire_on_resumed_session(self) -> None:
+        """A resumed session with turn_count > 1 must NOT include the greeting."""
+        agent = CARLAgent(model="test", _client=MagicMock())
+        # Simulate a resumed session with prior turns.
+        agent._turn_count = 7
+        # Repopulate messages as a real resume would do.
+        agent._messages = [
+            {"role": "user", "content": "earlier turn"},
+            {"role": "assistant", "content": [{"type": "text", "text": "earlier reply"}]},
+        ]
+        prompt = agent._build_system_prompt()
+        assert "SESSION START BEHAVIOR" not in prompt
+
+    def test_greeting_suppressed_on_turn_two(self) -> None:
+        """The second turn of a fresh session must not re-greet."""
+        agent = CARLAgent(model="test", _client=MagicMock())
+        agent._turn_count = 2
+        prompt = agent._build_system_prompt()
+        assert "SESSION START BEHAVIOR" not in prompt
+
+    def test_greeting_fires_when_messages_empty_on_turn_one(self) -> None:
+        """The greeting gate must not depend on the ``_messages`` length.
+
+        This was the pre-REV-004 bug: a resumed session with trimmed
+        ``_messages`` would re-fire the greeting even though the user had
+        been mid-conversation.
+        """
+        agent = CARLAgent(model="test", _client=MagicMock())
+        agent._turn_count = 1
+        # No message history at all — but this IS turn 1, so greet.
+        agent._messages = []
+        prompt = agent._build_system_prompt()
+        assert "SESSION START BEHAVIOR" in prompt
+
+
+# =========================================================================
+# REV-010 — _tool_frame invalidates the cached constitution prompt
+# =========================================================================
+
+
+class TestFrameInvalidatesConstitutionCache:
+    def test_set_frame_clears_cached_constitution_prompt(self) -> None:
+        """After _tool_frame runs, the constitution prompt cache must be None."""
+        agent = CARLAgent(model="test", _client=MagicMock())
+        # Seed the cache with a pretend compiled block.
+        agent._constitution_prompt = "CACHED RULES BLOCK"
+
+        agent._tool_frame({
+            "domain": "medicine",
+            "function": "eval",
+            "role": "clinician",
+            "objectives": ["accuracy"],
+        })
+
+        assert agent._constitution_prompt is None
+
+    def test_successive_frame_mutations_each_clear_cache(
+        self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Calling _tool_frame twice with different frames clears the cache each time."""
+        # Redirect WorkFrame.save to a scratch dir so we don't touch ~/.carl.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+        agent = CARLAgent(model="test", _client=MagicMock())
+
+        # First frame set.
+        agent._constitution_prompt = "FIRST CACHED"
+        agent._tool_frame({
+            "domain": "d1", "function": "f1", "role": "r1", "objectives": [],
+        })
+        assert agent._constitution_prompt is None
+
+        # Reprime the cache as if a later _get_constitution_prompt had populated it.
+        agent._constitution_prompt = "SECOND CACHED"
+        agent._tool_frame({
+            "domain": "d2", "function": "f2", "role": "r2", "objectives": [],
+        })
+        assert agent._constitution_prompt is None
+
+    def test_frame_mutation_produces_new_topic_set(self) -> None:
+        """After _tool_frame, the topics derived from the frame reflect the new frame."""
+        agent = CARLAgent(model="test", _client=MagicMock())
+        agent._tool_frame({
+            "domain": "radiology",
+            "function": "diagnosis",
+            "role": "specialist",
+            "objectives": [],
+        })
+        topics = agent._derive_topics_from_frame()
+        assert topics == {"radiology", "diagnosis", "specialist"}
+
+
+# =========================================================================
+# System prompt extension — CLI bootstrap priming path
+# =========================================================================
+
+
+class TestSystemPromptExtension:
+    def test_extension_appended_to_prompt_when_set(self) -> None:
+        agent = CARLAgent(model="test", _client=MagicMock())
+        agent._turn_count = 1
+        agent._system_prompt_extension = "[jit-context] hello world"
+        prompt = agent._build_system_prompt()
+        assert "[jit-context] hello world" in prompt
+
+    def test_extension_is_consumed_after_one_turn(self) -> None:
+        """Extension clears after being emitted — only the turn that set it sees it."""
+        agent = CARLAgent(model="test", _client=MagicMock())
+        agent._turn_count = 1
+        agent._system_prompt_extension = "one-shot primer"
+        _ = agent._build_system_prompt()
+        assert agent._system_prompt_extension == ""
+
+        agent._turn_count = 2
+        prompt2 = agent._build_system_prompt()
+        assert "one-shot primer" not in prompt2
+
+    def test_empty_extension_is_ignored(self) -> None:
+        agent = CARLAgent(model="test", _client=MagicMock())
+        agent._turn_count = 1
+        agent._system_prompt_extension = ""
+        prompt = agent._build_system_prompt()
+        # No stray blank block at the extension slot.
+        assert "[jit-context]" not in prompt
+
+    def test_extension_default_is_empty(self) -> None:
+        agent = CARLAgent(model="test", _client=MagicMock())
+        assert agent._system_prompt_extension == ""

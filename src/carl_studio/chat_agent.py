@@ -730,6 +730,12 @@ class CARLAgent:
         self._pre_tool_use = pre_tool_use
         self._post_tool_use = post_tool_use
 
+        # One-shot system prompt extension — consumed on the next
+        # ``_build_system_prompt()`` call. Set by CLI bootstrap (intro JIT
+        # context) and any caller that wants to inject a turn-scoped
+        # primer without persistently mutating the base prompt.
+        self._system_prompt_extension: str = ""
+
         # Session
         self._session_id = session_id
 
@@ -1567,7 +1573,14 @@ class CARLAgent:
             parts.append("")
 
         # Greeting / proactive agency for new sessions
-        is_new_session = len(self._messages) <= 1
+        # REV-004: gate on turn_count, not message history length.
+        # ``_messages`` is repopulated on resume, but ``_turn_count`` is also
+        # restored from the saved session. We're inside the chat() loop
+        # AFTER ``self._turn_count += 1``, so:
+        #   * fresh session, first call   -> _turn_count == 1  (greet)
+        #   * fresh session, second call  -> _turn_count == 2  (no greet)
+        #   * resumed session, first call -> _turn_count >= 2  (no greet)
+        is_new_session = self._turn_count <= 1
         if is_new_session:
             parts.append("SESSION START BEHAVIOR:")
             parts.append(self._GREETING_INSTRUCTIONS)
@@ -1584,6 +1597,15 @@ class CARLAgent:
             "6. Keep responses concise. Lead with action, not explanation.",
             "7. When asked about ingested data, use query_knowledge first.",
         ])
+
+        # One-shot extension (CLI bootstrap / JIT primer). We consume the
+        # extension after emitting it so it applies only to the turn it was
+        # set for — callers that want persistent priming should mutate the
+        # frame or constitution instead.
+        if self._system_prompt_extension:
+            parts.append("")
+            parts.append(self._system_prompt_extension)
+            self._system_prompt_extension = ""
 
         base = "\n".join(parts)
 
@@ -1853,6 +1875,11 @@ class CARLAgent:
         )
         frame.save()
         self._frame = frame
+        # REV-010: invalidate the cached constitution prompt. Frame topics
+        # (domain/function/role) feed rule selection in
+        # ``_get_constitution_prompt``; without this reset, the next turn
+        # would keep applying the pre-frame topic set.
+        self._constitution_prompt = None
         return f"Frame set: {frame.domain}/{frame.function}/{frame.role}"
 
     def _tool_list(self, path: str, pattern: str) -> str:

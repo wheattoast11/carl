@@ -352,16 +352,22 @@ class SendItPipeline:
                 max_samples=getattr(self.config, "eval_samples", 100),
             )
             report = EvalRunner(eval_config).run()
-            gate = EvalGate(threshold=eval_config.threshold, phase=eval_phase)
+            gate = EvalGate(
+                threshold=eval_config.threshold,
+                phase=eval_phase,
+                config=eval_config,
+            )
+            gate_result = gate.check(report)
 
             logger.info(
-                "Eval gate: %s=%.3f (threshold=%.2f) -> %s",
+                "Eval gate: %s=%.3f (threshold=%.2f) -> %s | %s",
                 report.primary_metric,
                 report.primary_value,
                 report.threshold,
-                "PASS" if report.passed else "FAIL",
+                "PASS" if gate_result else "FAIL",
+                report.gate_reason or "(no reason recorded)",
             )
-            return gate.check(report)
+            return gate_result
         except ImportError:
             logger.warning(
                 "EvalRunner not available (install carl-studio[training]). Falling back to completion check."

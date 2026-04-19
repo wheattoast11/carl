@@ -276,6 +276,8 @@ def test_doctor_json_reports_project_blocker(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(settings_mod, "GLOBAL_CONFIG", tmp_path / "config.yaml")
     monkeypatch.setattr(settings_mod, "_find_local_config", lambda: None)
     monkeypatch.setattr(theme_mod, "THEME_FILE", tmp_path / "theme.yaml")
+    monkeypatch.setattr(db_mod, "CARL_DIR", tmp_path)
+    monkeypatch.setattr(db_mod, "DB_PATH", tmp_path / "carl.db")
 
     result = runner.invoke(app, ["doctor", "--json"])
 
@@ -283,6 +285,33 @@ def test_doctor_json_reports_project_blocker(monkeypatch, tmp_path: Path):
     payload = json.loads(result.output)
     assert payload["guided_workbench"] is False
     assert payload["blocking_issues"] == ["Create a project file with 'carl project init'"]
+    # Queue stanza present — empty DB so pending==0 with no error.
+    assert payload["queue"]["pending"] == 0
+    assert payload["queue"]["error"] is None
+
+
+def test_doctor_reports_queue_count(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(settings_mod, "GLOBAL_CONFIG", tmp_path / "config.yaml")
+    monkeypatch.setattr(settings_mod, "_find_local_config", lambda: None)
+    monkeypatch.setattr(theme_mod, "THEME_FILE", tmp_path / "theme.yaml")
+    monkeypatch.setattr(db_mod, "CARL_DIR", tmp_path)
+    monkeypatch.setattr(db_mod, "DB_PATH", tmp_path / "carl.db")
+
+    from carl_studio.db import LocalDB
+    from carl_studio.sticky import StickyQueue
+
+    StickyQueue(LocalDB()).append("pending work", priority=5)
+
+    # JSON surface
+    json_result = runner.invoke(app, ["doctor", "--json"])
+    payload = json.loads(json_result.output)
+    assert payload["queue"]["pending"] == 1
+    assert payload["queue"]["error"] is None
+
+    # Human-readable surface contains "Queue" row with "1 pending".
+    human_result = runner.invoke(app, ["doctor"])
+    assert "Queue" in human_result.output
+    assert "1 pending" in human_result.output
 
 
 def test_camp_and_lab_help_expose_grouped_aliases():

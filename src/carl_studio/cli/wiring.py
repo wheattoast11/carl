@@ -27,6 +27,7 @@ from .lab import (
 from .flow import flow_cmd
 from .init import init_cmd
 from .platform import login, logout, sync_app
+from .queue import queue_app
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +63,8 @@ def _make_stub(
 
 app.command(name="init")(init_cmd)
 app.command(name="flow")(flow_cmd)
+# `carl queue` — user-facing sticky-note work inbox. Not optional.
+app.add_typer(queue_app, name="queue")
 # Also expose init/flow under `camp` so both `carl init` and `carl camp init` resolve.
 camp_app.command(name="init")(init_cmd)
 camp_app.command(name="flow")(flow_cmd)
