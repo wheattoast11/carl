@@ -31,7 +31,7 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
   `errors`, `retry`, `safepath`, `hashing`, `tier`, coherence math, interaction
   chain. `py.typed` marker published; pyright needs the editable install.
 - `src/carl_studio/__init__.py` keeps top-level imports light and lazy-loads heavy modules.
-- `src/carl_studio/primitives/` — thin shim re-exporting from `carl_core` for back-compat.
+- `src/carl_studio/primitives/` — thin shim re-exporting from `carl_core` for back-compat. All in-tree consumers migrated; emits `DeprecationWarning`; slated for removal in v0.5.0.
 - `src/carl_studio/freshness.py` — typed `FreshnessReport`/`FreshnessIssue` with stable issue codes under `carl.freshness.*`.
 - `src/carl_studio/types/config.py` — Pydantic training config surface.
 - `src/carl_studio/training/` — trainer, pipeline, rewards, cascade.
