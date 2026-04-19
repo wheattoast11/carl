@@ -794,6 +794,124 @@ def _commit_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
     )
 
 
+# ---------------------------------------------------------------------------
+# Ops: environments hub (pull-env / publish-env)
+# ---------------------------------------------------------------------------
+
+
+def _pull_env_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
+    """Wrap ``carl_studio.environments.registry.from_hub``.
+
+    Usage: ``/pull-env <hub-name> [--revision <rev>]``. Pulls the remote
+    env snapshot, dynamically imports it, and registers it in the local
+    registry so ``get_environment`` can see it.
+    """
+    if not args:
+        def _missing() -> None:
+            raise SystemExit(2)
+
+        return _run(
+            chain,
+            "pull-env",
+            args,
+            _missing,
+            extra_input={"error": "pull-env requires a hub-name argument"},
+        )
+
+    hub_name = args[0]
+    revision: str | None = None
+    i = 1
+    while i < len(args):
+        tok = args[i]
+        if tok in ("--revision", "-r") and i + 1 < len(args):
+            revision = args[i + 1]
+            i += 2
+            continue
+        i += 1
+
+    def _do() -> dict[str, Any]:
+        from carl_studio.environments.registry import from_hub
+
+        cls = from_hub(hub_name, revision=revision)
+        spec = cls.spec
+        return {
+            "name": spec.name,
+            "lane": spec.lane.value,
+            "tools": list(spec.tools),
+            "class": cls.__name__,
+        }
+
+    return _run(
+        chain,
+        "pull-env",
+        args,
+        _do,
+        extra_input={"hub_name": hub_name, "revision": revision},
+    )
+
+
+def _publish_env_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
+    """Wrap ``carl_studio.environments.registry.publish_to_hub``.
+
+    Usage: ``/publish-env <local-name> <repo-id> [--private]``. The local
+    env must already be registered (via ``@register_environment`` or
+    ``/pull-env``).
+    """
+    if len(args) < 2:
+        def _missing() -> None:
+            raise SystemExit(2)
+
+        return _run(
+            chain,
+            "publish-env",
+            args,
+            _missing,
+            extra_input={
+                "error": "publish-env requires <local-name> <repo-id>",
+            },
+        )
+
+    local_name = args[0]
+    repo_id = args[1]
+    private = False
+    i = 2
+    while i < len(args):
+        tok = args[i]
+        if tok == "--private":
+            private = True
+            i += 1
+            continue
+        if tok == "--public":
+            private = False
+            i += 1
+            continue
+        i += 1
+
+    def _do() -> dict[str, Any]:
+        from carl_studio.environments.registry import get_environment, publish_to_hub
+
+        env_cls = get_environment(local_name)
+        commit_url = publish_to_hub(env_cls, repo_id, private=private)
+        return {
+            "name": local_name,
+            "repo_id": repo_id,
+            "private": private,
+            "commit_url": commit_url,
+        }
+
+    return _run(
+        chain,
+        "publish-env",
+        args,
+        _do,
+        extra_input={
+            "local_name": local_name,
+            "repo_id": repo_id,
+            "private": private,
+        },
+    )
+
+
 def _diagnose_op(chain: InteractionChain, args: list[str]) -> InteractionChain:
     """Wrap ``carl observe --diagnose ...``. Parses --file/--url from args."""
     url: str | None = None
@@ -886,6 +1004,9 @@ OPERATIONS: dict[str, Operation] = {
     "publish": _publish_op,
     "push": _push_op,
     "diagnose": _diagnose_op,
+    # environments hub
+    "pull-env": _pull_env_op,
+    "publish-env": _publish_env_op,
     # research cycle
     "hypothesize": _hypothesize_op,
     "commit": _commit_op,

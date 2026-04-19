@@ -81,7 +81,25 @@ def validate_environment(cls: Type[BaseEnvironment]) -> list[str]:
 
 def _get_tool_methods(cls: type) -> list[tuple[str, object]]:
     """Get public methods that TRL would discover as tools."""
-    excluded = {"reset", "turn_count", "history", "done", "reward", "spec"}
+    # BaseEnvironment contract surface.
+    env_excluded = {"reset", "turn_count", "history", "done", "reward", "spec"}
+    # EnvironmentConnection connection surface — these are lifecycle
+    # / FSM / telemetry helpers inherited from the connection primitive,
+    # not TRL tool methods.
+    conn_excluded = {
+        "open",
+        "close",
+        "transact",
+        "require_ready",
+        "state",
+        "stats",
+        "connection_id",
+        "connection_spec",
+        "chain",
+        "attach_chain",
+        "to_dict",
+    }
+    excluded = env_excluded | conn_excluded
     methods = []
     for name in dir(cls):
         if name.startswith("_"):

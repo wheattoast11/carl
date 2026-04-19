@@ -116,6 +116,14 @@ def create_x402_client(
     """Create the best available x402 client.
 
     Returns X402SDKClient if the SDK is installed, otherwise X402Client.
+
+    .. note::
+
+       Prefer :func:`carl_studio.x402_connection.create_payment_connection`
+       for new code — it returns a full :class:`PaymentConnection` which
+       participates in the CARL connection registry, FSM, and
+       :class:`InteractionChain` telemetry. This factory remains for
+       backward compatibility and will gain a ``DeprecationWarning`` in v0.6.
     """
     if sdk_available():
         return X402SDKClient(
@@ -128,3 +136,25 @@ def create_x402_client(
     from carl_studio.x402 import X402Client
 
     return X402Client(config)
+
+
+def create_payment_connection(
+    config: Any,
+    wallet_private_key: str = "",
+    interaction_chain: Any = None,
+) -> Any:
+    """Re-export of :func:`carl_studio.x402_connection.create_payment_connection`.
+
+    Kept here so callers that already import ``carl_studio.x402_sdk`` can
+    discover the new connection-aware surface without having to learn a new
+    module path.
+    """
+    from carl_studio.x402_connection import (
+        create_payment_connection as _create,
+    )
+
+    return _create(
+        config=config,
+        wallet_private_key=wallet_private_key,
+        interaction_chain=interaction_chain,
+    )

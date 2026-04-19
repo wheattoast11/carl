@@ -17,6 +17,16 @@ import sys
 from textwrap import dedent
 from typing import Any
 
+from carl_core.connection import (
+    ConnectionDirection,
+    ConnectionKind,
+    ConnectionScope,
+    ConnectionSpec,
+    ConnectionTransport,
+    ConnectionTrust,
+)
+
+from .connection import TrainingConnection
 from .protocol import AdapterError, BackendJob, BackendStatus
 from ._common import (
     JobState,
@@ -203,7 +213,16 @@ _ENTRYPOINT_TEMPLATE = dedent(
 )
 
 
-class UnslothAdapter:
+class UnslothAdapter(TrainingConnection):
+    spec = ConnectionSpec(
+        name="carl.training.unsloth",
+        scope=ConnectionScope.THREE_P,
+        kind=ConnectionKind.TRAINING,
+        direction=ConnectionDirection.EGRESS,
+        transport=ConnectionTransport.SUBPROCESS,
+        trust=ConnectionTrust.PUBLIC,
+    )
+
     """Adapter that launches Unsloth via a generated Python entrypoint."""
 
     name = "unsloth"

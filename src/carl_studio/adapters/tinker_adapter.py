@@ -20,6 +20,16 @@ from __future__ import annotations
 import importlib.util
 from typing import Any
 
+from carl_core.connection import (
+    ConnectionDirection,
+    ConnectionKind,
+    ConnectionScope,
+    ConnectionSpec,
+    ConnectionTransport,
+    ConnectionTrust,
+)
+
+from .connection import TrainingConnection
 from .protocol import AdapterError, BackendJob
 from ._common import (
     cancel_common,
@@ -110,7 +120,16 @@ def translate_config(carl_config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class TinkerAdapter:
+class TinkerAdapter(TrainingConnection):
+    spec = ConnectionSpec(
+        name="carl.training.tinker",
+        scope=ConnectionScope.THREE_P,
+        kind=ConnectionKind.TRAINING,
+        direction=ConnectionDirection.EGRESS,
+        transport=ConnectionTransport.HTTP,
+        trust=ConnectionTrust.AUTHENTICATED,
+    )
+
     """Scaffolded Tinker adapter.
 
     Availability is derived from whether the ``tinker`` module is importable

@@ -11,6 +11,16 @@ import json
 import shutil
 from typing import Any
 
+from carl_core.connection import (
+    ConnectionDirection,
+    ConnectionKind,
+    ConnectionScope,
+    ConnectionSpec,
+    ConnectionTransport,
+    ConnectionTrust,
+)
+
+from .connection import TrainingConnection
 from .protocol import AdapterError, BackendJob, BackendStatus
 from ._common import (
     JobState,
@@ -75,7 +85,16 @@ def translate_config(carl_config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-class AtroposAdapter:
+class AtroposAdapter(TrainingConnection):
+    spec = ConnectionSpec(
+        name="carl.training.atropos",
+        scope=ConnectionScope.THREE_P,
+        kind=ConnectionKind.TRAINING,
+        direction=ConnectionDirection.EGRESS,
+        transport=ConnectionTransport.SUBPROCESS,
+        trust=ConnectionTrust.PUBLIC,
+    )
+
     name = "atropos"
 
     def available(self) -> bool:

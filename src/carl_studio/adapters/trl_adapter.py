@@ -10,6 +10,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from carl_core.connection import (
+    ConnectionDirection,
+    ConnectionKind,
+    ConnectionScope,
+    ConnectionSpec,
+    ConnectionTransport,
+    ConnectionTrust,
+)
+
+from .connection import TrainingConnection
 from .protocol import AdapterError, BackendJob, BackendStatus
 from ._common import (
     JobState,
@@ -22,13 +32,22 @@ from ._common import (
 )
 
 
-class TRLAdapter:
+class TRLAdapter(TrainingConnection):
     """Default adapter that routes to carl-studio's built-in CARLTrainer.
 
     The actual training is executed by the existing in-process trainer; the
     adapter records a :class:`JobState` so the same ``carl run show`` +
     ``carl run logs`` surface works across backends.
     """
+
+    spec = ConnectionSpec(
+        name="carl.training.trl",
+        scope=ConnectionScope.ONE_P,  # bundled in carl-studio[training]
+        kind=ConnectionKind.TRAINING,
+        direction=ConnectionDirection.EGRESS,
+        transport=ConnectionTransport.IN_PROCESS,
+        trust=ConnectionTrust.PUBLIC,
+    )
 
     name = "trl"
 

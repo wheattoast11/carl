@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from .atropos_adapter import AtroposAdapter
 from .axolotl_adapter import AxolotlAdapter
+from .connection import DEFAULT_TRAINING_SPEC, TrainingConnection
 from .protocol import AdapterError, BackendJob, BackendStatus, UnifiedBackend
 from .registry import get_adapter, list_adapters, register_adapter
 from .tinker_adapter import TinkerAdapter
@@ -47,8 +48,10 @@ __all__ = [
     "AxolotlAdapter",
     "BackendJob",
     "BackendStatus",
+    "DEFAULT_TRAINING_SPEC",
     "TRLAdapter",
     "TinkerAdapter",
+    "TrainingConnection",
     "UnifiedBackend",
     "UnslothAdapter",
     "get_adapter",

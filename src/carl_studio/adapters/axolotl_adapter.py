@@ -12,6 +12,16 @@ from typing import Any
 
 import yaml
 
+from carl_core.connection import (
+    ConnectionDirection,
+    ConnectionKind,
+    ConnectionScope,
+    ConnectionSpec,
+    ConnectionTransport,
+    ConnectionTrust,
+)
+
+from .connection import TrainingConnection
 from .protocol import AdapterError, BackendJob, BackendStatus
 from ._common import (
     JobState,
@@ -145,7 +155,16 @@ def translate_config(carl_config: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-class AxolotlAdapter:
+class AxolotlAdapter(TrainingConnection):
+    spec = ConnectionSpec(
+        name="carl.training.axolotl",
+        scope=ConnectionScope.THREE_P,
+        kind=ConnectionKind.TRAINING,
+        direction=ConnectionDirection.EGRESS,
+        transport=ConnectionTransport.SUBPROCESS,
+        trust=ConnectionTrust.PUBLIC,
+    )
+
     name = "axolotl"
 
     def available(self) -> bool:

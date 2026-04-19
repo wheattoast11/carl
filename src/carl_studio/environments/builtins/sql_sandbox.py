@@ -13,7 +13,17 @@ import re
 import sqlite3
 from typing import Any
 
-from carl_studio.environments.protocol import BaseEnvironment, EnvironmentLane, EnvironmentSpec
+from carl_core.connection import (
+    ConnectionDirection,
+    ConnectionKind,
+    ConnectionScope,
+    ConnectionSpec,
+    ConnectionTransport,
+    ConnectionTrust,
+)
+
+from carl_studio.environments.connection import EnvironmentConnection
+from carl_studio.environments.protocol import EnvironmentLane, EnvironmentSpec
 from carl_studio.environments.registry import register_environment
 
 _MAX_ROWS_DISPLAY = 50
@@ -24,7 +34,7 @@ _DANGEROUS_KEYWORDS = re.compile(
 
 
 @register_environment
-class SQLSandboxEnv(BaseEnvironment):
+class SQLSandboxEnv(EnvironmentConnection):
     """SQL query sandbox -- in-memory SQLite, schema inspection, query execution.
 
     Supports two usage patterns:
@@ -52,6 +62,16 @@ class SQLSandboxEnv(BaseEnvironment):
             "Do NOT explain your reasoning. Just query and answer."
         ),
         dataset_columns=("task_description", "schema_ddl"),
+    )
+
+    connection_spec = ConnectionSpec(
+        name="carl.env.sql",
+        scope=ConnectionScope.ONE_P,
+        kind=ConnectionKind.ENVIRONMENT,
+        direction=ConnectionDirection.BIDIRECTIONAL,
+        transport=ConnectionTransport.IN_PROCESS,
+        trust=ConnectionTrust.PUBLIC,
+        metadata={"lane": "query", "sandbox": "sqlite-memory"},
     )
 
     def __init__(self) -> None:
@@ -141,7 +161,7 @@ class SQLSandboxEnv(BaseEnvironment):
             tables = [row[0] for row in cursor.fetchall()]
             if not tables:
                 result = "No tables found."
-                self._record_turn("list_tables", {}, result)
+                self._record_turn("list_tables", {}, result)  # pyright: ignore[reportPrivateUsage]
                 return result
 
             lines = []
@@ -153,7 +173,7 @@ class SQLSandboxEnv(BaseEnvironment):
         except (sqlite3.Error, RuntimeError) as e:
             self._tool_failure_count += 1
             result = f"Error: {e}"
-        self._record_turn("list_tables", {}, result)
+        self._record_turn("list_tables", {}, result)  # pyright: ignore[reportPrivateUsage]
         return result
 
     def describe_table(self, table: str) -> str:
@@ -173,7 +193,7 @@ class SQLSandboxEnv(BaseEnvironment):
             if not cols:
                 self._tool_failure_count += 1
                 result = f"Error: Table '{table}' not found or has no columns."
-                self._record_turn("describe_table", {"table": table}, result)
+                self._record_turn("describe_table", {"table": table}, result)  # pyright: ignore[reportPrivateUsage]
                 return result
 
             col_lines = []
@@ -194,7 +214,7 @@ class SQLSandboxEnv(BaseEnvironment):
         except (sqlite3.Error, RuntimeError) as e:
             self._tool_failure_count += 1
             result = f"Error: {e}"
-        self._record_turn("describe_table", {"table": table}, result)
+        self._record_turn("describe_table", {"table": table}, result)  # pyright: ignore[reportPrivateUsage]
         return result
 
     def execute_query(self, sql: str) -> str:
@@ -212,7 +232,7 @@ class SQLSandboxEnv(BaseEnvironment):
         except RuntimeError as e:
             self._tool_failure_count += 1
             result = f"Error: {e}"
-            self._record_turn("execute_query", {"sql": sql}, result)
+            self._record_turn("execute_query", {"sql": sql}, result)  # pyright: ignore[reportPrivateUsage]
             return result
 
         # Safety: only SELECT/WITH allowed
@@ -221,14 +241,14 @@ class SQLSandboxEnv(BaseEnvironment):
         if not upper.startswith("SELECT") and not upper.startswith("WITH"):
             self._tool_failure_count += 1
             result = "Error: Only SELECT and WITH queries allowed. Use insert_data for writes."
-            self._record_turn("execute_query", {"sql": sql}, result)
+            self._record_turn("execute_query", {"sql": sql}, result)  # pyright: ignore[reportPrivateUsage]
             return result
 
         # Block dangerous embedded statements
         if _DANGEROUS_KEYWORDS.search(stripped):
             self._tool_failure_count += 1
             result = "Error: Query contains disallowed keywords (DROP, ALTER, CREATE, ATTACH, etc.)."
-            self._record_turn("execute_query", {"sql": sql}, result)
+            self._record_turn("execute_query", {"sql": sql}, result)  # pyright: ignore[reportPrivateUsage]
             return result
 
         try:
@@ -252,7 +272,7 @@ class SQLSandboxEnv(BaseEnvironment):
         except sqlite3.Error as e:
             self._tool_failure_count += 1
             result = f"SQL Error: {e}"
-        self._record_turn("execute_query", {"sql": sql}, result)
+        self._record_turn("execute_query", {"sql": sql}, result)  # pyright: ignore[reportPrivateUsage]
         return result
 
     def insert_data(self, table: str, columns: str, values: str) -> str:
@@ -272,7 +292,7 @@ class SQLSandboxEnv(BaseEnvironment):
         except RuntimeError as e:
             self._tool_failure_count += 1
             result = f"Error: {e}"
-            self._record_turn("insert_data", {"table": table}, result)
+            self._record_turn("insert_data", {"table": table}, result)  # pyright: ignore[reportPrivateUsage]
             return result
 
         # Safety: only writable tables
@@ -283,7 +303,7 @@ class SQLSandboxEnv(BaseEnvironment):
                 result = f"Error: Table '{table}' is read-only. Writable tables: {allowed}"
             else:
                 result = "Error: No writable tables configured. All tables are read-only."
-            self._record_turn("insert_data", {"table": table}, result)
+            self._record_turn("insert_data", {"table": table}, result)  # pyright: ignore[reportPrivateUsage]
             return result
 
         # Validate column names are simple identifiers (prevent SQL injection)
@@ -298,7 +318,7 @@ class SQLSandboxEnv(BaseEnvironment):
         if _DANGEROUS_KEYWORDS.search(combined):
             self._tool_failure_count += 1
             result = "Error: Input contains disallowed keywords."
-            self._record_turn("insert_data", {"table": table}, result)
+            self._record_turn("insert_data", {"table": table}, result)  # pyright: ignore[reportPrivateUsage]
             return result
 
         sql = f"INSERT INTO [{table}] ({columns}) VALUES ({values})"
@@ -310,7 +330,7 @@ class SQLSandboxEnv(BaseEnvironment):
         except sqlite3.Error as e:
             self._tool_failure_count += 1
             result = f"SQL Error: {e}"
-        self._record_turn("insert_data", {"table": table, "columns": columns}, result)
+        self._record_turn("insert_data", {"table": table, "columns": columns}, result)  # pyright: ignore[reportPrivateUsage]
         return result
 
     def _score_result(self, query_result: str) -> None:
@@ -346,5 +366,11 @@ class SQLSandboxEnv(BaseEnvironment):
         try:
             if self._conn is not None:
                 self._conn.close()
+        except (TypeError, AttributeError):
+            pass
+        # Delegate to EnvironmentConnection.__del__ so the underlying
+        # connection adapter is closed cleanly on shutdown.
+        try:
+            super().__del__()
         except (TypeError, AttributeError):
             pass

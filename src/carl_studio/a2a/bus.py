@@ -46,6 +46,19 @@ CREATE TABLE IF NOT EXISTS a2a_messages (
     timestamp TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_a2a_messages_task ON a2a_messages (task_id);
+
+-- A2A v1.0: push notification subscribers. Additive; never recreated on
+-- existing tables. PushSubscriberStore runs its own migration pass at
+-- first-use time, but we also emit the CREATE here so LocalBus() always
+-- leaves the DB in a fully-A2A-v1.0 shape.
+CREATE TABLE IF NOT EXISTS a2a_push_subscribers (
+    config_id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    webhook_url TEXT NOT NULL,
+    token TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_a2a_push_task ON a2a_push_subscribers (task_id);
 """
 
 

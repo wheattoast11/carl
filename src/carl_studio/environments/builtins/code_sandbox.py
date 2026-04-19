@@ -15,14 +15,24 @@ import subprocess
 import tempfile
 from typing import Any
 
-from carl_studio.environments.protocol import BaseEnvironment, EnvironmentLane, EnvironmentSpec
+from carl_core.connection import (
+    ConnectionDirection,
+    ConnectionKind,
+    ConnectionScope,
+    ConnectionSpec,
+    ConnectionTransport,
+    ConnectionTrust,
+)
+
+from carl_studio.environments.connection import EnvironmentConnection
+from carl_studio.environments.protocol import EnvironmentLane, EnvironmentSpec
 from carl_studio.environments.registry import register_environment
 
 _EXEC_TIMEOUT = 10  # seconds
 
 
 @register_environment
-class CodingSandboxEnv(BaseEnvironment):
+class CodingSandboxEnv(EnvironmentConnection):
     """Real coding sandbox -- subprocess execution, tempdir isolation, binary reward.
 
     Each instance gets an isolated temp directory. The model reads files,
@@ -51,6 +61,16 @@ class CodingSandboxEnv(BaseEnvironment):
             "Do NOT explain what you're doing. Just act."
         ),
         dataset_columns=("task_description",),
+    )
+
+    connection_spec = ConnectionSpec(
+        name="carl.env.code",
+        scope=ConnectionScope.ONE_P,
+        kind=ConnectionKind.ENVIRONMENT,
+        direction=ConnectionDirection.BIDIRECTIONAL,
+        transport=ConnectionTransport.IN_PROCESS,
+        trust=ConnectionTrust.PUBLIC,
+        metadata={"lane": "code", "sandbox": "python-subprocess"},
     )
 
     def __init__(self) -> None:
@@ -120,7 +140,7 @@ class CodingSandboxEnv(BaseEnvironment):
         except ValueError as e:
             self._tool_failure_count += 1
             result = f"Error: {e}"
-        self._record_turn("read_file", {"path": path}, result)
+        self._record_turn("read_file", {"path": path}, result)  # pyright: ignore[reportPrivateUsage]
         return result
 
     def write_file(self, path: str, content: str) -> str:
@@ -143,7 +163,7 @@ class CodingSandboxEnv(BaseEnvironment):
         except ValueError as e:
             self._tool_failure_count += 1
             result = f"Error: {e}"
-        self._record_turn("write_file", {"path": path}, result)
+        self._record_turn("write_file", {"path": path}, result)  # pyright: ignore[reportPrivateUsage]
         return result
 
     def execute_code(self, code: str) -> str:
@@ -188,7 +208,7 @@ class CodingSandboxEnv(BaseEnvironment):
             self._tool_failure_count += 1
             self.reward = 0.0
             result = f"Error: {e}"
-        self._record_turn("execute_code", {"code_length": len(code)}, result)
+        self._record_turn("execute_code", {"code_length": len(code)}, result)  # pyright: ignore[reportPrivateUsage]
         return result
 
     def run_shell(self, command: str) -> str:
@@ -230,12 +250,18 @@ class CodingSandboxEnv(BaseEnvironment):
             self._tool_failure_count += 1
             self.reward = 0.0
             result = f"Error: {e}"
-        self._record_turn("run_shell", {"command": command}, result)
+        self._record_turn("run_shell", {"command": command}, result)  # pyright: ignore[reportPrivateUsage]
         return result
 
     def __del__(self) -> None:
         try:
             if self.workdir and os.path.exists(self.workdir):
                 shutil.rmtree(self.workdir, ignore_errors=True)
+        except (TypeError, AttributeError):
+            pass
+        # Delegate to EnvironmentConnection.__del__ so the underlying
+        # connection adapter is closed cleanly on shutdown.
+        try:
+            super().__del__()
         except (TypeError, AttributeError):
             pass

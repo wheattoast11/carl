@@ -139,6 +139,19 @@ FEATURE_TIERS: dict[str, Tier] = {
     "sync.cloud": Tier.PAID,  # carl.camp cloud sync
     "dashboard": Tier.PAID,  # carl.camp web dashboard
     "marketplace.publish": Tier.PAID,  # Publish to carl.camp marketplace
+    # ---------------------------------------------------------------
+    # Connection-layer features. Pure connection primitives (open/close,
+    # transact on open-standard protocols) are FREE — we gate on *who's
+    # paying for the compute* rather than on the protocol surface itself.
+    # Managed-hosting modes that spend our infra on someone else's behalf
+    # are PAID.
+    # ---------------------------------------------------------------
+    "connection.open": Tier.FREE,          # basic lifecycle
+    "connection.transact": Tier.FREE,      # in-protocol operations
+    "connection.push_relay": Tier.PAID,    # A2A multi-tenant webhook delivery
+    "connection.agent_loop": Tier.PAID,    # MCP server-side agent execution
+    "connection.managed_hub": Tier.PAID,   # hosted OpenEnv / Env Hub
+    "connection.openreward": Tier.PAID,    # managed reward model API
 }
 
 
