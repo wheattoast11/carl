@@ -213,6 +213,42 @@ def ask_cmd(
     )
 
 
+def _read_total_cost(agent: Any) -> float:
+    """Read the session's running cost from the agent, safely.
+
+    ``CARLAgent.cost_summary`` is a property returning a dict with
+    ``total_cost_usd``. We fall back to the underlying
+    ``_total_cost_usd`` attribute if that property is unavailable
+    (pre-existing agents, mocks in tests). Non-numeric values collapse
+    to ``0.0`` — cost streaming must never break the chat loop.
+    """
+    try:
+        summary = agent.cost_summary
+        if callable(summary):
+            summary = summary()
+        if isinstance(summary, dict):
+            value = summary.get("total_cost_usd", 0.0)
+            return float(value) if value is not None else 0.0
+    except Exception:
+        pass
+    try:
+        return float(getattr(agent, "_total_cost_usd", 0.0) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _emit_turn_cost_delta(c: Any, agent: Any, prev_total: float) -> float:
+    """Print ``  turn: $X.XXXX  session: $Y.YYYY`` if the delta is positive.
+
+    Returns the new running total so the caller can update its state.
+    """
+    total = _read_total_cost(agent)
+    delta = total - prev_total
+    if delta > 0:
+        c.info(f"  turn: ${delta:.4f}  session: ${total:.4f}")
+    return total
+
+
 def chat_cmd(
     model: str = typer.Option(
         "", "--model", "-m", help="Claude model for agent (default: from settings)"
@@ -240,6 +276,11 @@ def chat_cmd(
     ),
     sessions: bool = typer.Option(
         False, "--sessions", help="List saved chat sessions and exit"
+    ),
+    show_cost: bool | None = typer.Option(
+        None,
+        "--show-cost/--no-show-cost",
+        help="Show per-turn cost delta after each reply (default: from settings.show_per_turn_cost)",
     ),
 ) -> None:
     """Chat with CARL. Proactive agent with tool use, file ingestion, and analysis."""
@@ -344,6 +385,29 @@ def chat_cmd(
     if not bootstrap_done:
         render_intro(c)
 
+    # Resolve per-turn cost visibility: explicit CLI flag wins, else read
+    # from settings.show_per_turn_cost. Default is True — per-turn cost
+    # is load-bearing observability, not a nice-to-have. If the settings
+    # load fails for any reason, fall back to True rather than silently
+    # dropping visibility.
+    show_cost_resolved: bool = True
+    if show_cost is not None:
+        show_cost_resolved = bool(show_cost)
+    else:
+        try:
+            from carl_studio.settings import CARLSettings
+
+            _settings = CARLSettings.load()
+            show_cost_resolved = bool(
+                getattr(_settings, "show_per_turn_cost", True)
+            )
+        except Exception:
+            show_cost_resolved = True
+
+    # Running cost total used to compute per-turn deltas. Seed from the
+    # agent so resumed sessions start at the correct offset.
+    prev_total_cost: float = _read_total_cost(agent) if show_cost_resolved else 0.0
+
     while True:
         try:
             user_input = input("  you> ").strip()
@@ -431,6 +495,12 @@ def chat_cmd(
             blank_after_done=True,
             carl_prefix_newline=True,
         )
+
+        # Per-turn cost visibility — emit AFTER the turn's events have
+        # flushed so the delta line renders below the agent's reply, not
+        # interleaved with streamed text.
+        if show_cost_resolved:
+            prev_total_cost = _emit_turn_cost_delta(c, agent, prev_total_cost)
 
         # Bootstrap phase — apply the JIT frame patch AFTER turn-1 completes.
         # We only do this when the agent has no existing frame (or an empty

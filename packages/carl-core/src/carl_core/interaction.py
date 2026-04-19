@@ -9,10 +9,30 @@ emits a `Step` into an `InteractionChain`. The chain is the raw material for:
 
 This primitive lives in carl-core so it's a dependency-free lingua franca
 across every Carl package. Only depends on the standard library.
+
+Secret redaction
+----------------
+The chain persists durably (``~/.carl/interactions/*.jsonl``) and can be
+fed back into training, so raw secrets must never land in a step. The
+``_json_safe`` helper below walks the step input/output/context payloads
+and:
+
+* Replaces dict values whose key name is secret-shaped
+  (``*key*``, ``*token*``, ``*secret*``, ``*password*``, ``*authorization*``,
+  ``*bearer*``) with the literal ``"<redacted>"``.
+* Scrubs JWTs, OpenAI-style ``sk-...`` keys, Anthropic ``sk-ant-...`` keys,
+  HF ``hf_...`` tokens, and EVM wallet addresses out of any string
+  payload, preserving the first few characters so the shape is still
+  debuggable.
+
+This runs at ``to_dict`` / ``to_jsonl`` serialization time; in-memory
+``Step`` objects retain the original values for programmatic use in the
+same process.
 """
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -274,14 +294,110 @@ class InteractionChain:
 # ---------------------------------------------------------------------------
 
 
+_REDACTED = "<redacted>"
+
+# Keys whose *name* implies the value is a secret. Matches ``errors._SENSITIVE_TOKENS``
+# so redaction is consistent across ``CARLError.to_dict`` and ``Step`` serialization.
+_SENSITIVE_NAME_TOKENS: tuple[str, ...] = (
+    "key",
+    "token",
+    "secret",
+    "password",
+    "authorization",
+    "bearer",
+)
+
+
+def _is_sensitive_key(name: Any) -> bool:
+    """Return True when *name* looks like a secret-bearing field."""
+    lowered = str(name).lower()
+    return any(tok in lowered for tok in _SENSITIVE_NAME_TOKENS)
+
+
+# Literal-secret shapes worth scrubbing from free-form strings. Order matters:
+# more-specific patterns (Anthropic sk-ant-...) come before less-specific ones
+# (generic sk-...).
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # JWT: three base64url segments separated by '.'. Real-world header
+    # segments are often ~18 base64url chars (e.g. ``eyJhbGciOiJIUzI1NiJ9``
+    # → "{alg: HS256}" = 18 chars), so the first segment only requires
+    # 10+ chars; the payload / signature requirement stays at 20+ so the
+    # pattern is still distinctive. The ``\bey[A-Za-z0-9_-]...`` word
+    # boundary prevents collisions with identifiers that happen to end in
+    # ``...ey``.
+    re.compile(
+        r"\bey[A-Za-z0-9_-]{10,}\."
+        r"[A-Za-z0-9_-]{20,}"
+        r"(?:\.[A-Za-z0-9_-]+)?"
+    ),
+    # Anthropic API key — sk-ant-... — MUST be checked before the generic
+    # sk-... pattern so we preserve the "sk-ant" prefix in the redacted
+    # preview instead of stopping at "sk-" + 20 arbitrary chars.
+    re.compile(r"sk-ant-[A-Za-z0-9_-]{20,}"),
+    # OpenAI-style bearer keys (sk-, sk-proj-, sk-svcacct-, ...).
+    re.compile(r"sk-[A-Za-z0-9_-]{20,}"),
+    # Hugging Face user / org tokens.
+    re.compile(r"hf_[A-Za-z0-9]{20,}"),
+    # EVM wallet address — 20 hex bytes after 0x, bounded so random
+    # 40-hex substrings elsewhere don't collide.
+    re.compile(r"\b0x[0-9a-fA-F]{40}\b"),
+)
+
+
+def _scrub_secrets(text: str) -> str:
+    """Replace literal secret shapes in *text* with a redacted preview.
+
+    The first six characters of the original match (e.g. ``"eyJhbG"``,
+    ``"sk-ant"``, ``"0x742d"``) are kept as a debug aid — enough to
+    confirm the shape that was found without leaking the credential.
+    """
+    if not text:
+        return text
+
+    def _sub(match: "re.Match[str]") -> str:
+        matched = match.group(0)
+        prefix = matched[:6] if len(matched) >= 6 else matched
+        return f"{prefix}{_REDACTED}"
+
+    scrubbed = text
+    for pattern in _SECRET_PATTERNS:
+        scrubbed = pattern.sub(_sub, scrubbed)
+    return scrubbed
+
+
 def _json_safe(value: Any) -> Any:
-    """Coerce a value to a JSON-serializable form. Falls back to repr()."""
-    if value is None or isinstance(value, (bool, int, float, str)):
+    """Coerce a value to a JSON-serializable form. Falls back to repr().
+
+    Applies two layers of secret redaction:
+
+    1. **Name-based redaction** (dict keys): when the key name is secret-
+       shaped (``*key*``, ``*token*``, ``*secret*``, ``*password*``,
+       ``*authorization*``, ``*bearer*``), the value is replaced wholesale
+       with ``<redacted>`` — we never recurse into the original.
+    2. **Shape-based redaction** (string values): JWTs, OpenAI/Anthropic
+       API keys, Hugging Face tokens, and EVM wallet addresses are
+       replaced with ``<first-6-chars>+<redacted>`` so the shape stays
+       debuggable while the credential does not persist.
+
+    Both layers run on every recursive call so deeply nested tool-input
+    payloads (``{"ctx": {"auth": {"token": "..."}}}``) are also covered.
+    Non-string scalars, datetimes, and enums pass through unchanged.
+    """
+    if value is None or isinstance(value, (bool, int, float)):
         return value
+    if isinstance(value, str):
+        return _scrub_secrets(value)
     if isinstance(value, (list, tuple)):
         return [_json_safe(v) for v in value]
     if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
+        out: dict[str, Any] = {}
+        for k, v in value.items():
+            key = str(k)
+            if _is_sensitive_key(key):
+                out[key] = _REDACTED
+            else:
+                out[key] = _json_safe(v)
+        return out
     if isinstance(value, datetime):
         return value.isoformat()
     if isinstance(value, Enum):
@@ -291,4 +407,4 @@ def _json_safe(value: Any) -> Any:
             return _json_safe(value.to_dict())
         except Exception:
             pass
-    return repr(value)
+    return _scrub_secrets(repr(value))

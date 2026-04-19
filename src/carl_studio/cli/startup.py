@@ -72,14 +72,20 @@ def doctor(
     # Sticky-note queue — never let the queue subsystem break doctor.
     queue_pending: int | None
     queue_error: str | None = None
+    queue_oldest_processing_s: float | None = None
     try:
         from carl_studio.db import LocalDB
         from carl_studio.sticky import StickyQueue
 
-        _queue_notes = StickyQueue(LocalDB()).status(limit=500)
+        _queue = StickyQueue(LocalDB())
+        _queue_notes = _queue.status(limit=500)
         queue_pending = sum(
             1 for n in _queue_notes if n.status in ("queued", "processing")
         )
+        # Surface the oldest ``processing`` row's age so operators can spot
+        # a wedge at a glance. Non-None only when at least one row is
+        # actually stuck — keeps the happy path noise-free.
+        queue_oldest_processing_s = _queue.oldest_processing_age_seconds()
     except Exception as exc:  # noqa: BLE001 — doctor must never crash on subsystem errors
         queue_pending = None
         queue_error = str(exc)
@@ -101,6 +107,7 @@ def doctor(
         "queue": {
             "pending": queue_pending,
             "error": queue_error,
+            "oldest_processing_s": queue_oldest_processing_s,
         },
     }
 
@@ -152,12 +159,29 @@ def doctor(
     elif queue_pending is None:
         table.add_row("Queue", "unavailable", "sticky queue unavailable")
     else:
+        # A non-None ``oldest_processing_s`` is the signal that at least
+        # one row is in ``processing``. If its age exceeds the default
+        # reclaim threshold (600s) we surface a warning-shaped status so
+        # operators see something is stuck without having to grep logs.
         queue_status = "empty" if queue_pending == 0 else "ready"
         queue_detail = (
             "no sticky notes pending"
             if queue_pending == 0
             else f"{queue_pending} pending"
         )
+        if (
+            queue_oldest_processing_s is not None
+            and queue_oldest_processing_s > 600.0
+        ):
+            queue_status = "stuck"
+            queue_detail += (
+                f" (oldest processing {queue_oldest_processing_s:.0f}s — "
+                "run: carl queue reclaim)"
+            )
+        elif queue_oldest_processing_s is not None:
+            queue_detail += (
+                f" (oldest processing {queue_oldest_processing_s:.0f}s)"
+            )
         table.add_row("Queue", queue_status, queue_detail)
     c.print(table)
     c.blank()

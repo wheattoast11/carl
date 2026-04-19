@@ -9,6 +9,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from carl_core.constants import (
+    PHASE_WEIGHTS_CRYSTALLINE,
+    PHASE_WEIGHTS_GASEOUS,
+    PHASE_WEIGHTS_LIQUID,
+)
 from carl_studio.training.rewards.composite import (
     CARLReward,
     PhaseAdaptiveCARLReward,
@@ -114,17 +119,17 @@ class TestPhaseClassification:
         """Direct unit test of _phase_weights_from_R across the full R spectrum."""
         par = PhaseAdaptiveCARLReward()
         # Boundary cases + representative midpoints.
-        assert par._phase_weights_from_R(0.00) == PhaseAdaptiveCARLReward._PROFILE_GASEOUS
-        assert par._phase_weights_from_R(0.10) == PhaseAdaptiveCARLReward._PROFILE_GASEOUS
-        assert par._phase_weights_from_R(0.29) == PhaseAdaptiveCARLReward._PROFILE_GASEOUS
+        assert par._phase_weights_from_R(0.00) == PHASE_WEIGHTS_GASEOUS
+        assert par._phase_weights_from_R(0.10) == PHASE_WEIGHTS_GASEOUS
+        assert par._phase_weights_from_R(0.29) == PHASE_WEIGHTS_GASEOUS
         # 0.30 is the gaseous-max threshold; inclusive of liquid.
-        assert par._phase_weights_from_R(0.30) == PhaseAdaptiveCARLReward._PROFILE_LIQUID
-        assert par._phase_weights_from_R(0.50) == PhaseAdaptiveCARLReward._PROFILE_LIQUID
-        assert par._phase_weights_from_R(0.69) == PhaseAdaptiveCARLReward._PROFILE_LIQUID
+        assert par._phase_weights_from_R(0.30) == PHASE_WEIGHTS_LIQUID
+        assert par._phase_weights_from_R(0.50) == PHASE_WEIGHTS_LIQUID
+        assert par._phase_weights_from_R(0.69) == PHASE_WEIGHTS_LIQUID
         # 0.70 is the liquid-max threshold; inclusive of crystalline.
-        assert par._phase_weights_from_R(0.70) == PhaseAdaptiveCARLReward._PROFILE_CRYSTALLINE
-        assert par._phase_weights_from_R(0.85) == PhaseAdaptiveCARLReward._PROFILE_CRYSTALLINE
-        assert par._phase_weights_from_R(1.00) == PhaseAdaptiveCARLReward._PROFILE_CRYSTALLINE
+        assert par._phase_weights_from_R(0.70) == PHASE_WEIGHTS_CRYSTALLINE
+        assert par._phase_weights_from_R(0.85) == PHASE_WEIGHTS_CRYSTALLINE
+        assert par._phase_weights_from_R(1.00) == PHASE_WEIGHTS_CRYSTALLINE
 
     def test_par_gaseous_phase(self):
         """R=0.1 -> gaseous profile (discontinuity dominates)."""
@@ -162,9 +167,9 @@ class TestPhaseClassification:
     def test_par_all_profiles_sum_to_one(self):
         """Invariant: every phase profile's weights sum to exactly 1.0."""
         for profile in (
-            PhaseAdaptiveCARLReward._PROFILE_GASEOUS,
-            PhaseAdaptiveCARLReward._PROFILE_LIQUID,
-            PhaseAdaptiveCARLReward._PROFILE_CRYSTALLINE,
+            PHASE_WEIGHTS_GASEOUS,
+            PHASE_WEIGHTS_LIQUID,
+            PHASE_WEIGHTS_CRYSTALLINE,
         ):
             assert sum(profile) == pytest.approx(1.0)
 
@@ -202,9 +207,9 @@ class TestCurrentPhaseProperty:
         """After _apply_phase_weights, current_phase should match the chosen profile."""
         par = PhaseAdaptiveCARLReward()
         for R, expected_phase, expected_profile in (
-            (0.15, "gaseous", PhaseAdaptiveCARLReward._PROFILE_GASEOUS),
-            (0.55, "liquid", PhaseAdaptiveCARLReward._PROFILE_LIQUID),
-            (0.80, "crystalline", PhaseAdaptiveCARLReward._PROFILE_CRYSTALLINE),
+            (0.15, "gaseous", PHASE_WEIGHTS_GASEOUS),
+            (0.55, "liquid", PHASE_WEIGHTS_LIQUID),
+            (0.80, "crystalline", PHASE_WEIGHTS_CRYSTALLINE),
         ):
             par._last_traces = [_FakeTrace(R=R)]
             par._apply_phase_weights()
@@ -241,7 +246,7 @@ class TestExceptionResilience:
         # Should average over the single valid trace.
         assert par._current_R() == pytest.approx(0.8)
         par._apply_phase_weights()
-        assert par.current_weights == PhaseAdaptiveCARLReward._PROFILE_CRYSTALLINE
+        assert par.current_weights == PHASE_WEIGHTS_CRYSTALLINE
 
     def test_par_handles_all_none_entries(self):
         """If all cache entries are None, fall back to static weights."""
@@ -293,7 +298,7 @@ class TestScoreFromTraceIntegration:
             R=0.1, multiscale=0.8, cloud=0.5, discontinuity=0.9
         )
         par.score_from_trace(trace_two)  # type: ignore[arg-type]
-        assert par.current_weights == PhaseAdaptiveCARLReward._PROFILE_GASEOUS
+        assert par.current_weights == PHASE_WEIGHTS_GASEOUS
 
     def test_compute_batch_scoring(self):
         """compute() scores a batch and caches all traces."""

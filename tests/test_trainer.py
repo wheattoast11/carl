@@ -694,3 +694,69 @@ def test_try_refund_credits_alias_still_works() -> None:
     with patch("carl_studio.credits.balance.refund_credits") as mock_refund:
         trainer._try_refund_credits("jwt", "url", 0)
     mock_refund.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# A3 -- report_to configurable + trace_dir resolution
+# ---------------------------------------------------------------------------
+
+
+def test_training_config_report_to_default_is_none() -> None:
+    """``report_to`` defaults to ``"none"`` for backwards compat."""
+    cfg = _make_config()
+    assert cfg.report_to == "none"
+
+
+def test_training_config_report_to_accepts_each_known_reporter() -> None:
+    """Every documented reporter must round-trip through Pydantic."""
+    for reporter in ("none", "trackio", "wandb", "mlflow", "tensorboard"):
+        cfg = _make_config(report_to=reporter)
+        assert cfg.report_to == reporter
+
+
+def test_training_config_report_to_rejects_unknown_value() -> None:
+    """Unknown reporters must fail validation (stable contract with TRL)."""
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        _make_config(report_to="splunk")
+
+
+def test_training_config_trace_dir_default_is_none() -> None:
+    cfg = _make_config()
+    assert cfg.trace_dir is None
+
+
+def test_training_config_trace_dir_round_trips(tmp_path: Path) -> None:
+    target = tmp_path / "traces"
+    cfg = _make_config(trace_dir=target)
+    assert cfg.trace_dir == target
+
+
+def test_trainer_resolve_trace_dir_uses_config_when_set(tmp_path: Path) -> None:
+    target = tmp_path / "custom-traces"
+    trainer = CARLTrainer(_make_config(trace_dir=target))
+
+    resolved = trainer._resolve_trace_dir()
+    assert resolved == target
+    assert resolved.is_dir(), "resolve should create the dir idempotently"
+
+
+def test_trainer_resolve_trace_dir_default_location(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Unset trace_dir should default to ~/.carl/runs/<run_id>/traces/."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    trainer = CARLTrainer(_make_config())
+
+    resolved = trainer._resolve_trace_dir()
+    expected = tmp_path / ".carl" / "runs" / trainer.run.id / "traces"
+    assert resolved == expected
+    assert resolved.is_dir()
+
+
+def test_trainer_resolve_trace_dir_idempotent(tmp_path: Path) -> None:
+    """Calling resolve twice must not raise on an existing directory."""
+    trainer = CARLTrainer(_make_config(trace_dir=tmp_path / "t"))
+    first = trainer._resolve_trace_dir()
+    second = trainer._resolve_trace_dir()
+    assert first == second
+    assert first.is_dir()

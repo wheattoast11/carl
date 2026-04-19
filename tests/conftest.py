@@ -147,3 +147,37 @@ def _stub_carl_studio_init():
 
 # Run stub before any test imports
 _stub_carl_studio_init()
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _grant_all_consent_by_default(monkeypatch):
+    """Grant all consent flags for tests unless explicitly overridden.
+
+    Runtime consent gates (``carl_studio.consent.consent_gate``) default
+    to "fail closed" — the privacy-first policy for production. The test
+    suite bypasses that by default so existing sync/x402/mcp tests keep
+    passing; the dedicated ``tests/test_consent_enforcement.py`` module
+    clears this fixture via ``monkeypatch.undo()`` or by constructing a
+    ``ConsentManager`` bound to an explicit ``FakeDB`` with every flag
+    off.
+
+    We patch ``ConsentManager.is_granted`` directly so the gate resolves
+    to ``True`` regardless of which ``LocalDB`` ends up being constructed
+    (tests don't share a DB path; monkeypatching one manager instance
+    would not suffice).
+    """
+    try:
+        from carl_studio.consent import ConsentManager
+    except Exception:
+        # carl_studio not importable in this test's stub set — nothing to patch.
+        yield
+        return
+    monkeypatch.setattr(
+        ConsentManager,
+        "is_granted",
+        lambda self, key: True,
+    )
+    yield

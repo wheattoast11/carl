@@ -3,6 +3,16 @@
 Content-hash based: same data = no transfer.
 Opt-in: user controls when data goes to cloud.
 
+Consent gate
+------------
+Both :func:`push` and :func:`pull` are gated by
+:attr:`~carl_studio.consent.ConsentFlagKey.TELEMETRY`. When telemetry
+consent is off (the privacy-first default), callers receive a
+:class:`~carl_studio.consent.ConsentError` with code
+``carl.consent.denied`` instead of contacting the remote. The retry-queue
+entry point :func:`process_sync_queue` is gated at the same point so
+queued traffic cannot leak on a later drain either.
+
 Usage:
     from platform.cli.sync import push, pull
 
@@ -22,6 +32,7 @@ from typing import Any
 
 from carl_core.errors import CARLError
 
+from carl_studio.consent import ConsentFlagKey, consent_gate
 from carl_studio.db import LocalDB
 
 
@@ -98,7 +109,11 @@ def push(
     4. Queue for retry on failure
 
     Returns: {entity_type: count_synced}
+
+    Raises :class:`~carl_studio.consent.ConsentError` when the ``TELEMETRY``
+    consent flag is not granted — nothing is queued, nothing is sent.
     """
+    consent_gate(ConsentFlagKey.TELEMETRY)
     db = db or LocalDB()
     jwt_ov = getattr(session, "jwt", None) if session else None
     url_ov = getattr(session, "supabase_url", None) if session else None
@@ -168,7 +183,11 @@ def pull(
     4. Update last_pull timestamp
 
     Returns: {entity_type: count_pulled}
+
+    Raises :class:`~carl_studio.consent.ConsentError` when the ``TELEMETRY``
+    consent flag is not granted.
     """
+    consent_gate(ConsentFlagKey.TELEMETRY)
     db = db or LocalDB()
     jwt_ov = getattr(session, "jwt", None) if session else None
     url_ov = getattr(session, "supabase_url", None) if session else None
@@ -227,7 +246,12 @@ def process_sync_queue(
     Items that fail more than max_retries times are marked as failed.
 
     Returns: {synced: N, failed: N, remaining: N}
+
+    Raises :class:`~carl_studio.consent.ConsentError` when the ``TELEMETRY``
+    consent flag is not granted — queued traffic stays local until
+    consent is granted.
     """
+    consent_gate(ConsentFlagKey.TELEMETRY)
     db = db or LocalDB()
     pending = db.get_pending_sync()
     synced = 0

@@ -28,6 +28,8 @@ Design notes
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -40,6 +42,14 @@ from carl_studio.heartbeat.phases import ORDERED_PHASES, HeartbeatPhase
 from carl_studio.sticky import StickyNote, StickyQueue
 
 StatusCallback = Callable[["str | dict[str, Any]"], None]
+
+_LOG = logging.getLogger("carl.heartbeat.loop")
+
+# Env override for periodic maintenance cadence. A value of 0 disables the
+# in-loop maintenance tick entirely — useful for tests and for deployments
+# that run ``carl db maintenance`` out of band. Values < 0 are clamped to 0.
+_MAINTENANCE_INTERVAL_ENV = "CARL_MAINTENANCE_INTERVAL_CYCLES"
+_DEFAULT_MAINTENANCE_INTERVAL_CYCLES = 100
 
 
 def _noop_status(_msg: str | dict[str, Any]) -> None:
@@ -79,6 +89,7 @@ class HeartbeatLoop:
         *,
         on_status: StatusCallback | None = None,
         poll_interval_s: float = 5.0,
+        maintenance_interval_cycles: int | None = None,
     ) -> None:
         if poll_interval_s != poll_interval_s or poll_interval_s <= 0.0:
             # NaN check uses self-inequality; float('inf') technically
@@ -105,6 +116,32 @@ class HeartbeatLoop:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._start_lock = threading.Lock()
+        self._maintenance_interval_cycles = self._resolve_maintenance_interval(
+            maintenance_interval_cycles,
+        )
+
+    @staticmethod
+    def _resolve_maintenance_interval(explicit: int | None) -> int:
+        """Resolve the maintenance cadence from arg → env → default.
+
+        Negative/zero values disable the in-loop maintenance tick — callers
+        that want to run maintenance out of band (``carl db maintenance``)
+        should set ``CARL_MAINTENANCE_INTERVAL_CYCLES=0``.
+        """
+        if explicit is not None:
+            return max(0, int(explicit))
+        raw = os.environ.get(_MAINTENANCE_INTERVAL_ENV, "").strip()
+        if raw:
+            try:
+                return max(0, int(raw))
+            except ValueError:
+                _LOG.warning(
+                    "invalid %s=%r; falling back to default %d",
+                    _MAINTENANCE_INTERVAL_ENV,
+                    raw,
+                    _DEFAULT_MAINTENANCE_INTERVAL_CYCLES,
+                )
+        return _DEFAULT_MAINTENANCE_INTERVAL_CYCLES
 
     # -- public lifecycle -------------------------------------------------
 
@@ -178,13 +215,72 @@ class HeartbeatLoop:
                     pass
 
     async def _aloop(self, queue: StickyQueue) -> None:
-        """Main async loop: poll the queue, run a cycle, repeat."""
+        """Main async loop: poll the queue, run a cycle, repeat.
+
+        The stop-event is only checked **between** cycles so a cycle that
+        has begun always runs to completion on graceful shutdown. The
+        phase loop inside :meth:`_run_cycle` no longer short-circuits on
+        ``stop`` — that used to leave the note half-processed, which
+        defeats the point of graceful shutdown.
+        """
+        cycles_since_maintenance = 0
         while not self._stop_event.is_set():
             note = queue.dequeue()
             if note is None:
                 await self._sleep_interruptible(self._poll_interval_s)
                 continue
             await self._run_cycle(queue, note)
+            cycles_since_maintenance += 1
+            if (
+                self._maintenance_interval_cycles > 0
+                and cycles_since_maintenance >= self._maintenance_interval_cycles
+            ):
+                cycles_since_maintenance = 0
+                self._run_maintenance(queue)
+
+    def _run_maintenance(self, queue: StickyQueue) -> None:
+        """Run a maintenance tick — retention sweep + WAL checkpoint + reclaim.
+
+        Called every ``maintenance_interval_cycles`` completed cycles inside
+        the worker thread. Failures are logged and surfaced via
+        :attr:`_on_status` but never propagate — maintenance is best-effort,
+        the loop must keep running.
+        """
+        # Retention days come from the env so operators can lengthen or
+        # shorten retention without editing code. Invalid/missing values
+        # fall back to 30.
+        raw = os.environ.get("CARL_STICKY_RETENTION_DAYS", "").strip()
+        try:
+            retention_days = int(raw) if raw else 30
+        except ValueError:
+            retention_days = 30
+        if retention_days < 0:
+            retention_days = 0
+        try:
+            reclaimed = queue.reclaim_stale()
+            stats = queue._db.maintenance(  # pyright: ignore[reportPrivateUsage]
+                retention_days=retention_days,
+            )
+            payload: dict[str, Any] = {
+                "event": "heartbeat.maintenance",
+                "reclaimed": reclaimed,
+                "notes_deleted": stats["notes_deleted"],
+                "wal_checkpoint": stats["wal_checkpoint"],
+            }
+            self._on_status(payload)
+            _LOG.info(
+                "heartbeat maintenance: reclaimed=%s deleted=%s",
+                reclaimed,
+                stats["notes_deleted"],
+            )
+        except BaseException as exc:  # pragma: no cover - defensive
+            _LOG.exception("heartbeat maintenance failed")
+            try:
+                self._on_status(
+                    {"event": "heartbeat.maintenance_failed", "error": repr(exc)},
+                )
+            except BaseException:
+                pass
 
     async def _sleep_interruptible(self, seconds: float) -> None:
         """Sleep in small increments so a :meth:`stop` signal is honoured
@@ -207,6 +303,14 @@ class HeartbeatLoop:
         per phase, and marks the note ``done`` via
         :meth:`StickyQueue.complete`. ``queue`` is the per-thread handle
         constructed in :meth:`_runner`.
+
+        On a successful phase loop (no exception), the note transitions to
+        ``done``. On an exception mid-cycle the note is flipped back to
+        ``queued`` via :meth:`StickyQueue.requeue` so a retry picks it up
+        rather than leaving it wedged in ``processing`` forever. This
+        discipline is the foundation of the graceful-shutdown contract —
+        :meth:`_aloop` no longer breaks mid-cycle on ``stop_event`` so a
+        running cycle always finishes, one way or the other.
         """
         t_start = time.monotonic()
         preview = note.content[:120] if note.content else ""
@@ -224,16 +328,22 @@ class HeartbeatLoop:
         result: dict[str, Any] = {"phases": [], "note_id": note.id}
         success = True
         error_repr: str | None = None
+        # ``cancelled`` signals the note should flip back to ``queued`` on
+        # exit rather than ``done``. Set by the exception branch below.
+        requeue_on_exit = False
         try:
             for phase in ORDERED_PHASES:
-                if self._stop_event.is_set():
-                    result["stopped"] = True
-                    break
+                # NOTE: intentionally no ``stop_event.is_set()`` check here.
+                # Graceful shutdown is handled **between** cycles in
+                # :meth:`_aloop`; once a cycle has begun we run it to
+                # completion. Interrupting mid-phase left the note wedged
+                # under the previous design.
                 await self._run_phase(phase, note, result)
-        except BaseException as exc:  # pragma: no cover - defensive
+        except BaseException as exc:
             success = False
             error_repr = repr(exc)
             result["error"] = error_repr
+            requeue_on_exit = True
         finally:
             elapsed_ms = (time.monotonic() - t_start) * 1000.0
             self._chain.record(
@@ -244,20 +354,40 @@ class HeartbeatLoop:
                 success=success,
                 duration_ms=elapsed_ms,
             )
-            # Always complete the note so the queue doesn't wedge on a
-            # permanently ``processing`` row. The ``result`` dict captures
-            # any error envelope for downstream inspection.
-            try:
-                queue.complete(note.id, result)
-            except BaseException as exc:  # pragma: no cover - defensive
-                self._on_status(
-                    {
-                        "event": "heartbeat.complete_failed",
-                        "note_id": note.id,
-                        "error": repr(exc),
-                    },
-                )
+            if requeue_on_exit:
+                # Exception path — flip back to ``queued`` for retry. We
+                # deliberately do **not** call :meth:`complete` here; the
+                # note is not done. :meth:`StickyQueue.requeue` is a no-op
+                # if the row has already moved (e.g. an operator archived
+                # it out of band), which is the safe default.
+                try:
+                    queue.requeue(note.id)
+                except BaseException as exc:  # pragma: no cover - defensive
+                    self._on_status(
+                        {
+                            "event": "heartbeat.requeue_failed",
+                            "note_id": note.id,
+                            "error": repr(exc),
+                        },
+                    )
+            else:
+                # Happy path — record the result and transition to ``done``.
+                try:
+                    queue.complete(note.id, result)
+                except BaseException as exc:  # pragma: no cover - defensive
+                    self._on_status(
+                        {
+                            "event": "heartbeat.complete_failed",
+                            "note_id": note.id,
+                            "error": repr(exc),
+                        },
+                    )
             self._on_status(f"[heartbeat] cycle:end {note.id}")
+            # The ``error_repr`` local is preserved for log correlation even
+            # when the caller doesn't subscribe to status — no-op assignment
+            # keeps the symbol referenced so static analysis does not flag
+            # it as unused on the happy path.
+            _ = error_repr
 
     async def _run_phase(
         self,

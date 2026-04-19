@@ -5,6 +5,17 @@ wraps the existing ``carl_studio.mcp.server`` module so its lifetime,
 transport choice, and tool-call telemetry line up with every other CARL
 channel (training backends, A2A peers, x402 merchants, ...).
 
+Consent gate
+------------
+``_authenticate`` is gated by
+:attr:`~carl_studio.consent.ConsentFlagKey.TELEMETRY`. Any MCP operation
+that talks to carl.camp (auth, tool dispatch carrying a JWT, streaming
+events back to a remote client) is telemetry-adjacent and must respect
+the opt-in flag. When consent is not granted, the connection fails fast
+with a :class:`~carl_studio.consent.ConsentError` during the
+``AUTHENTICATING`` phase — the FSM transitions through ``DEGRADED`` and
+the server loop never starts.
+
 What's in scope for Phase 1
 ---------------------------
 * A :class:`ConnectionSpec` declaring this as a 1P, PROTOCOL, INGRESS
@@ -41,6 +52,7 @@ from carl_core.connection import (
 )
 from carl_core.interaction import InteractionChain
 
+from carl_studio.consent import ConsentFlagKey, consent_gate
 from carl_studio.mcp.session import MCPSession, session_from_dict
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
@@ -226,14 +238,20 @@ class MCPServerConnection(AsyncBaseConnection):
         self._fastmcp = fastmcp
 
     async def _authenticate(self) -> None:
-        """Phase 1 no-op.
+        """Phase 1 no-op + telemetry consent gate.
 
         The spec declares ``AUTHENTICATED`` trust so the FSM correctly
         routes through an AUTHENTICATING state during ``open()``, but
         actual credential negotiation happens per-request via the
         ``authenticate`` tool in ``server.py``. Phase 3 will move that
         state from the module global onto the connection.
+
+        Telemetry gate: any MCP operation that talks to carl.camp is
+        telemetry-adjacent. We raise :class:`ConsentError` here so
+        operators see the block at FSM entry instead of deep inside a
+        tool call with half the state already captured.
         """
+        consent_gate(ConsentFlagKey.TELEMETRY)
         return None
 
     async def _close(self) -> None:

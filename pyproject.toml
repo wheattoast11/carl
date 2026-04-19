@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "carl-studio"
-version = "0.6.0"
+version = "0.6.1"
 description = "CARL (Coherence-Aware Reinforcement Learning) — information-theoretic reward signals for LLM training via token-level probability distributions"
 readme = "README.md"
 license = "MIT"
@@ -68,6 +68,8 @@ Repository = "https://github.com/wheattoast11/carl"
 Issues = "https://github.com/wheattoast11/carl/issues"
 
 [project.optional-dependencies]
+# Meta-extra: the recommended starting point for most users.
+quickstart = ["carl-studio[training,hf,observe]"]
 training = [
     "torch>=2.4",
     "transformers>=5.0",
@@ -85,14 +87,20 @@ tui = ["textual>=1.0", "textual-plotext>=0.3"]
 mcp = ["mcp>=1.10"]
 research = ["arxiv>=3.0"]
 a2a = ["a2a-python>=0.0.1"]
+# NOTE: `wallet` pulls coinbase-agentkit which pins x402<2, while the
+# standalone `x402` extra requires x402>=2.7. They are mutually exclusive;
+# pick one. The [tool.uv] `conflicts` table below encodes this so `uv lock`
+# can succeed. `[all]` includes `x402` (the standalone, newer rail) but not
+# `wallet`; install `[wallet]` separately if you need Coinbase AgentKit.
 wallet = ["coinbase-agentkit>=0.7", "cryptography>=42.0.0", "keyring>=24.0.0"]
 x402 = ["x402>=2.7"]
 payments = ["stripe-agent-toolkit>=0.7"]
 dev = ["pytest", "ruff", "pyright", "hypothesis>=6.100"]
-all = ["carl-studio[training,observe,hf,runpod,tinker,tui,mcp,research,a2a,dev]"]
+all = ["carl-studio[training,observe,hf,runpod,tinker,tui,mcp,research,a2a,x402,payments,dev]"]
 
 [project.scripts]
 carl = "carl_studio.cli:app"
+carl-heartbeat = "carl_studio.heartbeat.daemon:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/carl_studio"]
@@ -102,6 +110,23 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 carl-core = { workspace = true }
+
+# Declared dependency conflicts among optional extras. `coinbase-agentkit`
+# (inside `wallet`) pins x402<2 while the standalone `x402` extra requires
+# x402>=2.7, so they cannot coexist in one environment. Declaring the
+# conflict lets `uv lock` produce an `all`-target lockfile while preserving
+# both as independently installable.
+[tool.uv]
+conflicts = [
+    [
+        { extra = "wallet" },
+        { extra = "x402" },
+    ],
+    [
+        { extra = "wallet" },
+        { extra = "all" },
+    ],
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages/carl-core/tests"]

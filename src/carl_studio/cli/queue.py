@@ -151,3 +151,33 @@ def queue_clear(
 
     label = "done" if done_only else "non-archived"
     c.ok(f"archived {len(targets)} {label} note(s)")
+
+
+@queue_app.command("reclaim")
+def queue_reclaim(
+    max_age: Annotated[
+        int,
+        typer.Option(
+            "--max-age",
+            help="Minimum age (seconds) before a processing row is reclaimed",
+        ),
+    ] = 600,
+) -> None:
+    """Flip notes stuck in ``processing`` > ``--max-age`` back to ``queued``.
+
+    Useful after a daemon crash — rows claimed by :meth:`StickyQueue.dequeue`
+    but never marked ``done`` would otherwise sit in ``processing`` forever.
+    The heartbeat daemon runs this automatically on boot and periodically
+    during operation, so manual invocation is typically only needed during
+    incident response.
+    """
+    c = get_console()
+    if max_age < 0:
+        c.error("--max-age must be non-negative")
+        raise typer.Exit(1)
+    try:
+        n = StickyQueue(LocalDB()).reclaim_stale(max_age_seconds=max_age)
+    except ValueError as exc:
+        c.error(str(exc))
+        raise typer.Exit(1) from exc
+    c.ok(f"reclaimed {n} note(s)")

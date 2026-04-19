@@ -184,6 +184,10 @@ class CARLSettings(BaseSettings):
     trackio_url: str | None = Field(default=None, description="Trackio dashboard URL")
     naming_prefix: str = Field(default="", description="Naming convention prefix")
     log_level: str = Field(default="info", description="Logging level")
+    show_per_turn_cost: bool = Field(
+        default=True,
+        description="Show per-turn cost delta and session running total in carl chat",
+    )
 
     # -- Observe defaults --
     observe_defaults: ObserveDefaults = Field(default_factory=ObserveDefaults)

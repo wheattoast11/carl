@@ -20,4 +20,8 @@ __all__ = [
     "HeartbeatLoop",
     "HeartbeatPhase",
     "ORDERED_PHASES",
+    # ``daemon`` is imported lazily by callers (``python -m`` or the
+    # ``carl-heartbeat`` console script) so we keep it out of this
+    # module's import graph. Consumers that need it should write
+    # ``from carl_studio.heartbeat import daemon``.
 ]

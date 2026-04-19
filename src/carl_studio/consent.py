@@ -2,12 +2,25 @@
 
 All flags default to off. The user must explicitly opt in.
 Local state is authoritative — the server cannot silently enable tracking.
+
+Enforcement
+-----------
+Runtime network-egress paths MUST call :func:`consent_gate` at their
+boundary with the relevant :class:`ConsentFlag`. Gates currently wired:
+
+* ``TELEMETRY`` — :func:`carl_studio.sync.push` / :func:`~carl_studio.sync.pull`,
+  MCP ``authenticate`` tool.
+* ``CONTRACT_WITNESSING`` — :class:`carl_studio.x402.X402Client.execute` and
+  :meth:`carl_studio.x402_connection.PaymentConnection.get` (payments create
+  service-contract witnesses).
+* ``OBSERVABILITY`` — reserved for outbound coherence-probe publish paths.
 """
 
 from __future__ import annotations
 
 import sys
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 from carl_core.errors import CARLError
@@ -21,6 +34,22 @@ CONSENT_KEYS = frozenset({
     "usage_analytics",
     "contract_witnessing",
 })
+
+
+class ConsentFlagKey(str, Enum):
+    """Enumerates the runtime consent flags.
+
+    Values match :class:`ConsentState` field names and the string keys
+    accepted by :meth:`ConsentManager.update`. The name ``ConsentFlagKey``
+    (rather than ``ConsentFlag``) avoids a collision with the pre-existing
+    :class:`ConsentFlag` pydantic model below, which represents the stored
+    state of a single flag (``enabled`` + ``changed_at``).
+    """
+
+    OBSERVABILITY = "observability"
+    TELEMETRY = "telemetry"
+    USAGE_ANALYTICS = "usage_analytics"
+    CONTRACT_WITNESSING = "contract_witnessing"
 
 
 class ConsentError(CARLError):
@@ -76,6 +105,19 @@ class ConsentManager:
     def save(self, state: ConsentState) -> None:
         """Persist consent state to LocalDB config table."""
         self._get_db().set_config(_CONSENT_KEY, state.model_dump_json())
+
+    def is_granted(self, key: str | ConsentFlagKey) -> bool:
+        """Return ``True`` iff the consent flag *key* is currently enabled.
+
+        Unknown keys return ``False`` (fail-closed — a typo or removed flag
+        must never leak into granted-by-mistake behavior).
+        """
+        flag_str = key.value if isinstance(key, ConsentFlagKey) else str(key)
+        if flag_str not in CONSENT_KEYS:
+            return False
+        state = self.load()
+        flag: ConsentFlag = getattr(state, flag_str)
+        return bool(flag.enabled)
 
     def update(self, key: str, enabled: bool) -> ConsentState:
         """Update a single consent flag with timestamp.
@@ -173,3 +215,63 @@ def consent_state_from_profile(profile: Any) -> ConsentState:
         usage_analytics=ConsentFlag(enabled=getattr(profile, "usage_tracking_enabled", False)),
         contract_witnessing=ConsentFlag(enabled=getattr(profile, "contract_witnessing", False)),
     )
+
+
+def consent_gate(
+    flag: ConsentFlagKey | str,
+    *,
+    manager: ConsentManager | None = None,
+) -> None:
+    """Raise :class:`ConsentError` if the given flag is not granted.
+
+    Call at every network-egress boundary that the flag protects. When
+    *manager* is ``None`` the gate reads from a freshly constructed
+    :class:`ConsentManager` (which lazy-opens the process-default
+    :class:`~carl_studio.db.LocalDB`).
+
+    Parameters
+    ----------
+    flag
+        A :class:`ConsentFlagKey` enum member or the equivalent string
+        (``"observability"``, ``"telemetry"``, ``"usage_analytics"``,
+        ``"contract_witnessing"``).
+    manager
+        Optional :class:`ConsentManager` to use. Tests typically inject a
+        manager bound to a ``FakeDB`` to exercise the gate deterministically.
+
+    Raises
+    ------
+    ConsentError
+        When the flag is unknown or not currently granted. The raised error
+        carries ``code="carl.consent.denied"`` and ``context={"flag": ...}``
+        so operators can distinguish a denied gate from other consent
+        failures in logs.
+    """
+    flag_str = flag.value if isinstance(flag, ConsentFlagKey) else str(flag)
+    if flag_str not in CONSENT_KEYS:
+        raise ConsentError(
+            f"Unknown consent flag '{flag_str}'. "
+            f"Valid: {', '.join(sorted(CONSENT_KEYS))}",
+            code="carl.consent.unknown_flag",
+            context={"flag": flag_str},
+        )
+    mgr = manager or ConsentManager()
+    if not mgr.is_granted(flag_str):
+        raise ConsentError(
+            f"consent flag '{flag_str}' not granted — "
+            f"run `carl camp consent update {flag_str} --enable` to allow",
+            code="carl.consent.denied",
+            context={"flag": flag_str},
+        )
+
+
+__all__ = [
+    "CONSENT_KEYS",
+    "ConsentError",
+    "ConsentFlag",
+    "ConsentFlagKey",
+    "ConsentManager",
+    "ConsentState",
+    "consent_gate",
+    "consent_state_from_profile",
+]

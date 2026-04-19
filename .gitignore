@@ -30,3 +30,4 @@ env/
 # Ad-hoc scratch / patch scripts at repo root (do not commit)
 /fix_*.py
 /patch_*.py
+.claude/scheduled_tasks.lock

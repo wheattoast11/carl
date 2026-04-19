@@ -15,6 +15,17 @@ The module-level :data:`_FACILITATOR_BREAKER` instance is re-used from
 across the process, tracking only infrastructure exceptions) is preserved.
 When the breaker is ``OPEN``, :meth:`open` surfaces a
 :class:`ConnectionUnavailableError` before any transport call is attempted.
+
+Consent gate
+------------
+:meth:`PaymentConnection.get` is gated by
+:attr:`~carl_studio.consent.ConsentFlagKey.CONTRACT_WITNESSING` — each
+x402 GET implicitly witnesses the merchant's service contract. The gate
+is checked before either SDK or urllib-fallback transport runs, ensuring
+identical semantics across both paths. The urllib path's nested call to
+:meth:`carl_studio.x402.X402Client.execute` re-checks the gate for
+defense-in-depth; the repeat is cheap (one DB lookup) and guarantees
+that direct :class:`X402Client` users enjoy the same guarantee.
 """
 
 from __future__ import annotations
@@ -35,6 +46,7 @@ from carl_core.connection import (
 )
 from carl_core.errors import NetworkError
 
+from carl_studio.consent import ConsentFlagKey, consent_gate
 from carl_studio.x402 import (
     _FACILITATOR_BREAKER,  # pyright: ignore[reportPrivateUsage]
     X402Client,
@@ -347,7 +359,14 @@ class PaymentConnection(AsyncBaseConnection):
 
     async def get(self, url: str, **kwargs: Any) -> Any:
         """x402-aware GET. Returns the httpx response (SDK path) or bytes
-        (urllib fallback)."""
+        (urllib fallback).
+
+        Raises :class:`~carl_studio.consent.ConsentError` when the
+        ``CONTRACT_WITNESSING`` consent flag is not granted — x402 payment
+        writes a service-contract witness and is therefore gated on the
+        same flag as :class:`~carl_studio.contract.ContractWitness`.
+        """
+        consent_gate(ConsentFlagKey.CONTRACT_WITNESSING)
         async with self.transact("get"):
             client = self._require_client()
             try:

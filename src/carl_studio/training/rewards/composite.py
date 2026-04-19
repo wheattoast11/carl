@@ -26,6 +26,13 @@ from typing import Any, TypedDict
 import numpy as np
 
 from carl_core.coherence_trace import CoherenceTrace
+from carl_core.constants import (
+    KURAMOTO_R_GASEOUS_MAX,
+    KURAMOTO_R_LIQUID_MAX,
+    PHASE_WEIGHTS_CRYSTALLINE,
+    PHASE_WEIGHTS_GASEOUS,
+    PHASE_WEIGHTS_LIQUID,
+)
 from carl_core.errors import ValidationError
 
 from carl_studio.training.rewards.base import extract_text
@@ -169,13 +176,11 @@ class PhaseAdaptiveCARLReward(CARLReward):
     ``self._last_traces`` for Kuramoto-R.
     """
 
-    # Per-phase weight profiles. Sum = 1.0. Order: (multiscale, cloud, discontinuity).
-    _PROFILE_GASEOUS: tuple[float, float, float] = (0.20, 0.30, 0.50)
-    _PROFILE_LIQUID: tuple[float, float, float] = (0.40, 0.30, 0.30)
-    _PROFILE_CRYSTALLINE: tuple[float, float, float] = (0.60, 0.30, 0.10)
-
-    _GASEOUS_MAX_R: float = 0.30
-    _LIQUID_MAX_R: float = 0.70
+    # Per-phase weight profiles and Kuramoto-R boundaries are now module-level
+    # constants in ``carl_core.constants`` (KURAMOTO_R_GASEOUS_MAX,
+    # KURAMOTO_R_LIQUID_MAX, PHASE_WEIGHTS_GASEOUS, PHASE_WEIGHTS_LIQUID,
+    # PHASE_WEIGHTS_CRYSTALLINE) so researchers can cite them in methods
+    # sections (see docs/phase_thresholds.md).
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
@@ -198,11 +203,11 @@ class PhaseAdaptiveCARLReward(CARLReward):
         self, R: float
     ) -> tuple[float, float, float]:
         """Map Kuramoto-R to a (w_mc, w_cq, w_disc) profile."""
-        if R < self._GASEOUS_MAX_R:
-            return self._PROFILE_GASEOUS
-        if R < self._LIQUID_MAX_R:
-            return self._PROFILE_LIQUID
-        return self._PROFILE_CRYSTALLINE
+        if R < KURAMOTO_R_GASEOUS_MAX:
+            return PHASE_WEIGHTS_GASEOUS
+        if R < KURAMOTO_R_LIQUID_MAX:
+            return PHASE_WEIGHTS_LIQUID
+        return PHASE_WEIGHTS_CRYSTALLINE
 
     def _current_R(self) -> float | None:
         """Mean Kuramoto-R across cached traces, or None if unavailable.
@@ -318,9 +323,9 @@ class PhaseAdaptiveCARLReward(CARLReward):
         R = self._current_R()
         if R is None:
             return "unknown"
-        if R < self._GASEOUS_MAX_R:
+        if R < KURAMOTO_R_GASEOUS_MAX:
             return "gaseous"
-        if R < self._LIQUID_MAX_R:
+        if R < KURAMOTO_R_LIQUID_MAX:
             return "liquid"
         return "crystalline"
 

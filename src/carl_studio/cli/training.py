@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import typer
@@ -438,6 +439,19 @@ def train(
         "--from-queue",
         help="Load training config from the pending FeedbackEngine proposal.",
     ),
+    trace_dir: Path | None = typer.Option(
+        None,
+        "--trace-dir",
+        help=(
+            "Directory to write coherence traces "
+            "(default: ~/.carl/runs/<run_id>/traces/)"
+        ),
+    ),
+    report_to: str | None = typer.Option(
+        None,
+        "--report-to",
+        help="TRL metrics reporter: trackio|wandb|mlflow|tensorboard|none",
+    ),
 ) -> None:
     """Start a CARL training run. Use --send-it for full autonomous pipeline."""
     import yaml
@@ -500,6 +514,10 @@ def train(
         raw["vlm_mode"] = True
     if gate:
         raw["eval_gate"] = True
+    if trace_dir is not None:
+        raw["trace_dir"] = trace_dir
+    if report_to is not None:
+        raw["report_to"] = report_to
 
     if "base_model" not in raw:
         get_console().error("--model or base_model in config required")

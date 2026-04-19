@@ -7,7 +7,8 @@ All configuration surfaces are Pydantic BaseModel with Field validators.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -239,6 +240,23 @@ class TrainingConfig(BaseModel):
     tokenizer_source: Optional[str] = Field(
         default=None,
         description="Override tokenizer source if base model repo is missing chat template",
+    )
+
+    # Observability (passed through to TRL training_args)
+    report_to: Literal["none", "trackio", "wandb", "mlflow", "tensorboard"] = Field(
+        default="none",
+        description=(
+            "TRL metrics reporter. 'none' keeps training offline; 'trackio' is "
+            "carl's preferred local dashboard. Passed through verbatim to "
+            "SFTConfig/GRPOConfig as report_to."
+        ),
+    )
+    trace_dir: Optional[Path] = Field(
+        default=None,
+        description=(
+            "Directory for CoherenceTraceCallback JSONL artifacts. "
+            "Defaults to ~/.carl/runs/<run_id>/traces/ when unset."
+        ),
     )
 
     # Extra

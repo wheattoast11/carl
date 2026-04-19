@@ -2,6 +2,15 @@
 
 The facilitator handles all on-chain work. This client sends HTTP requests
 with x402 headers. No web3.py dependency — stdlib urllib only.
+
+Consent gate
+------------
+Every payment execution implicitly witnesses a service contract (the
+merchant's x402 terms), so :meth:`X402Client.execute` is gated by
+:attr:`~carl_studio.consent.ConsentFlagKey.CONTRACT_WITNESSING`. The
+check-only path (``check_x402``) and negotiation are permitted — users
+can discover cost without paying — but the actual settlement is blocked
+when contract-witnessing consent has not been granted.
 """
 
 from __future__ import annotations
@@ -17,6 +26,8 @@ from pydantic import BaseModel, Field
 from carl_core.errors import CARLError, NetworkError
 from carl_core.interaction import ActionType, InteractionChain
 from carl_core.retry import CircuitBreaker
+
+from carl_studio.consent import ConsentFlagKey, consent_gate
 
 _X402_CONFIG_KEY = "x402_config"
 
@@ -261,7 +272,14 @@ class X402Client:
     def execute(
         self, url: str, payment_token: str, timeout: int = 10
     ) -> bytes:
-        """Replay the original request with x-payment-token header."""
+        """Replay the original request with x-payment-token header.
+
+        Raises :class:`~carl_studio.consent.ConsentError` when the
+        ``CONTRACT_WITNESSING`` consent flag is not granted — payment
+        creates a service-contract witness and therefore inherits the
+        same consent surface as :class:`carl_studio.contract.ContractWitness`.
+        """
+        consent_gate(ConsentFlagKey.CONTRACT_WITNESSING)
         req = urllib.request.Request(
             url,
             headers={"X-Payment-Token": payment_token},

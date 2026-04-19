@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import re
 import uuid
+from pathlib import Path
 from typing import Any, Optional
 
 from carl_core.interaction import ActionType, InteractionChain
@@ -901,7 +902,7 @@ class CARLTrainer:
             save_strategy="steps",
             save_steps=50,
             save_total_limit=4,
-            report_to="none",
+            report_to=cfg.report_to,
             run_name=cfg.run_name,
         )
 
@@ -1020,7 +1021,7 @@ class CARLTrainer:
             save_strategy="steps",
             save_steps=25,
             save_total_limit=8,
-            report_to="none",
+            report_to=cfg.report_to,
             run_name=cfg.run_name,
         )
 
@@ -1166,12 +1167,13 @@ class CARLTrainer:
     # ------------------------------------------------------------------
 
     def _build_callbacks(self) -> list[Any]:
-        """Build training callbacks: CascadeCallback + CoherenceMonitorCallback."""
+        """Build training callbacks: cascade + coherence monitor + trace."""
         from carl_studio.training.callbacks import (
             CoherenceMonitorCallback,
             InteractionChainCallback,
         )
         from carl_studio.training.cascade import CascadeCallback
+        from carl_studio.training.trace_callback import CoherenceTraceCallback
 
         callbacks: list[Any] = []
 
@@ -1189,6 +1191,22 @@ class CARLTrainer:
                     session_id=self.run.id,
                 )
             )
+
+            # Per-token coherence trace JSONL artifacts. Default dir is
+            # ~/.carl/runs/<run_id>/traces/ so artifacts land in a stable
+            # location under the user's home even when the caller did not
+            # set --trace-dir. Best-effort: if the dir cannot be created,
+            # fall through without a trace callback so training still runs.
+            try:
+                trace_dir = self._resolve_trace_dir()
+                callbacks.append(
+                    CoherenceTraceCallback(
+                        carl_reward_fn=carl_fn,
+                        trace_dir=str(trace_dir),
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 — trace writing is optional
+                logger.warning("CoherenceTraceCallback disabled: %s", exc)
         else:
             logger.warning("Could not locate CARL reward function for coherence monitoring")
 
@@ -1203,6 +1221,27 @@ class CARLTrainer:
             )
 
         return callbacks
+
+    def _resolve_trace_dir(self) -> Path:
+        """Return the directory where coherence traces should land.
+
+        Priority:
+
+        1. ``cfg.trace_dir`` if set — user-supplied via CLI or YAML.
+        2. ``~/.carl/runs/<run_id>/traces/`` — stable default.
+
+        The directory is created if it does not already exist. Callers
+        that do not want a trace file should set ``cfg.trace_dir`` to
+        a path under ``/dev/null`` territory (not currently supported)
+        or swap the callback entirely.
+        """
+        configured = getattr(self.config, "trace_dir", None)
+        if configured is not None:
+            target = Path(configured)
+        else:
+            target = Path.home() / ".carl" / "runs" / self.run.id / "traces"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
 
     def _find_carl_reward_fn(self) -> Optional[Any]:
         """Find the reward function that carries _last_metrics (the CARL reward).

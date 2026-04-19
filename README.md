@@ -43,20 +43,14 @@ This is alignment you can measure, not just evaluate.
 ## Install
 
 ```bash
-pip install carl-studio                     # core CLI + one-shot observe
-pip install 'carl-studio[training]'        # local train/eval
-pip install 'carl-studio[hf]'              # status/logs/stop/push/HF Jobs
-pip install 'carl-studio[tui]'             # observe --live
-pip install 'carl-studio[observe]'         # observe --diagnose
-pip install 'carl-studio[wallet]'          # x402 / Coinbase wallet
-pip install 'carl-studio[all]'             # everything
+pip install 'carl-studio[quickstart]'
 ```
 
-Most users should start with:
+That bundles the three things ~95% of users need: `training`, `hf`, and `observe`.
+Bare `pip install carl-studio` also works (core CLI + one-shot observe only).
 
-```bash
-pip install 'carl-studio[training,hf]'
-```
+Full extras matrix, reproducible installs via `uv.lock`, and conflict rules (e.g.
+`wallet` vs `x402`) live in [`docs/INSTALL.md`](docs/INSTALL.md).
 
 ## Quickstart
 

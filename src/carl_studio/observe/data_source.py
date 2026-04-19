@@ -1,9 +1,19 @@
 """Data sources for the observe dashboard.
 
 Each source yields ``ObserveFrame`` objects that the TUI renders.
-Two backends:
-  - FileSource:    tail a JSONL log file (works offline, any training backend)
-  - TrackioSource: poll Trackio API (works with ``report_to="trackio"`` in config)
+Three backends:
+  - FileSource:     tail a JSONL log file (works offline, any training backend)
+  - TraceFileSource: read CoherenceTrace artifacts (offline, per-token detail)
+  - TrackioSource:  poll Trackio API — requires network egress
+
+Consent gate
+------------
+``TrackioSource`` is gated by
+:attr:`~carl_studio.consent.ConsentFlagKey.OBSERVABILITY`. File-backed
+sources run fully offline and are unaffected. The Trackio path touches
+the user's Hugging Face Space (via ``gradio_client``) to pull training
+metrics, which is an observability egress by design — enable
+observability consent to use it.
 """
 
 from __future__ import annotations
@@ -14,6 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import urlparse
+
+from carl_studio.consent import ConsentFlagKey, consent_gate
 
 
 @dataclass
@@ -261,6 +273,13 @@ class TrackioSource:
     def _get_client(self):
         if self._client is not None:
             return self._client
+
+        # Observability consent gate — Trackio fetches touch the user's
+        # training dashboard on HF and are the one remote egress path in
+        # ``carl_studio.observe``. Raise before any network / import of
+        # gradio_client so the telemetry surface stays cleanly off by
+        # default.
+        consent_gate(ConsentFlagKey.OBSERVABILITY)
 
         try:
             from gradio_client import Client

@@ -18,7 +18,7 @@ import sqlite3
 import uuid
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
@@ -135,6 +135,110 @@ class StickyQueue:
                 (note_id,),
             )
             conn.commit()
+
+    def requeue(self, note_id: str) -> bool:
+        """Atomically flip a single note from ``processing`` back to ``queued``.
+
+        Used by the heartbeat loop on exception so an interrupted cycle does
+        not leave a row wedged in ``processing`` forever. Returns ``True`` if a
+        row was actually flipped (i.e. the note was still in ``processing``),
+        ``False`` otherwise — callers get an unambiguous signal whether the
+        reclaim was necessary.
+
+        Raises
+        ------
+        ValueError
+            If ``note_id`` is empty or whitespace-only.
+        """
+        if not note_id or not note_id.strip():
+            raise ValueError("StickyQueue.requeue: note_id must be a non-empty string")
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE sticky_notes SET status = 'queued', started_at = NULL "
+                "WHERE id = ? AND status = 'processing'",
+                (note_id,),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def reclaim_stale(self, *, max_age_seconds: int = 600) -> int:
+        """Flip notes stuck in ``processing`` longer than ``max_age_seconds``
+        back to ``queued``.
+
+        A note is considered stale if its ``started_at`` is older than
+        ``now - max_age_seconds`` **or** ``NULL`` (a defensive catch-all for
+        rows left in an inconsistent state by a crash between the
+        ``status=processing`` flip and the ``started_at`` write — the SQL
+        claim in :meth:`dequeue` does both in one statement so this is rare,
+        but the NULL branch makes reclaim idempotent in the face of any
+        future divergence).
+
+        Call on daemon boot (to absorb work interrupted by a prior crash)
+        and optionally on a periodic maintenance tick to recover from
+        wedges that happen mid-run.
+
+        Arguments
+        ---------
+        max_age_seconds
+            Minimum age, in seconds, before a ``processing`` row is eligible
+            for reclaim. Must be >= 0.
+
+        Returns
+        -------
+        int
+            Number of rows actually reclaimed (transitioned back to
+            ``queued``).
+
+        Raises
+        ------
+        ValueError
+            If ``max_age_seconds`` is negative.
+        """
+        if max_age_seconds < 0:
+            raise ValueError(
+                "StickyQueue.reclaim_stale: max_age_seconds must be non-negative",
+            )
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
+        cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # ``<=`` not ``<`` — because ``started_at`` has one-second resolution
+        # (see ``_now_iso``) a row claimed in the current second would have
+        # ``started_at == cutoff`` when ``max_age_seconds`` is ``0``, and a
+        # strict ``<`` would leave it behind. ``<=`` makes "reclaim now"
+        # actually reclaim, and is harmless on the common path because a
+        # real wedge will be many seconds beyond the cutoff.
+        with self._conn() as conn:
+            cursor = conn.execute(
+                "UPDATE sticky_notes SET status = 'queued', started_at = NULL "
+                "WHERE status = 'processing' "
+                "AND (started_at IS NULL OR started_at <= ?)",
+                (cutoff_str,),
+            )
+            conn.commit()
+            return int(cursor.rowcount)
+
+    def oldest_processing_age_seconds(self) -> float | None:
+        """Return age (seconds) of the oldest ``processing`` note, or ``None``.
+
+        Intended for ``carl doctor`` surfacing — a non-None value greater than
+        the configured reclaim threshold signals a wedged row. If no rows are
+        ``processing``, or none has a ``started_at``, returns ``None``.
+        """
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT started_at FROM sticky_notes "
+                "WHERE status = 'processing' AND started_at IS NOT NULL "
+                "ORDER BY started_at ASC LIMIT 1",
+            ).fetchone()
+        if not row or not row[0]:
+            return None
+        raw = cast(str, row[0])
+        try:
+            started = datetime.strptime(raw, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=timezone.utc,
+            )
+        except ValueError:
+            return None
+        return (datetime.now(timezone.utc) - started).total_seconds()
 
     def get(self, note_id: str) -> StickyNote | None:
         """Fetch a single note by id, or ``None`` if missing."""

@@ -21,8 +21,30 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Generator
+from typing import Generator, TypedDict
 from uuid import uuid4
+
+
+class WalCheckpointResult(TypedDict):
+    """Shape of the ``wal_checkpoint`` field returned by :meth:`LocalDB.maintenance`.
+
+    Each slot corresponds to the equivalent column in the tuple returned by
+    ``PRAGMA wal_checkpoint`` — ``None`` values mean SQLite returned no row
+    (WAL not active, in-memory DB, etc.) or a non-integer where an int was
+    expected.
+    """
+
+    busy: int | None
+    log_pages: int | None
+    checkpointed: int | None
+
+
+class MaintenanceResult(TypedDict):
+    """Return type of :meth:`LocalDB.maintenance`."""
+
+    notes_deleted: int
+    wal_checkpoint: WalCheckpointResult
+    vacuumed: bool
 
 CARL_DIR = Path.home() / ".carl"
 DB_PATH = CARL_DIR / "carl.db"
@@ -244,6 +266,123 @@ class LocalDB:
                 # the original fault (REV-008) — best-effort only.
                 pass
             self._conn = None
+
+    # ─── Maintenance ─────────────────────────────────────────
+
+    def maintenance(
+        self,
+        *,
+        retention_days: int = 30,
+        vacuum: bool = False,
+    ) -> MaintenanceResult:
+        """Run periodic DB maintenance.
+
+        Performs three actions, in order:
+
+        1. **Retention sweep** — deletes ``sticky_notes`` rows with
+           ``status='archived'`` whose ``completed_at`` (or ``created_at``
+           fallback when ``completed_at`` is ``NULL``) is older than the
+           cutoff. Heartbeat load is dominated by this table, so it is the
+           primary driver of unbounded growth. ``retention_days=0`` disables
+           the sweep.
+        2. **WAL checkpoint** — truncates ``carl.db-wal`` back to zero bytes
+           by running ``PRAGMA wal_checkpoint(TRUNCATE)``. Without this the
+           WAL file grows unboundedly under heartbeat-driven writes; manual
+           checkpointing is the SQLite-recommended mitigation.
+        3. **VACUUM** — optional, off by default because it takes a full-
+           database exclusive lock. Call with ``vacuum=True`` during a
+           low-traffic maintenance window or from a user-initiated ``carl db
+           maintenance --vacuum`` command.
+
+        Parameters
+        ----------
+        retention_days
+            Maximum age (days) for ``archived`` sticky notes. Rows older
+            than the cutoff are deleted. Set to ``0`` to skip the retention
+            sweep. Must be non-negative.
+        vacuum
+            When ``True``, run ``VACUUM`` after the checkpoint to reclaim
+            freed pages. Off by default — ``VACUUM`` is expensive and takes
+            an exclusive lock, so it should be opt-in.
+
+        Returns
+        -------
+        dict[str, object]
+            ``notes_deleted``: int count of deleted sticky rows.
+            ``wal_checkpoint``: dict with ``busy`` / ``log_pages`` /
+            ``checkpointed`` from ``PRAGMA wal_checkpoint``. Each is either
+            an int (happy path) or ``None`` (SQLite returned no row, which
+            only happens when WAL is not active, e.g. memory-backed DBs).
+            ``vacuumed``: bool — whether ``VACUUM`` actually ran.
+
+        Raises
+        ------
+        ValueError
+            If ``retention_days`` is negative.
+        """
+        if retention_days < 0:
+            raise ValueError(
+                "LocalDB.maintenance: retention_days must be non-negative",
+            )
+
+        deleted = 0
+        checkpoint_row: tuple[object, ...] | None = None
+
+        with self._connect() as conn:
+            if retention_days > 0:
+                cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+                cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+                # ``completed_at`` is the honest bounce-date for archived
+                # rows; when it's missing (edge case: archived before
+                # completion, or legacy inserts that pre-date the field
+                # being populated), fall back to ``created_at`` so old rows
+                # still age out rather than surviving forever.
+                cursor = conn.execute(
+                    "DELETE FROM sticky_notes WHERE status = 'archived' "
+                    "AND COALESCE(completed_at, created_at) < ?",
+                    (cutoff_str,),
+                )
+                deleted = int(cursor.rowcount)
+
+            # WAL checkpoint — returns (busy, log_pages, checkpointed).
+            # ``TRUNCATE`` is the aggressive mode: it truncates the WAL file
+            # to zero bytes after writing all frames back to the main db.
+            try:
+                checkpoint_row = conn.execute(
+                    "PRAGMA wal_checkpoint(TRUNCATE)",
+                ).fetchone()
+            except sqlite3.DatabaseError:
+                # WAL may be inactive (e.g. ``:memory:`` DBs or very old
+                # SQLite). Degrade gracefully rather than crash the
+                # maintenance tick.
+                checkpoint_row = None
+
+            conn.commit()
+
+            if vacuum:
+                # VACUUM cannot run inside a transaction — we committed
+                # above, so we're clear. It takes an exclusive lock for
+                # its duration.
+                conn.execute("VACUUM")
+
+        def _slot(idx: int) -> int | None:
+            if checkpoint_row is None or len(checkpoint_row) <= idx:
+                return None
+            val = checkpoint_row[idx]
+            if isinstance(val, int):
+                return val
+            return None
+
+        wal: WalCheckpointResult = {
+            "busy": _slot(0),
+            "log_pages": _slot(1),
+            "checkpointed": _slot(2),
+        }
+        return {
+            "notes_deleted": deleted,
+            "wal_checkpoint": wal,
+            "vacuumed": bool(vacuum),
+        }
 
     # ─── Config ──────────────────────────────────────────────
 
