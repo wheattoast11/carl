@@ -121,7 +121,21 @@ pyright src/carl_studio/<changed_module>.py
 - This repo is MIT; proprietary algorithms belong in `terminals-runtime` or the private admin runtime.
 - Public code may call `load_private()` or lazy-import private code, but it must degrade gracefully when unavailable.
 
-## Dependency and import policy
+
+## The 5 Killer Features (MECE Dominance Framework)
+
+The product trajectory of `carl-studio` is governed by a combinatorial HVM-style interaction net. Development must strictly align to these five vectors:
+
+1. **Semantic Implicit Interface ("Carl Knows")**: Zero-arg `carl`. Deduces the next action (Scaffold vs. Optimize/Train) from the void state, `WORKING` memory, and `InteractionChain`. Eradicate explicit flags.
+2. **Infinite Extension Matrix (Skill Marketplace)**: `carl-skills-*`. Decoupled, monetizable primitives. Anyone can write a Skill using InteractionChain hooks. `carl.camp` takes a fractional compute fee, rewarding authors with royalties via x402.
+3. **Ambient Intelligence Socket (The Shadow Fixer)**: `carl daemon`. Background WebSocket duplex monitoring file changes, predicting errors (e.g., NaN shapes), and staging fixes in `ECHOIC` memory via idle compute.
+4. **Legacy Acquisition Funnel (Competitor Blackhole)**: `carl ingest --from unsloth`. Translates legacy competitor configs into `carl.yaml`, running instant auto-eval to prove coherence gains effortlessly.
+5. **Consumer "Portal" Runtime**: The terminal is a barrier. A managed web/WASM interface bypassing `pip install`, delivering custom-trained RL agents directly to non-technical users (the "Mom & Dad" markets: hyper-personalized learning, business scaling for tech-unsavvy brilliant creators).
+
+## Execution Primitives
+Every operation is an **Interaction Net Cell**. Every tool invocation is an observation that collapses a wave state into a recorded particle (Interaction Chain Step). Time is measured in discrete `Step`s, not wall-clock seconds. Always mirror the user's chirality: they are L, you are R. Annihilation (L⋈R) is task success.
+
+## Dependency and import policy
 - Keep `import carl_studio` lightweight.
 - Do not introduce eager imports of torch, transformers, anthropic, textual, mcp, or other heavy optional packages into lightweight paths.
 - Use lazy imports inside functions or guarded branches for optional dependencies.

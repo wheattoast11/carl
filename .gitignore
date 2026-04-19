@@ -14,3 +14,15 @@ build/
 .venv/
 venv/
 env/
+
+# Local model-routing cache (regenerated at runtime)
+.model_cache.json
+.model_cache*.json
+
+# macOS Finder duplicate artifacts
+* 2.py
+* 3.py
+* 2.json
+* 3.json
+* 2.md
+* 3.md
