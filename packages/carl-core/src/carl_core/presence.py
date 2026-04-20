@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from math import isfinite
-from typing import Any
+from typing import Any, Callable
 
 
 @dataclass(frozen=True)
@@ -138,7 +138,56 @@ def compose_presence_report(
     )
 
 
+# ---------------------------------------------------------------------------
+# Default endogenous probe — v0.11 Fano V7 realization helper
+# ---------------------------------------------------------------------------
+#
+# A minimal "no-training-context" coherence probe that estimates R from the
+# chain's own recent-step success rate. Use when you don't have a training-
+# loop phi signal but still want auto-attach + coherence-gated routing to
+# operate on a meaningful signal instead of all-1.0 defaults.
+#
+# The estimate is intentionally coarse — R := success_rate over the recent
+# window of the SAME action type. A session that's mostly succeeding gets
+# a high R; a session cascading into failure sees R drop. This gives the
+# coherence gate a floor signal without any external probe.
+
+
+def success_rate_probe(chain: Any, *, window: int = 8) -> Callable[..., dict[str, float]]:
+    """Return a probe closure that estimates kuramoto_r from chain success rate.
+
+    Usage::
+
+        from carl_core.presence import success_rate_probe
+        from carl_core.interaction import InteractionChain
+
+        chain = InteractionChain()
+        chain.register_coherence_probe(success_rate_probe(chain))
+
+    The returned probe reads the tail window of the chain's steps (those
+    with the SAME action type as the step currently being recorded) and
+    returns ``{"kuramoto_r": success_rate}`` where success_rate is the
+    fraction of successful recent steps. Bounded by ``[0.0, 1.0]``.
+
+    This is an endogenous probe — it consults only the chain's own
+    history, no external state. Fano V3 endogenous-measurability PASS.
+    """
+
+    def _probe(*, action: Any, name: str, input: Any, output: Any) -> dict[str, float]:
+        if chain is None or not hasattr(chain, "steps"):
+            return {"kuramoto_r": 1.0}
+        same_type = [s for s in list(chain.steps)[-window:] if s.action == action]
+        if not same_type:
+            return {"kuramoto_r": 1.0}  # cold-start: no history yet
+        success_count = sum(1 for s in same_type if bool(getattr(s, "success", True)))
+        rate = success_count / len(same_type)
+        return {"kuramoto_r": float(rate)}
+
+    return _probe
+
+
 __all__ = [
     "PresenceReport",
     "compose_presence_report",
+    "success_rate_probe",
 ]

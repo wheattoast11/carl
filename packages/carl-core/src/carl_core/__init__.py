@@ -19,7 +19,7 @@ from carl_core.coherence_observer import CoherenceObserver
 from carl_core.frame_buffer import FrameBuffer, FrameRecord
 from carl_core.math import compute_phi
 from carl_core.interaction import ActionType, InteractionChain, Step
-from carl_core.presence import PresenceReport, compose_presence_report
+from carl_core.presence import PresenceReport, compose_presence_report, success_rate_probe
 from carl_core.interaction_store import InteractionStore
 from carl_core.errors import (
     CARLError,
@@ -100,6 +100,7 @@ __all__ = [
     "Step",
     "PresenceReport",
     "compose_presence_report",
+    "success_rate_probe",
     "CARLError",
     "ConfigError",
     "ValidationError",

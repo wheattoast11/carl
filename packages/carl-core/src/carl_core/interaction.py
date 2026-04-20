@@ -81,6 +81,44 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def _short_sha256(payload: str) -> str:
+    """Return the first 12 hex chars of sha256(payload) — audit fingerprint.
+
+    12 hex chars = 48 bits, plenty for collision resistance in an
+    audit-trail context where the full payload is never re-derivable
+    from the digest (the digest is a witness, not a secret).
+    """
+    import hashlib
+
+    return hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()[:12]
+
+
+def _digest_inputs(action: "ActionType", name: str, input: Any, output: Any) -> str:
+    """Fingerprint the probe inputs without persisting them."""
+    try:
+        import json as _json
+
+        payload = _json.dumps(
+            [action.value if hasattr(action, "value") else str(action), name, repr(input), repr(output)],
+            sort_keys=True,
+            default=str,
+        )
+    except Exception:
+        payload = f"{action}:{name}"
+    return _short_sha256(payload)
+
+
+def _digest_snap(snap: dict[str, Any]) -> str:
+    """Fingerprint the probe return dict without persisting payloads."""
+    try:
+        import json as _json
+
+        payload = _json.dumps(snap, sort_keys=True, default=str)
+    except Exception:
+        payload = repr(snap)
+    return _short_sha256(payload)
+
+
 @dataclass
 class Step:
     """One atomic unit in an InteractionChain.
@@ -137,6 +175,15 @@ class Step:
     phi: float | None = None
     kuramoto_r: float | None = None
     channel_coherence: dict[str, float] | None = None
+    # v0.11 Fano V5 witnessability: when a coherence probe supplied the
+    # phi/kuramoto_r/channel_coherence fields, this dict records a
+    # fingerprint of that probe invocation so downstream consumers can
+    # audit whether the coherence numbers came from a trusted source.
+    # Shape (all optional):
+    #   {"probe_name": str, "inputs_sha256": hex12, "output_sha256": hex12,
+    #    "populated": list[str]}
+    # Digests (not full payloads) preserve BITC axiom 1 (finite support).
+    probe_call: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -157,6 +204,9 @@ class Step:
                 dict(self.channel_coherence)
                 if self.channel_coherence is not None
                 else None
+            ),
+            "probe_call": (
+                dict(self.probe_call) if self.probe_call is not None else None
             ),
         }
 
@@ -232,6 +282,7 @@ class InteractionChain:
         return dict. Probe failures are swallowed so observability
         never kills the record path.
         """
+        probe_call: dict[str, Any] | None = None
         if (
             self._coherence_probe is not None
             and action in _AUTO_ATTACH_ACTIONS
@@ -242,12 +293,25 @@ class InteractionChain:
             except Exception:
                 snap = None
             if isinstance(snap, dict):
-                if phi is None:
+                populated: list[str] = []
+                if phi is None and "phi" in snap:
                     phi = snap.get("phi")
-                if kuramoto_r is None:
+                    populated.append("phi")
+                if kuramoto_r is None and "kuramoto_r" in snap:
                     kuramoto_r = snap.get("kuramoto_r")
-                if channel_coherence is None:
+                    populated.append("kuramoto_r")
+                if channel_coherence is None and "channel_coherence" in snap:
                     channel_coherence = snap.get("channel_coherence")
+                    populated.append("channel_coherence")
+                if populated:
+                    probe_call = {
+                        "probe_name": getattr(
+                            self._coherence_probe, "__name__", "<lambda>"
+                        ),
+                        "inputs_sha256": _digest_inputs(action, name, input, output),
+                        "output_sha256": _digest_snap(snap),
+                        "populated": populated,
+                    }
 
         step = Step(
             action=action,
@@ -262,6 +326,7 @@ class InteractionChain:
             phi=phi,
             kuramoto_r=kuramoto_r,
             channel_coherence=channel_coherence,
+            probe_call=probe_call,
         )
         self.steps.append(step)
         return step
