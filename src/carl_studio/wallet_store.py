@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 from carl_core.errors import CARLError, CredentialError, ValidationError
 
+from carl_studio.settings import carl_home
+
 if TYPE_CHECKING:  # pragma: no cover - type-only import
     pass
 
@@ -153,7 +155,7 @@ class WalletStore:
     """
 
     def __init__(self, home: Path | None = None) -> None:
-        resolved = Path(home) if home is not None else Path.home() / DEFAULT_HOME_SUBDIR
+        resolved = Path(home) if home is not None else carl_home()
         self._home: Path = resolved
         self._home.mkdir(parents=True, exist_ok=True)
         self._enc_path: Path = self._home / ENCRYPTED_FILENAME

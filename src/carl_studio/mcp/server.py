@@ -1,24 +1,25 @@
 """CARL Studio MCP Server -- exposes training tools for AI agents.
 
-Tenancy model (UAT-049)
------------------------
-This MCP server is **single-tenant by design**. The ``_session`` dict below
-(JWT, tier, user_id, authenticated_at) is a process-wide singleton — it is
-*not* keyed per-client. If two MCP clients connect to the same server
-process they will share the same auth state, and a JWT posted by one
-client will be visible to every other client.
+Session ownership (H2, v0.7.1)
+------------------------------
+Auth state (JWT, tier, user_id, authenticated_at) is **per-connection**.
+Each :class:`~carl_studio.mcp.connection.MCPServerConnection` owns an
+immutable :class:`~carl_studio.mcp.session.MCPSession`; tools read it via
+:func:`_get_session` and mutate it by building a new snapshot and
+assigning it back through the connection's :attr:`session` setter.
 
-Operators MUST run **one server process per tenant/user**. Do not share a
-single ``carl mcp serve`` process across multiple human or automation
-identities. Multi-tenant deployments should provision a dedicated
-process (or container) per principal and front them with their own
-transport — the MCP SDK's ``Context`` object is the correct seam for
-per-request state but retrofitting it across all nine authenticated
-tools (plus the nine legacy tools already out in the wild) would be a
-breaking change that we defer until the MCP 2025-11-25 migration.
+Before H2 this module owned a process-wide ``_session: dict[str, str]``
+global (UAT-049). That singleton leaked auth across clients whenever two
+callers shared the same ``carl mcp serve`` process. The per-connection
+routing below closes that leak. We still rely on the operator running the
+server inside a single-tenant transport if they want isolation at the
+process boundary, but a bound connection no longer pollutes siblings.
 
-The module emits a ``logger.warning`` on import so this constraint is
-surfaced every time the server boots, regardless of log level defaults.
+Tools that consume session state accept an optional
+``ctx: Context | None = None`` parameter — FastMCP auto-injects the active
+:class:`~mcp.server.fastmcp.Context` when the type hint is present. When
+``ctx`` is provided and carries a ``state.session`` attribute we prefer
+it; otherwise we fall back to the bound :class:`MCPServerConnection`.
 """
 
 from __future__ import annotations
@@ -26,35 +27,31 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Awaitable, Callable, TypeVar
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context as _FastMCPContext, FastMCP
+
+from carl_studio.mcp.session import SESSION_MAX_AGE, MCPSession
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
     from carl_studio.mcp.connection import MCPServerConnection
+
+
+# FastMCP's ``Context`` is generic over ``(ServerSessionT, LifespanContextT,
+# RequestT)``. Our tools never consume those specifics — the injected
+# Context is used purely as a carrier for optional per-request session
+# state. Exporting a concrete ``Any``-parameterised alias lets tool
+# signatures read ``ctx: Context | None = None`` without drowning pyright
+# in ``reportMissingTypeArgument`` noise on every tool.
+Context = _FastMCPContext[Any, Any, Any]
 
 logger = logging.getLogger(__name__)
 
 mcp = FastMCP("carl-studio")
 
-# ---------------------------------------------------------------------------
-# Session state — module-level, persists for the MCP server process lifetime
-# ---------------------------------------------------------------------------
-#
-# UAT-049: this dict is **single-tenant** — see the module docstring.
-# Every authenticated tool (`authenticate`, `get_tier_status`,
-# `dispatch_a2a_task`, `sync_data`, …) reads/writes this singleton.
-# Attempting to serve multiple tenants from one process will leak auth
-# state across clients. We emit a banner below so the constraint is
-# visible at startup.
-
-_session: dict[str, str] = {"jwt": "", "tier": "free", "user_id": ""}
-_SESSION_MAX_AGE = 3600  # 1 hour — re-authenticate after this
-
-logger.warning(
-    "carl-studio MCP server loaded: session state is SINGLE-TENANT "
-    "(module-level _session dict). Run one process per tenant — "
-    "do not share this server across users or automations."
+logger.info(
+    "carl-studio MCP server loaded: per-request session state via "
+    "MCPServerConnection (H2, v0.7.1)."
 )
 
 # ---------------------------------------------------------------------------
@@ -167,37 +164,90 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
-def _require_tier(feature: str) -> bool:
-    """Return True if current session tier allows the feature.
+def _get_session(ctx: "Context | None" = None) -> MCPSession:
+    """Return the active :class:`MCPSession` for the current tool call.
 
-    Also enforces session age — sessions older than ``_SESSION_MAX_AGE``
-    seconds are treated as unauthenticated (free tier).
+    Resolution order:
+
+    1. ``ctx.state.session`` when FastMCP has injected a :class:`Context`
+       that exposes a ``state.session`` attribute. This is the
+       future-ready seam for multi-request scoping; FastMCP 1.10 does not
+       populate ``state.session`` itself but third-party middleware can.
+    2. The bound :class:`MCPServerConnection` (set by
+       :func:`bind_connection`), which holds the per-connection session.
+    3. A transient empty :class:`MCPSession` — covers legacy test paths
+       that exercise tools without an open connection. Production FastMCP
+       always has a bound connection by the time a tool fires.
     """
-    import time
+    if ctx is not None:
+        state = getattr(ctx, "state", None)
+        if state is not None:
+            maybe_session = getattr(state, "session", None)
+            if isinstance(maybe_session, MCPSession):
+                return maybe_session
+    conn = get_bound_connection()
+    if conn is None:
+        return MCPSession()
+    return conn.session
 
+
+def _set_session(session: MCPSession) -> None:
+    """Atomically replace the bound connection's session snapshot.
+
+    No-op when no connection is bound — tools called outside a real FastMCP
+    serve loop (e.g. unit tests that construct tools directly) don't have a
+    durable seat to write to. Callers that need strong assertions should
+    bind a connection first.
+    """
+    conn = get_bound_connection()
+    if conn is None:
+        return
+    conn.session = session
+
+
+def _expire_if_stale(session: MCPSession) -> MCPSession:
+    """Return an unauthenticated session when ``session`` is past its TTL.
+
+    Preserves the legacy ``_SESSION_MAX_AGE`` staleness behaviour: a
+    successful ``authenticate`` stamps ``authenticated_at``, and any
+    subsequent tool call older than :data:`SESSION_MAX_AGE` seconds is
+    treated as ``tier="free"`` / empty JWT.
+    """
+    if session.authenticated_at is None:
+        return session
+    age = time.time() - session.authenticated_at.timestamp()
+    if age > SESSION_MAX_AGE:
+        return MCPSession()
+    return session
+
+
+def _require_tier(feature: str, ctx: "Context | None" = None) -> bool:
+    """Return True if the current session's tier allows ``feature``.
+
+    Also enforces session age — sessions older than
+    :data:`SESSION_MAX_AGE` seconds are treated as unauthenticated and
+    downgraded to the free tier (the downgrade is persisted back onto
+    the bound connection so subsequent calls see the expiry).
+    """
     from carl_studio.tier import Tier, tier_allows
 
-    # Expire stale sessions — force re-authentication
-    auth_at = _session.get("authenticated_at")
-    if auth_at:
-        try:
-            if time.time() - int(auth_at) > _SESSION_MAX_AGE:
-                _session["tier"] = "free"
-                _session["jwt"] = ""
-                _session["authenticated_at"] = ""
-        except (ValueError, TypeError):
-            pass
+    session = _get_session(ctx)
+    expired = _expire_if_stale(session)
+    if expired is not session:
+        _set_session(expired)
+        session = expired
 
-    t = Tier(_session.get("tier", "free"))
+    t = Tier(session.tier or "free")
     return tier_allows(t, feature)
 
 
-def _tier_error(feature: str) -> str:
+def _tier_error(feature: str, ctx: "Context | None" = None) -> str:
     """Return standard JSON error for tier gate failures."""
+    session = _get_session(ctx)
     return json.dumps(
         {
             "error": f"Feature '{feature}' requires CARL Paid tier.",
-            "current_tier": _session.get("tier", "free"),
+            "current_tier": session.tier or "free",
             "upgrade": "https://carl.camp/pricing",
             "hint": "Call authenticate(jwt) first, or upgrade at carl.camp",
         }
@@ -411,17 +461,20 @@ async def generate_bundle(config_yaml: str) -> str:
 
 
 @mcp.tool()
-async def authenticate(jwt: str) -> str:
+async def authenticate(jwt: str, ctx: Context | None = None) -> str:
     """Authenticate this MCP session with a carl.camp JWT.
 
     Call this first before using PAID features.
     The JWT is verified server-side via the carl.camp Supabase Edge Function.
     Returns: JSON with {tier, user_id, features_available: []}.
+
+    ``ctx`` is auto-injected by FastMCP when the server is running inside a
+    live request context; it lets per-request state supersede the bound
+    :class:`MCPServerConnection` when present. Callers outside a FastMCP
+    context may omit it — the tool falls back to the bound connection.
     """
 
     async def _body() -> str:
-        global _session
-
         if not jwt or not isinstance(jwt, str):
             return json.dumps(
                 {"error": "jwt must be a non-empty string", "authenticated": False}
@@ -429,6 +482,8 @@ async def authenticate(jwt: str) -> str:
 
         try:
             # Server-side JWT verification via Supabase Edge Function
+            from datetime import datetime, timezone
+
             from carl_studio.camp import (
                 DEFAULT_CARL_CAMP_SUPABASE_URL,
                 fetch_camp_profile,
@@ -443,12 +498,18 @@ async def authenticate(jwt: str) -> str:
             # CampProfile.tier is a plain str — normalize to canonical values
             tier_raw = profile.tier
             tier = "paid" if tier_raw in ("paid", "pro", "enterprise") else "free"
-            user_id = profile.user_id or ""
+            user_id = str(profile.user_id or "")
 
-            _session["jwt"] = jwt
-            _session["tier"] = tier
-            _session["user_id"] = str(user_id)
-            _session["authenticated_at"] = str(int(time.time()))
+            current = _get_session(ctx)
+            new_session = current.with_(
+                jwt=jwt,
+                tier=tier,
+                user_id=user_id,
+                authenticated_at=datetime.fromtimestamp(
+                    int(time.time()), tz=timezone.utc
+                ),
+            )
+            _set_session(new_session)
 
             from carl_studio.tier import FEATURE_TIERS, Tier, tier_allows
 
@@ -458,16 +519,14 @@ async def authenticate(jwt: str) -> str:
             return json.dumps(
                 {
                     "tier": tier,
-                    "user_id": str(user_id),
+                    "user_id": user_id,
                     "features_available": features,
                     "authenticated": True,
                 }
             )
         except Exception as e:
             # Fail closed — do NOT store the unverified JWT or grant paid access
-            _session["jwt"] = ""
-            _session["tier"] = "free"
-            _session["user_id"] = ""
+            _set_session(MCPSession())
             return json.dumps(
                 {
                     "error": f"Server verification failed: {e}",
@@ -488,26 +547,28 @@ async def authenticate(jwt: str) -> str:
 
 
 @mcp.tool()
-async def get_tier_status() -> str:
+async def get_tier_status(ctx: Context | None = None) -> str:
     """Get current session tier and which features are accessible.
 
     Returns: JSON with {tier, authenticated, features: {name: allowed}}.
     Shows 'free' if not authenticated — no JWT required.
+
+    ``ctx`` is FastMCP-injected when available; see :func:`authenticate`.
     """
 
     async def _body() -> str:
         from carl_studio.tier import FEATURE_TIERS, Tier, tier_allows
 
-        tier = _session.get("tier", "free")
-        authenticated = bool(_session.get("jwt", ""))
+        session = _get_session(ctx)
+        tier = session.tier or "free"
         t = Tier(tier)
         features = {f: tier_allows(t, f) for f in FEATURE_TIERS}
 
         return json.dumps(
             {
                 "tier": tier,
-                "authenticated": authenticated,
-                "user_id": _session.get("user_id", ""),
+                "authenticated": session.is_authenticated,
+                "user_id": session.user_id,
                 "features": features,
             }
         )
@@ -583,7 +644,11 @@ async def get_project_state(config_path: str = "carl.yaml") -> str:
 
 
 @mcp.tool()
-async def run_skill(skill_name: str, inputs_json: str = "{}") -> str:
+async def run_skill(
+    skill_name: str,
+    inputs_json: str = "{}",
+    ctx: Context | None = None,
+) -> str:
     """Run a CARL skill by name and return the result.
 
     Available skills: observer, grader, trainer, synthesizer, deployer.
@@ -591,6 +656,8 @@ async def run_skill(skill_name: str, inputs_json: str = "{}") -> str:
 
     Requires PAID tier for grader (full eval) and trainer (job submission).
     Returns: JSON SkillResult.
+
+    ``ctx`` is FastMCP-injected when available; see :func:`authenticate`.
     """
 
     async def _body() -> str:
@@ -618,9 +685,9 @@ async def run_skill(skill_name: str, inputs_json: str = "{}") -> str:
 
         # Tier gate for paid skills
         requires_tier = getattr(skill, "requires_tier", "free")
-        if requires_tier == "paid" and not _require_tier("experiment"):
+        if requires_tier == "paid" and not _require_tier("experiment", ctx):
             runner.close()
-            return _tier_error(f"skill:{skill_name}")
+            return _tier_error(f"skill:{skill_name}", ctx)
 
         try:
             result = runner.run(skill_name, **inputs)
@@ -701,17 +768,20 @@ async def dispatch_a2a_task(
     skill_name: str,
     inputs_json: str = "{}",
     sender: str = "external",
+    ctx: Context | None = None,
 ) -> str:
     """Dispatch an A2A task to the CARL agent's local bus.
 
     The task will be executed when 'carl agent run' is called locally.
     Requires PAID tier.
     Returns: JSON with {task_id, status: "pending"}.
+
+    ``ctx`` is FastMCP-injected when available; see :func:`authenticate`.
     """
 
     async def _body() -> str:
-        if not _require_tier("orchestration"):
-            return _tier_error("orchestration")
+        if not _require_tier("orchestration", ctx):
+            return _tier_error("orchestration", ctx)
 
         try:
             inputs = json.loads(inputs_json) if inputs_json else {}
@@ -755,16 +825,22 @@ async def dispatch_a2a_task(
 
 
 @mcp.tool()
-async def sync_data(direction: str = "push", entity_types: str = "runs") -> str:
+async def sync_data(
+    direction: str = "push",
+    entity_types: str = "runs",
+    ctx: Context | None = None,
+) -> str:
     """Sync local data with carl.camp. direction: push | pull.
 
     Requires PAID tier and carl camp login (JWT in session or local DB).
     Returns: JSON with sync results.
+
+    ``ctx`` is FastMCP-injected when available; see :func:`authenticate`.
     """
 
     async def _body() -> str:
-        if not _require_tier("sync.cloud"):
-            return _tier_error("sync.cloud")
+        if not _require_tier("sync.cloud", ctx):
+            return _tier_error("sync.cloud", ctx)
 
         if direction not in ("push", "pull"):
             return json.dumps(
@@ -779,7 +855,7 @@ async def sync_data(direction: str = "push", entity_types: str = "runs") -> str:
         # Keep the "never break sync" semantics but leave operators a
         # breadcrumb — ``sync.py`` still falls back to reading the JWT
         # directly from the DB, so the outer sync call can continue.
-        jwt = _session.get("jwt", "")
+        jwt = _get_session(ctx).jwt
         if jwt:
             try:
                 from carl_studio.db import LocalDB

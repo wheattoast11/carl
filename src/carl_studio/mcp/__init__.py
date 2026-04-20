@@ -34,7 +34,9 @@ from carl_studio.mcp.sampling import (
     sample,
 )
 from carl_studio.mcp.session import (
+    SESSION_MAX_AGE,
     MCPSession,
+    extract_session,
     session_from_dict,
     session_to_dict,
 )
@@ -58,7 +60,9 @@ __all__ = [
     "mcp",
     "MCPServerConnection",
     "MCPSession",
+    "SESSION_MAX_AGE",
     "bind_connection",
+    "extract_session",
     "get_bound_connection",
     "session_from_dict",
     "session_to_dict",

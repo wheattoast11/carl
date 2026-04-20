@@ -2,6 +2,59 @@
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-04-19
+
+Phase-2b close-out. Hardens v0.7.0's surfaces with multi-tenant MCP
+session isolation, an on-platform Prometheus scrape endpoint, structured
+budget caps for the x402 rail, and a trajectory-delta CLI for two runs.
+
+### Added
+
+- **x402 spend caps.** `SpendTracker` enforces a daily (`CARL_X402_DAILY_CAP_USD`)
+  and session (`CARL_X402_SESSION_CAP_USD`) cap synchronously before any
+  network call. Breaches raise `BudgetError` with stable codes
+  `carl.budget.daily_cap_exceeded` / `carl.budget.session_cap_exceeded`.
+  Daily rolling window persists through `LocalDB.config`.
+- **`confirm_payment` hook.** `X402Client.execute` accepts an optional
+  `confirm_payment_cb` — interactive or policy-based approval that fires
+  after the budget check but before the consent gate. Denials raise
+  `BudgetError(code="carl.budget.confirm_denied")` without recording a
+  contract witness.
+- **MCP per-request session state.** `MCPServerConnection.session`
+  replaces the module-level `_session: dict`. Multi-tenant deployments
+  now isolate auth per connection. FastMCP `Context` DI is supported on
+  authenticated tools (`authenticate`, `get_tier_status`, `run_skill`,
+  `dispatch_a2a_task`, `sync_data`); when bound it is preferred over the
+  module-bound connection. See `docs/mcp_multitenant.md`.
+- **`carl metrics serve`.** Thin Typer wrapper around
+  `prometheus_client.start_http_server`; binds `127.0.0.1:9464/metrics`
+  by default. Heartbeat daemon auto-hosts when `CARL_METRICS_PORT` is
+  set. Private `CollectorRegistry` avoids polluting the global default.
+- **`carl run diff <a> <b> [--steps]`.** Trajectory delta between two
+  training runs — phi_mean / q_hat / crystallization_count /
+  contraction_holds / first-divergence-step. Renders via `CampConsole`.
+- **Shared gating primitives.** `carl_studio.gating.GatingPredicate`
+  Protocol + `carl.gate.*` error-code namespace. `ConsentPredicate` and
+  `TierPredicate` now emit identical `GATE_CHECK` steps on the active
+  `InteractionChain`.
+
+### Changed
+
+- Heartbeat maintenance is wrapped in `RetryPolicy(max_attempts=3)` for
+  transient sqlite / IO blips — failures still emit a structured log
+  step but no longer tear down the daemon loop.
+- `CARL_HOME` is now honoured uniformly across `db.py`, `settings.py`,
+  `wallet_store.py`, and `llm.py` via the shared
+  `carl_studio.settings.carl_home()` helper. The previous "partial
+  override" caveat in `docs/operations.md` has been lifted.
+
+### Removed (dead code)
+
+- Unused `_SPEND_SESSION_KEY` reservation in `x402.py`.
+- Unused private aliases `_marshal_sdk_result`, `_arg_is_missing`,
+  `_estimate_cost`, `_marshal_sdk_response` in the MCP elicitation /
+  sampling modules (the public helpers remain canonical).
+
 ## [0.6.0] — 2026-04-19
 
 The resonant-heartbeat release. Four-wave execution against a 48-ticket MECE

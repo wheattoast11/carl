@@ -27,6 +27,8 @@ import anyio
 from carl_core.errors import CARLError, CARLTimeoutError
 from carl_core.interaction import ActionType
 
+from carl_studio.mcp.session import extract_session
+
 if TYPE_CHECKING:  # pragma: no cover - type-only
     from carl_studio.mcp.connection import MCPServerConnection
 
@@ -120,25 +122,9 @@ def _resolve_connection(
     return resolved
 
 
-def _extract_session(conn: "MCPServerConnection") -> Any:
-    # Test-harness override wins first.
-    override = getattr(conn, "_session_override", None)
-    if override is not None:
-        return override
-    fastmcp = getattr(conn, "fastmcp", None)
-    if fastmcp is None:
-        return None
-    ctx_getter = getattr(fastmcp, "get_context", None)
-    if callable(ctx_getter):
-        try:
-            ctx = ctx_getter()
-        except Exception:
-            ctx = None
-        if ctx is not None:
-            session = getattr(ctx, "session", None)
-            if session is not None:
-                return session
-    return None
+# Backwards-compat alias — canonical helper is
+# :func:`carl_studio.mcp.session.extract_session`.
+_extract_session = extract_session
 
 
 def _to_sampling_message(msg: dict[str, Any]) -> Any:
@@ -172,9 +158,6 @@ def estimate_cost(model: str, usage: dict[str, int]) -> float | None:
     prompt = usage.get("input_tokens", 0)
     completion = usage.get("output_tokens", 0)
     return round((prompt / 1000.0) * in_rate + (completion / 1000.0) * out_rate, 6)
-
-
-_estimate_cost = estimate_cost
 
 
 def _emit_cost_event(conn: "MCPServerConnection", event: SamplingCostEvent) -> None:
@@ -256,7 +239,7 @@ async def sample(
         )
         step_id = step.step_id
 
-    session = _extract_session(conn)
+    session = extract_session(conn)
     if session is None:
         err = CARLError(
             "MCP sampling requires an active ServerSession; "
@@ -420,10 +403,6 @@ def marshal_sdk_response(raw: Any) -> SamplingResponse:
         stop_reason=stop_reason,
         usage=usage,
     )
-
-
-# Private aliases for backwards-compatible test imports.
-_marshal_sdk_response = marshal_sdk_response
 
 
 __all__ = [

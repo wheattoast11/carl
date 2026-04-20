@@ -48,6 +48,7 @@ class ActionType(str, Enum):
     LLM_REPLY = "llm_reply"           # model streamed a reply
     CLI_CMD = "cli_cmd"               # top-level CLI command dispatch
     GATE = "gate"                     # credential / permission prompt
+    GATE_CHECK = "gate_check"         # structured allow/deny predicate check (consent, tier, ...)
     EXTERNAL = "external"             # HTTP request, file write, subprocess
     PAYMENT = "payment"               # x402 / wallet payment flow
     TRAINING_STEP = "training_step"   # periodic training progress marker

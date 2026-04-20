@@ -33,6 +33,8 @@ import anyio
 from carl_core.errors import CARLError, CARLTimeoutError
 from carl_core.interaction import ActionType
 
+from carl_studio.mcp.session import extract_session
+
 if TYPE_CHECKING:  # pragma: no cover - type-only
     from carl_studio.mcp.connection import MCPServerConnection
 
@@ -139,11 +141,6 @@ def marshal_sdk_result(raw: Any) -> ElicitationResponse:
     return ElicitationResponse(values={}, declined=True, reason=reason)
 
 
-# Preserve the private name for callers in this module; the public helper
-# is :func:`marshal_sdk_result`.
-_marshal_sdk_result = marshal_sdk_result
-
-
 async def elicit(
     request: ElicitationRequest,
     *,
@@ -183,10 +180,11 @@ async def elicit(
         )
         step_id = step.step_id
 
-    # Resolve the session we send on. Try a few plausible attachment points
-    # so the helper is tolerant of how the connection exposes the client
-    # session (direct attribute, fastmcp context, or FastMCP request context).
-    session = _extract_session(conn)
+    # Resolve the ServerSession we send on. :func:`extract_session` is the
+    # canonical helper shared with :mod:`carl_studio.mcp.sampling` — it
+    # honours the ``_session_override`` test hook and otherwise falls back
+    # to ``fastmcp.get_context().session``.
+    session = extract_session(conn)
     if session is None:
         if chain is not None and step_id is not None:
             chain.record(
@@ -265,37 +263,10 @@ async def elicit(
     return response
 
 
-def _extract_session(conn: "MCPServerConnection") -> Any:
-    """Best-effort lookup of a ``ServerSession``-like object on the connection.
-
-    MCP SDK 1.10 exposes the active session via
-    ``FastMCP.get_context().session``. Older builds stashed it on
-    ``fastmcp._mcp_server`` — we prefer the public accessor and fall back
-    gracefully. Test harnesses can attach a stub at ``_session_override``.
-    """
-    # Test-harness override wins first so unit tests work without FastMCP.
-    override = getattr(conn, "_session_override", None)
-    if override is not None:
-        return override
-
-    fastmcp = getattr(conn, "fastmcp", None)
-    if fastmcp is None:
-        return None
-
-    # Public: get_context() works inside a tool call; .session is the
-    # live ServerSession for the request.
-    ctx_getter = getattr(fastmcp, "get_context", None)
-    if callable(ctx_getter):
-        try:
-            ctx = ctx_getter()
-        except Exception:
-            ctx = None
-        if ctx is not None:
-            session = getattr(ctx, "session", None)
-            if session is not None:
-                return session
-
-    return None
+# Backwards-compat alias for in-tree tests that still reference the
+# private helper by name. The canonical entry point is
+# :func:`carl_studio.mcp.session.extract_session`.
+_extract_session = extract_session
 
 
 # ---------------------------------------------------------------------------
@@ -389,9 +360,6 @@ def arg_is_missing(value: Any) -> bool:
     if isinstance(value, (list, tuple, set, dict)):
         return len(value) == 0  # pyright: ignore[reportUnknownArgumentType]
     return False
-
-
-_arg_is_missing = arg_is_missing
 
 
 __all__ = [

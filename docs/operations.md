@@ -42,6 +42,7 @@ tunable knob is here; the source of truth in code is cited next to it.
 | `CARL_HEARTBEAT_POLL_INTERVAL_S` | `5.0` | Sleep between queue polls when the queue is empty. Must be positive and finite; invalid → default. (`heartbeat/daemon.py`) |
 | `CARL_MAINTENANCE_INTERVAL_CYCLES` | `100` | Completed-cycle trigger for in-loop maintenance. `0` disables the cycle trigger (run `carl db maintenance` out of band). (`heartbeat/loop.py`) |
 | `CARL_MAINTENANCE_INTERVAL_SECONDS` | `3600.0` | Wall-clock trigger; guarantees idle daemons still truncate WAL. Fires on whichever (cycle or seconds) trips first. (`heartbeat/loop.py`) |
+| `CARL_METRICS_PORT` | unset | Optional int; when set, the heartbeat daemon auto-starts a Prometheus scrape endpoint on `127.0.0.1:<port>/metrics` (requires the `[metrics]` extra). (`heartbeat/loop.py`) |
 | `CARL_STICKY_RETENTION_DAYS` | `30` | Maintenance sweep deletes `archived` sticky notes older than N days. Negative → 0 (delete all archived). Invalid → 30. (`heartbeat/loop.py`) |
 
 ### Research / training probes
@@ -82,8 +83,15 @@ generates. Set them in the job environment, not locally.
 
 | var | default | purpose |
 |-----|---------|---------|
-| `CARL_HOME` | `~/.carl` | Honored by `adapters/_common.py` (`<CARL_HOME>/adapters`), `environments/registry.py` (`<CARL_HOME>/environments`), and `a2a/identity.py` (`<CARL_HOME>/keys`). NOT honored by `db.py`, `settings.py` global config, `wallet_store.py`, or `llm.py` cache — those use `Path.home()/.carl` directly. Treat `CARL_HOME` as a **partial** override limited to the call sites above. |
+| `CARL_HOME` | `~/.carl` | Honored by: all modules (v0.7.1). Previously partial — `db.py`, `settings.py`, `wallet_store.py`, and `llm.py` have been aligned through the shared `carl_studio.settings.carl_home()` helper so every state-root lookup now respects this override uniformly. |
 | `CARL_PERSONA` | unset | `carl` or `carli`; selects default theme on first run. (`theme.py`) |
+
+### x402 payment rail
+
+| var | default | purpose |
+|-----|---------|---------|
+| `CARL_X402_DAILY_CAP_USD` | unset | Optional float; daily spend cap for x402 payments in USD. `SpendTracker.check_and_record` raises `BudgetError(code="carl.budget.daily_cap_exceeded")` when a payment would breach the cap. Unset → unlimited (legacy). (`x402.py`) |
+| `CARL_X402_SESSION_CAP_USD` | unset | Optional float; session-scoped (in-process) spend cap for x402 payments in USD. Raises `BudgetError(code="carl.budget.session_cap_exceeded")` on breach. Unset → unlimited. (`x402.py`) |
 
 ### Settings-backed env vars
 
@@ -118,6 +126,8 @@ automatically. The most operationally relevant are:
 | `carl camp consent show [--json]` | `cli/consent.py::consent_show` | Display all four consent flags + change timestamps. |
 | `carl camp consent update <key> [--enable/--disable]` | `cli/consent.py::consent_update` | Toggle one of `observability` / `telemetry` / `usage_analytics` / `contract_witnessing`. |
 | `carl camp consent reset [-f]` | `cli/consent.py::consent_reset` | All flags off. |
+| `carl metrics serve --port <p> --host <h>` | `cli/metrics.py::serve` | Serve the Prometheus scrape endpoint (`/metrics`). Blocks until SIGINT / SIGTERM. Requires the `[metrics]` extra (`prometheus-client`); exits `2` with an install hint otherwise. Defaults: `--port 9464`, `--host 127.0.0.1`. |
+| `carl run diff <id1> <id2> [--steps]` | `cli/training.py::run_diff` | Render the trajectory delta between two training runs: phi_mean, q_hat, crystallization_count, contraction_holds, and the first divergence step (configurable threshold). Pass `--steps` for a per-step phi alignment table. |
 | `carl-heartbeat [--db PATH]` | `heartbeat/daemon.py::main` | Standalone 24/7 worker; `pyproject.toml` registers it under `[project.scripts]`. |
 
 ## Daemon runbook
@@ -153,8 +163,33 @@ or `carl camp consent reset`.
 
 ## Metrics
 
-v0.6.x ships no `/metrics` endpoint; Prometheus scrape is deferred. Until
-then, the canonical operational signal is structured JSON logs:
+v0.7.1 ships a Prometheus scrape endpoint via the `[metrics]` extra
+(`prometheus-client`). Two equivalent surfaces:
+
+```bash
+# Standalone — runs until SIGINT / SIGTERM.
+carl metrics serve --port 9464 --host 127.0.0.1
+
+# Heartbeat-hosted — auto-starts when CARL_METRICS_PORT is set.
+CARL_METRICS_PORT=9464 carl-heartbeat
+```
+
+Registered metric families (names shown in Prometheus convention):
+
+- Counters: `carl_training_steps_total`,
+  `carl_phase_transitions_total{from_phase,to_phase}`,
+  `carl_crystallizations_total`, `carl_heartbeat_cycles_total`,
+  `carl_heartbeat_maintenance_failures_total`,
+  `carl_x402_payments_total{status}`, `carl_rate_limit_hits_total`.
+- Gauges: `carl_sticky_queue_depth{status}`.
+
+All instruments live on a private `CollectorRegistry` (never the process
+default) so multiple carl processes can coexist without collisions. Record
+methods are cheap and callers should still gate hot paths with
+`carl_studio.metrics.is_available()`.
+
+Structured JSON logs remain the canonical fallback when the extra is
+absent:
 
 ```bash
 CARL_LOG_JSON=1 CARL_LOG_LEVEL=info carl-heartbeat

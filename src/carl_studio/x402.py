@@ -19,17 +19,25 @@ import json
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import BaseModel, Field
 
-from carl_core.errors import CARLError, NetworkError
+from carl_core.errors import BudgetError, CARLError, NetworkError
 from carl_core.interaction import ActionType, InteractionChain
 from carl_core.retry import CircuitBreaker
 
 from carl_studio.consent import consent_gate
 
+if TYPE_CHECKING:
+    from carl_studio.db import LocalDB
+
 _X402_CONFIG_KEY = "x402_config"
+
+# SpendTracker persistence keys — stored in LocalDB.config
+_SPEND_DAILY_KEY = "carl.x402.spend_today"
+_SPEND_DAILY_RESET_KEY = "carl.x402.daily_reset_at"
 
 # Module-level breaker for facilitator calls. Only infrastructure failures
 # count against the threshold — programming bugs in our own code (attribute
@@ -57,6 +65,10 @@ class X402Config(BaseModel):
     payment_token: str = "USDC"
     auto_approve_below: float = 0.0
     enabled: bool = False
+    # H1: spend caps + confirmation hook
+    daily_spend_cap: float | None = None  # USD; None = unlimited (legacy behavior)
+    session_spend_cap: float | None = None  # USD; None = unlimited
+    confirm_payment_cb: str | None = None  # registered hook name; None = auto-approve within caps
 
 
 class PaymentRequirement(BaseModel):
@@ -92,6 +104,142 @@ def _parse_x_payment_header(header: str) -> PaymentRequirement:
         )
 
 
+class SpendTracker:
+    """Rolling-window spend accounting for x402 payments.
+
+    Persists the daily total and a daily-reset timestamp to
+    :class:`~carl_studio.db.LocalDB` config storage. Session total is
+    held in-process only (no cross-process leakage between shells).
+    Cap enforcement is synchronous and happens before any network call
+    so a breach raises immediately without partial state.
+
+    Parameters
+    ----------
+    daily_cap:
+        Maximum USD a single UTC day may accumulate. ``None`` disables
+        the daily check (legacy unlimited behavior).
+    session_cap:
+        Maximum USD this :class:`SpendTracker` instance may accumulate
+        across its lifetime. ``None`` disables the session check.
+    db:
+        Optional :class:`~carl_studio.db.LocalDB` for persisting the
+        daily rolling window. When ``None`` the tracker runs in-memory
+        only — useful for short-lived tools and tests.
+    now:
+        Clock override for testing (returns a timezone-aware
+        :class:`~datetime.datetime`). Defaults to ``datetime.now(UTC)``.
+    """
+
+    def __init__(
+        self,
+        *,
+        daily_cap: float | None = None,
+        session_cap: float | None = None,
+        db: LocalDB | None = None,
+        now: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._daily_cap = daily_cap
+        self._session_cap = session_cap
+        self._db = db
+        self._now = now or (lambda: datetime.now(timezone.utc))
+        self._session_total = 0.0
+
+    def check_and_record(self, amount: float) -> None:
+        """Gate a payment of ``amount`` USD.
+
+        Raises
+        ------
+        ValueError
+            If ``amount`` is negative.
+        BudgetError
+            With ``code='carl.budget.daily_cap_exceeded'`` or
+            ``code='carl.budget.session_cap_exceeded'`` when a cap would
+            be breached. ``context`` carries the attempted amount,
+            current running total, and the cap.
+        """
+        if amount < 0:
+            raise ValueError(f"amount must be >= 0, got {amount}")
+        daily_total = self._read_daily_total_or_reset()
+        projected_daily = daily_total + amount
+        projected_session = self._session_total + amount
+        if self._daily_cap is not None and projected_daily > self._daily_cap:
+            raise BudgetError(
+                f"daily spend cap exceeded: "
+                f"{projected_daily:.4f} > {self._daily_cap:.4f} USD",
+                code="carl.budget.daily_cap_exceeded",
+                context={
+                    "amount": amount,
+                    "daily_total": daily_total,
+                    "cap": self._daily_cap,
+                },
+            )
+        if self._session_cap is not None and projected_session > self._session_cap:
+            raise BudgetError(
+                f"session spend cap exceeded: "
+                f"{projected_session:.4f} > {self._session_cap:.4f} USD",
+                code="carl.budget.session_cap_exceeded",
+                context={
+                    "amount": amount,
+                    "session_total": self._session_total,
+                    "cap": self._session_cap,
+                },
+            )
+        # Commit — both caps passed (or were unset).
+        self._session_total = projected_session
+        self._write_daily_total(projected_daily)
+
+    def _read_daily_total_or_reset(self) -> float:
+        if self._db is None:
+            return 0.0
+        now = self._now()
+        raw_reset = self._db.get_config(_SPEND_DAILY_RESET_KEY)
+        reset_at: datetime | None = None
+        if raw_reset:
+            try:
+                parsed = datetime.fromisoformat(raw_reset)
+                # Ensure tz-aware for cross-DST safety.
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=timezone.utc)
+                reset_at = parsed
+            except ValueError:
+                reset_at = None
+        if reset_at is None or self._past_midnight(reset_at, now):
+            self._db.set_config(_SPEND_DAILY_KEY, "0.0")
+            midnight = now.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            self._db.set_config(_SPEND_DAILY_RESET_KEY, midnight.isoformat())
+            return 0.0
+        raw = self._db.get_config(_SPEND_DAILY_KEY) or "0.0"
+        try:
+            return float(raw)
+        except ValueError:
+            return 0.0
+
+    def _write_daily_total(self, total: float) -> None:
+        if self._db is None:
+            return
+        self._db.set_config(_SPEND_DAILY_KEY, str(total))
+
+    @staticmethod
+    def _past_midnight(reset_at: datetime, now: datetime) -> bool:
+        """True iff ``now`` is on a later UTC date than ``reset_at``."""
+        return reset_at.date() < now.date()
+
+    @property
+    def session_total(self) -> float:
+        """USD spent on this tracker instance so far (in-memory)."""
+        return self._session_total
+
+    @property
+    def daily_cap(self) -> float | None:
+        return self._daily_cap
+
+    @property
+    def session_cap(self) -> float | None:
+        return self._session_cap
+
+
 class X402Client:
     """Lightweight x402 payment rail client using stdlib urllib.
 
@@ -106,9 +254,13 @@ class X402Client:
         config: X402Config,
         *,
         chain: InteractionChain | None = None,
+        spend_tracker: SpendTracker | None = None,
+        confirm_payment_cb: Callable[..., bool] | None = None,
     ) -> None:
         self._config = config
         self._chain = chain
+        self._spend_tracker = spend_tracker
+        self._confirm_payment_cb = confirm_payment_cb
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -270,15 +422,72 @@ class X402Client:
             raise X402Error(f"Network error: {exc.reason}") from exc
 
     def execute(
-        self, url: str, payment_token: str, timeout: int = 10
+        self,
+        url: str,
+        payment_token: str,
+        amount: float = 0.0,
+        timeout: int = 10,
     ) -> bytes:
         """Replay the original request with x-payment-token header.
 
-        Raises :class:`~carl_studio.consent.ConsentError` when the
-        ``CONTRACT_WITNESSING`` consent flag is not granted — payment
-        creates a service-contract witness and therefore inherits the
-        same consent surface as :class:`carl_studio.contract.ContractWitness`.
+        Parameters
+        ----------
+        url:
+            The resource URL that required payment.
+        payment_token:
+            The facilitator-issued ``X-Payment-Token`` header value.
+        amount:
+            USD cost of this call. Defaults to ``0.0`` — with
+            ``amount == 0`` both the :class:`SpendTracker` check and
+            the ``confirm_payment_cb`` hook are skipped, preserving
+            legacy call-site behavior.
+        timeout:
+            Socket timeout (seconds) for the HTTP replay.
+
+        Raises
+        ------
+        carl_studio.consent.ConsentError
+            When the ``CONTRACT_WITNESSING`` consent flag is not
+            granted — payment creates a service-contract witness and
+            therefore inherits the same consent surface as
+            :class:`carl_studio.contract.ContractWitness`.
+        carl_core.errors.BudgetError
+            When a spend-cap is breached
+            (``carl.budget.daily_cap_exceeded`` /
+            ``carl.budget.session_cap_exceeded``) or when the confirm-
+            payment hook denies the call
+            (``carl.budget.confirm_denied``). All three fire *before*
+            the consent gate so no witness is recorded on budget denial.
         """
+        # Budget check — must fire BEFORE consent_gate so a cap breach
+        # never records a contract witness.
+        if self._spend_tracker is not None and amount > 0:
+            try:
+                self._spend_tracker.check_and_record(amount)
+            except BudgetError as exc:
+                self._record(
+                    "x402.budget_exceeded",
+                    input={"url": url, "amount": amount},
+                    output={"code": exc.code, "message": str(exc)},
+                    success=False,
+                )
+                raise
+        # Optional interactive confirmation — after budget check, still
+        # before the consent gate. A hook that raises propagates as-is.
+        if self._confirm_payment_cb is not None and amount > 0:
+            approved = self._confirm_payment_cb(url=url, amount=amount)
+            if not approved:
+                self._record(
+                    "x402.confirm_denied",
+                    input={"url": url, "amount": amount},
+                    output={"approved": False},
+                    success=False,
+                )
+                raise BudgetError(
+                    f"payment confirmation denied by hook: amount={amount:.4f}",
+                    code="carl.budget.confirm_denied",
+                    context={"url": url, "amount": amount},
+                )
         consent_gate("contract_witnessing")
         req = urllib.request.Request(
             url,

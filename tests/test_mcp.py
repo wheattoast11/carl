@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import json
 import unittest
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 
@@ -21,13 +22,62 @@ def _make_jwt(payload: dict) -> str:
     return f"{header}.{body}.fakesig"
 
 
-def _reset_session() -> None:
-    """Reset module-level _session to unauthenticated state."""
+class _FakeConn:
+    """Minimal bound-connection stub for tool tests.
+
+    H2 routed session state off the module global onto the active
+    :class:`~carl_studio.mcp.connection.MCPServerConnection`. Tests that
+    want to drive authenticated tool paths just need *something* that
+    looks like a connection with a writable :class:`MCPSession` — this
+    stub avoids standing up a full FastMCP instance.
+    """
+
+    def __init__(self) -> None:
+        from carl_studio.mcp.session import MCPSession
+
+        self._mcp_session = MCPSession()
+        self.connection_id = "test-fake-conn"
+
+    @property
+    def session(self) -> Any:
+        return self._mcp_session
+
+    @session.setter
+    def session(self, value: Any) -> None:
+        self._mcp_session = value
+
+    def record_tool_event(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+def _bind_fake_conn() -> _FakeConn:
+    """Bind a fresh fake connection to the server module and return it."""
     import carl_studio.mcp.server as srv
-    srv._session["jwt"] = ""
-    srv._session["tier"] = "free"
-    srv._session["user_id"] = ""
-    srv._session["authenticated_at"] = ""
+
+    conn = _FakeConn()
+    srv.bind_connection(conn)  # type: ignore[arg-type]
+    return conn
+
+
+def _unbind_conn() -> None:
+    import carl_studio.mcp.server as srv
+
+    srv.bind_connection(None)
+
+
+def _set_session(*, jwt: str = "", tier: str = "free", user_id: str = "") -> None:
+    """Mutate the bound connection's session (bind a fake conn if needed)."""
+    import carl_studio.mcp.server as srv
+
+    conn = srv.get_bound_connection()
+    if conn is None:
+        conn = _bind_fake_conn()
+    conn.session = conn.session.with_(jwt=jwt, tier=tier, user_id=user_id)
+
+
+def _reset_session() -> None:
+    """Rebind a clean fake connection with an empty session."""
+    _bind_fake_conn()
 
 
 def _mock_camp_profile(tier: str = "free", user_id: str = "") -> MagicMock:
@@ -78,10 +128,12 @@ class TestAuthenticate(unittest.IsolatedAsyncioTestCase):
         assert result["user_id"] == "user-abc"
         assert isinstance(result["features_available"], list)
         assert len(result["features_available"]) > 0
-        # Session should be updated
-        assert srv._session["tier"] == "paid"
-        assert srv._session["user_id"] == "user-abc"
-        assert srv._session["jwt"] == jwt
+        # Session should be updated on the bound connection.
+        conn = srv.get_bound_connection()
+        assert conn is not None
+        assert conn.session.tier == "paid"
+        assert conn.session.user_id == "user-abc"
+        assert conn.session.jwt == jwt
 
     async def test_authenticate_free_tier_jwt(self) -> None:
         import carl_studio.mcp.server as srv
@@ -95,7 +147,9 @@ class TestAuthenticate(unittest.IsolatedAsyncioTestCase):
 
         assert result["authenticated"] is True
         assert result["tier"] == "free"
-        assert srv._session["tier"] == "free"
+        conn = srv.get_bound_connection()
+        assert conn is not None
+        assert conn.session.tier == "free"
 
     async def test_authenticate_pro_alias_normalizes_to_paid(self) -> None:
         import carl_studio.mcp.server as srv
@@ -183,10 +237,8 @@ class TestGetTierStatus(unittest.IsolatedAsyncioTestCase):
     async def test_get_tier_status_authenticated_paid(self) -> None:
         import carl_studio.mcp.server as srv
 
-        # Manually set session to paid
-        srv._session["jwt"] = "fake.jwt.token"
-        srv._session["tier"] = "paid"
-        srv._session["user_id"] = "user-123"
+        # Manually set session to paid via bound connection.
+        _set_session(jwt="fake.jwt.token", tier="paid", user_id="user-123")
 
         result = json.loads(await srv.get_tier_status())
 
@@ -325,8 +377,7 @@ class TestRunSkill(unittest.IsolatedAsyncioTestCase):
         if not srv._skills_available:
             self.skipTest("Skills not installed")
 
-        srv._session["tier"] = "paid"
-        srv._session["jwt"] = "fake.paid.jwt"
+        _set_session(jwt="fake.paid.jwt", tier="paid")
 
         mock_result = MagicMock()
         mock_result.model_dump_json.return_value = json.dumps({
@@ -474,8 +525,7 @@ class TestDispatchA2ATask(unittest.IsolatedAsyncioTestCase):
     async def test_dispatch_a2a_task_paid_session_succeeds(self) -> None:
         import carl_studio.mcp.server as srv
 
-        srv._session["tier"] = "paid"
-        srv._session["jwt"] = "fake.paid.jwt"
+        _set_session(jwt="fake.paid.jwt", tier="paid")
 
         mock_bus = MagicMock()
         mock_bus.post.return_value = "task-uuid-123"
@@ -496,8 +546,7 @@ class TestDispatchA2ATask(unittest.IsolatedAsyncioTestCase):
     async def test_dispatch_a2a_task_invalid_inputs_json(self) -> None:
         import carl_studio.mcp.server as srv
 
-        srv._session["tier"] = "paid"
-        srv._session["jwt"] = "fake.paid.jwt"
+        _set_session(jwt="fake.paid.jwt", tier="paid")
 
         result = json.loads(await srv.dispatch_a2a_task("observer", inputs_json="{bad}"))
 
@@ -525,8 +574,7 @@ class TestSyncData(unittest.IsolatedAsyncioTestCase):
     async def test_sync_data_invalid_direction(self) -> None:
         import carl_studio.mcp.server as srv
 
-        srv._session["tier"] = "paid"
-        srv._session["jwt"] = "fake.paid.jwt"
+        _set_session(jwt="fake.paid.jwt", tier="paid")
 
         result = json.loads(await srv.sync_data(direction="sideways"))
 
@@ -536,8 +584,7 @@ class TestSyncData(unittest.IsolatedAsyncioTestCase):
     async def test_sync_data_push_paid_calls_sync_push(self) -> None:
         import carl_studio.mcp.server as srv
 
-        srv._session["tier"] = "paid"
-        srv._session["jwt"] = "fake.paid.jwt"
+        _set_session(jwt="fake.paid.jwt", tier="paid")
 
         with patch("carl_studio.sync.push", return_value={"runs": 3}) as mock_push:
             result = json.loads(await srv.sync_data(direction="push", entity_types="runs"))
@@ -549,8 +596,7 @@ class TestSyncData(unittest.IsolatedAsyncioTestCase):
     async def test_sync_data_pull_paid_calls_sync_pull(self) -> None:
         import carl_studio.mcp.server as srv
 
-        srv._session["tier"] = "paid"
-        srv._session["jwt"] = "fake.paid.jwt"
+        _set_session(jwt="fake.paid.jwt", tier="paid")
 
         with patch("carl_studio.sync.pull", return_value={"pulled": 5}) as mock_pull:
             result = json.loads(await srv.sync_data(direction="pull", entity_types="runs"))
@@ -562,8 +608,7 @@ class TestSyncData(unittest.IsolatedAsyncioTestCase):
     async def test_sync_data_network_error_returns_failed_status(self) -> None:
         import carl_studio.mcp.server as srv
 
-        srv._session["tier"] = "paid"
-        srv._session["jwt"] = "fake.paid.jwt"
+        _set_session(jwt="fake.paid.jwt", tier="paid")
 
         with patch("carl_studio.sync.push", side_effect=Exception("Network timeout")):
             result = json.loads(await srv.sync_data(direction="push"))
@@ -604,7 +649,7 @@ class TestTierErrorFormat(unittest.TestCase):
     def test_tier_error_current_tier_reflects_session(self) -> None:
         import carl_studio.mcp.server as srv
 
-        srv._session["tier"] = "free"
+        _set_session(tier="free")
         result = json.loads(srv._tier_error("experiment"))
         assert result["current_tier"] == "free"
 
@@ -631,82 +676,73 @@ class TestRequireTier(unittest.TestCase):
 
     def test_require_tier_paid_feature_allowed_on_paid_session(self) -> None:
         import carl_studio.mcp.server as srv
-        srv._session["tier"] = "paid"
+        _set_session(tier="paid", jwt="fake.jwt")
         assert srv._require_tier("sync.cloud") is True
         assert srv._require_tier("orchestration") is True
         assert srv._require_tier("experiment") is True
 
 
 # ---------------------------------------------------------------------------
-# UAT-049 — session tenancy: single-tenant banner + documented scope
+# H2 — per-connection session ownership (formerly UAT-049)
 # ---------------------------------------------------------------------------
 
 
-class TestSessionIsolationOrBanner(unittest.TestCase):
-    """UAT-049: per-request state vs single-tenant banner.
+class TestPerConnectionSessionOwnership(unittest.TestCase):
+    """H2 (v0.7.1): auth state lives on the bound ``MCPServerConnection``.
 
-    We chose the single-tenant banner path because threading a FastMCP
-    ``Context`` parameter through all eighteen tools would be a
-    breaking MCP-surface change. The banner keeps operators honest
-    about the tenancy model; these tests verify the guardrails.
+    The server module no longer keeps a process-wide ``_session`` dict.
+    These tests pin the new contract: the module-level symbol is gone,
+    writes on one connection do not leak to another, and the startup log
+    line advertises the per-request routing.
     """
 
-    def test_module_docstring_documents_single_tenant_constraint(self) -> None:
+    def test_no_session_global_on_server_module(self) -> None:
+        """``server._session`` must not exist on the module after H2."""
         import carl_studio.mcp.server as srv
 
-        assert srv.__doc__ is not None
-        doc = srv.__doc__.lower()
-        # Operators need to see both "single-tenant" wording and the
-        # "one process per tenant" operational guidance.
-        assert "single-tenant" in doc, (
-            "module docstring must flag the single-tenant scope (UAT-049)"
+        assert not hasattr(srv, "_session"), (
+            "carl_studio.mcp.server._session was removed in v0.7.1; "
+            "tool session state now lives on MCPServerConnection."
         )
-        assert "one server process per tenant" in doc or "one process per tenant" in doc
 
-    def test_startup_banner_warns_about_shared_session(self) -> None:
-        """Importing the server emits a WARNING about session sharing.
-
-        We reload the module under ``assertLogs`` so the ``logger.warning``
-        at import time is captured — a module is only imported once per
-        process, so we reach into ``importlib.reload`` to re-trigger the
-        side effect without mutating the test runner's session state.
-        """
+    def test_startup_info_line_mentions_per_request(self) -> None:
+        """Module import emits an INFO line about per-request session state."""
         import importlib
         import logging
 
         import carl_studio.mcp.server as srv
 
-        with self.assertLogs("carl_studio.mcp.server", level=logging.WARNING) as cm:
+        with self.assertLogs("carl_studio.mcp.server", level=logging.INFO) as cm:
             importlib.reload(srv)
 
         joined = "\n".join(cm.output).lower()
-        assert "single-tenant" in joined, (
-            f"expected single-tenant warning, got: {cm.output!r}"
+        assert "per-request session state" in joined, (
+            f"expected per-request session info, got: {cm.output!r}"
         )
 
-    def test_session_is_module_level_singleton(self) -> None:
-        """The ``_session`` dict is shared across imports — that's the bug.
-
-        This test documents the current (intended-for-now) behaviour:
-        a write from "client A" is visible to "client B" because both
-        observe the same module-level dict. Any future migration to
-        per-request state MUST flip this assertion.
-        """
+    def test_two_fake_connections_do_not_leak_state(self) -> None:
+        """Writing session state on connection A must not leak into B."""
         import carl_studio.mcp.server as srv
 
-        _reset_session()
+        conn_a = _FakeConn()
+        conn_b = _FakeConn()
+
+        srv.bind_connection(conn_a)  # type: ignore[arg-type]
         try:
-            # "Client A" writes.
-            srv._session["jwt"] = "jwt-from-client-a"
-            srv._session["user_id"] = "user-a"
-            # "Client B" reads — same process, same dict — sees A's
-            # values. This is exactly the leak UAT-049 documents.
-            leaked = srv._session["jwt"]
-            leaked_user = srv._session["user_id"]
-            assert leaked == "jwt-from-client-a"
-            assert leaked_user == "user-a"
+            conn_a.session = conn_a.session.with_(
+                jwt="jwt-a", tier="paid", user_id="user-a"
+            )
         finally:
-            _reset_session()
+            srv.bind_connection(None)
+
+        # Rebinding to B must show an independent empty session.
+        srv.bind_connection(conn_b)  # type: ignore[arg-type]
+        try:
+            assert conn_b.session.jwt == ""
+            assert conn_b.session.tier == "free"
+            assert conn_b.session.user_id == ""
+        finally:
+            srv.bind_connection(None)
 
 
 # ---------------------------------------------------------------------------
@@ -727,10 +763,9 @@ class TestSyncDataLogsCacheFailure(unittest.IsolatedAsyncioTestCase):
         """
         import logging
 
-        import carl_studio.mcp.server as srv
+        import carl_studio.mcp.server as srv  # noqa: F401  - exercised via attribute access elsewhere
 
-        srv._session["tier"] = "paid"
-        srv._session["jwt"] = "paid-jwt-xyz"
+        _set_session(jwt="paid-jwt-xyz", tier="paid")
 
         # Force set_auth to blow up.
         class _BoomDB:

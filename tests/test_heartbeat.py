@@ -10,10 +10,12 @@ Covers the three seams:
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -366,3 +368,164 @@ def test_poll_and_print_forwards_messages(queue: StickyQueue) -> None:
     assert printed >= 2
     # Buffer cleared — second poll returns zero.
     assert poll_and_print(conn, console) == 0
+
+
+# ---------------------------------------------------------------------------
+# HeartbeatLoop — maintenance retry policy (R1-006)
+# ---------------------------------------------------------------------------
+
+
+class TestMaintenanceRetry:
+    """Verify :meth:`HeartbeatLoop._run_maintenance` retries transient failures.
+
+    The retry wrapper is ``carl_core.retry.retry`` with a policy that treats
+    ``sqlite3.OperationalError`` and ``OSError`` as retryable. Programming
+    bugs (e.g. ``ValueError``) must propagate immediately so they surface in
+    the outer status callback on the first attempt.
+    """
+
+    @staticmethod
+    def _status_recorder() -> tuple[list[Any], Callable[[Any], None]]:
+        events: list[Any] = []
+
+        def on_status(msg: Any) -> None:
+            events.append(msg)
+
+        return events, on_status
+
+    @staticmethod
+    def _dict_events(
+        events: list[Any], *, event_name: str
+    ) -> list[dict[str, Any]]:
+        """Narrow ``events`` to dict payloads with the given ``event`` field."""
+        out: list[dict[str, Any]] = []
+        for e in events:
+            if not isinstance(e, dict):
+                continue
+            typed: dict[str, Any] = e  # pyright: ignore[reportUnknownVariableType]
+            if typed.get("event") == event_name:
+                out.append(typed)
+        return out
+
+    @staticmethod
+    def _make_loop(
+        queue: StickyQueue,
+        chain: InteractionChain,
+        on_status: Callable[[Any], None],
+    ) -> HeartbeatLoop:
+        return HeartbeatLoop(
+            queue,
+            chain,
+            on_status=on_status,
+            poll_interval_s=_POLL_INTERVAL_S,
+        )
+
+    def test_maintenance_retries_on_sqlite_operational_error(
+        self,
+        queue: StickyQueue,
+        chain: InteractionChain,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Transient ``database is locked`` errors on ``maintenance`` succeed after retry."""
+        events, on_status = self._status_recorder()
+        loop = self._make_loop(queue, chain, on_status)
+
+        # Keep retry delays out of the test's wall-clock budget.
+        def _no_sleep(_s: float) -> None:
+            return None
+
+        monkeypatch.setattr(time, "sleep", _no_sleep)
+
+        call_counter = {"n": 0}
+        original = queue.maintenance
+
+        def flaky_maintenance(**kwargs: Any) -> dict[str, Any]:
+            call_counter["n"] += 1
+            if call_counter["n"] < 3:
+                raise sqlite3.OperationalError("database is locked")
+            return original(**kwargs)
+
+        monkeypatch.setattr(queue, "maintenance", flaky_maintenance)
+
+        loop._run_maintenance(queue)  # pyright: ignore[reportPrivateUsage]
+
+        # Third attempt succeeded.
+        assert call_counter["n"] == 3
+        # Exactly one success status event; no failure event.
+        success_events = self._dict_events(events, event_name="heartbeat.maintenance")
+        failure_events = self._dict_events(
+            events, event_name="heartbeat.maintenance_failed"
+        )
+        assert len(success_events) == 1
+        assert failure_events == []
+        assert "reclaimed" in success_events[0]
+        assert "notes_deleted" in success_events[0]
+
+    def test_maintenance_surfaces_after_retry_exhaustion(
+        self,
+        queue: StickyQueue,
+        chain: InteractionChain,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Three consecutive retryable failures exhaust the policy and surface the error."""
+        events, on_status = self._status_recorder()
+        loop = self._make_loop(queue, chain, on_status)
+
+        def _no_sleep(_s: float) -> None:
+            return None
+
+        monkeypatch.setattr(time, "sleep", _no_sleep)
+
+        call_counter = {"n": 0}
+
+        def always_fails(**_kwargs: Any) -> dict[str, Any]:
+            call_counter["n"] += 1
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(queue, "maintenance", always_fails)
+
+        # Must NOT raise — outer except catches the exhausted retry.
+        loop._run_maintenance(queue)  # pyright: ignore[reportPrivateUsage]
+
+        # Retry policy attempts = 3.
+        assert call_counter["n"] == 3
+        failure_events = self._dict_events(
+            events, event_name="heartbeat.maintenance_failed"
+        )
+        assert len(failure_events) == 1
+        assert "database is locked" in str(failure_events[0].get("error", ""))
+        success_events = self._dict_events(events, event_name="heartbeat.maintenance")
+        assert success_events == []
+
+    def test_maintenance_does_not_retry_on_non_retryable(
+        self,
+        queue: StickyQueue,
+        chain: InteractionChain,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Programming bugs (``ValueError``) propagate on first attempt — no retry."""
+        events, on_status = self._status_recorder()
+        loop = self._make_loop(queue, chain, on_status)
+
+        def _no_sleep(_s: float) -> None:
+            return None
+
+        monkeypatch.setattr(time, "sleep", _no_sleep)
+
+        call_counter = {"n": 0}
+
+        def programming_bug(**_kwargs: Any) -> dict[str, Any]:
+            call_counter["n"] += 1
+            raise ValueError("programming bug")
+
+        monkeypatch.setattr(queue, "maintenance", programming_bug)
+
+        loop._run_maintenance(queue)  # pyright: ignore[reportPrivateUsage]
+
+        # No retry — invoked exactly once.
+        assert call_counter["n"] == 1
+        failure_events = self._dict_events(
+            events, event_name="heartbeat.maintenance_failed"
+        )
+        assert len(failure_events) == 1
+        assert "programming bug" in str(failure_events[0].get("error", ""))

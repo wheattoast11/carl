@@ -26,6 +26,8 @@ from uuid import uuid4
 
 from carl_core import now_iso
 
+from carl_studio.settings import carl_home
+
 
 class WalCheckpointResult(TypedDict):
     """Shape of the ``wal_checkpoint`` field returned by :meth:`LocalDB.maintenance`.
@@ -48,7 +50,7 @@ class MaintenanceResult(TypedDict):
     wal_checkpoint: WalCheckpointResult
     vacuumed: bool
 
-CARL_DIR = Path.home() / ".carl"
+CARL_DIR = carl_home()
 DB_PATH = CARL_DIR / "carl.db"
 _RUN_JSON_COLUMNS: frozenset[str] = frozenset({"config", "result"})
 

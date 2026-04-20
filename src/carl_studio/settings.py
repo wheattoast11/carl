@@ -114,7 +114,28 @@ _PRESETS: dict[str, dict[str, Any]] = {
 # Path constants
 # ---------------------------------------------------------------------------
 
-CARL_HOME = Path.home() / ".carl"
+def carl_home() -> Path:
+    """Return the canonical CARL home directory.
+
+    Resolution order:
+      1. ``CARL_HOME`` environment variable (expanded + resolved) if set.
+      2. ``~/.carl`` otherwise.
+
+    This is the single source of truth for the CARL home directory. Modules
+    that previously hardcoded ``Path.home() / ".carl"`` should call this
+    helper (or import the :data:`CARL_HOME` constant below) so the env var
+    is honored uniformly across the codebase.
+    """
+    env = os.environ.get("CARL_HOME")
+    if env:
+        return Path(env).expanduser().resolve()
+    return (Path.home() / ".carl").resolve()
+
+
+#: Snapshot of :func:`carl_home` at import time. Kept for back-compat with
+#: callers that imported the name directly; prefer :func:`carl_home` in new
+#: code because it reflects the current env state on every call.
+CARL_HOME = carl_home()
 GLOBAL_CONFIG = CARL_HOME / "config.yaml"
 LOCAL_CONFIG_NAME = "carl.yaml"
 

@@ -1,33 +1,53 @@
-"""Typed view of the MCP server's per-process session state.
+"""Typed view of the MCP server's per-connection session state.
 
-The MCP ``server.py`` module owns a ``_session: dict[str, str]`` global that
-holds auth-derived state (JWT, tier, user id, ``authenticated_at`` epoch
-seconds). That shape is convenient for the existing tool bodies but loses
-type information at the boundary and cannot express "no authentication has
-happened yet" except by comparing empty strings.
+Prior to v0.7.1 the MCP ``server.py`` module owned a ``_session: dict[str, str]``
+global that held auth-derived state (JWT, tier, user id, ``authenticated_at``
+epoch seconds). That singleton was process-wide — every client connecting
+to the same ``carl mcp serve`` process shared one auth bucket (UAT-049).
 
-:class:`MCPSession` is the read-only, typed snapshot we want callers to
-operate on. Phase 1 only adds the view plus the two bridge helpers
-(:func:`session_from_dict`, :func:`session_to_dict`) — the underlying
-``_session`` dict is still the source of truth. Phase 3 (T2) will invert
-the relationship: a ``SessionStore`` keyed by client id becomes the source
-of truth, and the module-level dict goes away.
+H2 inverted the ownership: :class:`MCPSession` is now the canonical shape,
+each :class:`~carl_studio.mcp.connection.MCPServerConnection` owns an
+instance, and tool bodies resolve the active session via
+:func:`extract_session` (which prefers the FastMCP
+:class:`~mcp.server.fastmcp.Context` when it is injected and falls back to
+the bound connection otherwise).
 
 Design decisions
 ----------------
 * Dataclass, not Pydantic. This primitive is on the hot path and the
   validation surface is one-line.
-* ``frozen=True`` — snapshots are handed to callers; mutating them must
-  go through :func:`session_to_dict` + the module write on ``server.py``.
+* ``frozen=True`` — snapshots are immutable. Mutating the session means
+  building a new :class:`MCPSession` via :meth:`MCPSession.with_` and
+  assigning it back to the connection through its :attr:`session` setter.
 * ``authenticated_at`` is a timezone-aware ``datetime`` (UTC) when
-  present. The legacy dict carries it as a stringified epoch integer;
-  conversion happens at the bridge.
+  present. The legacy dict carried it as a stringified epoch integer;
+  :func:`session_from_dict` / :func:`session_to_dict` preserve that format
+  for any caller still on the dict shape (none in-tree).
+* ``jwt_expires_at`` is a POSIX timestamp (seconds) when the current JWT
+  is known to expire. ``None`` means "no expiry known"; consumers should
+  fall back to :data:`SESSION_MAX_AGE` for the staleness check.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - type-only
+    from carl_studio.mcp.connection import MCPServerConnection
+
+
+# ---------------------------------------------------------------------------
+# Session staleness
+# ---------------------------------------------------------------------------
+#
+# Sessions older than :data:`SESSION_MAX_AGE` seconds are treated as
+# unauthenticated even when a JWT is still present. The constant lives here
+# (not in ``server.py``) so tools and connection code can share one source
+# of truth.
+
+SESSION_MAX_AGE: float = 3600.0  # 1 hour — re-authenticate after this
 
 
 @dataclass(frozen=True)
@@ -51,17 +71,33 @@ class MCPSession:
         UTC timestamp of the last successful ``authenticate`` call, or
         ``None`` when unauthenticated or when the legacy dict lacks the
         field / holds a malformed value.
+    jwt_expires_at
+        POSIX timestamp (seconds) of the JWT ``exp`` claim when known,
+        otherwise ``None``. Consumers should combine this with
+        :data:`SESSION_MAX_AGE` to bound session lifetime independent of
+        the upstream issuer's expiry policy.
     """
 
-    jwt: str
-    tier: str
-    user_id: str
-    authenticated_at: datetime | None
+    jwt: str = ""
+    tier: str = "free"
+    user_id: str = ""
+    authenticated_at: datetime | None = None
+    jwt_expires_at: float | None = None
 
     @property
     def is_authenticated(self) -> bool:
         """True when a non-empty JWT has been accepted by ``authenticate``."""
         return bool(self.jwt)
+
+    def with_(self, **changes: Any) -> MCPSession:
+        """Return a new :class:`MCPSession` with the given fields replaced.
+
+        Convenience wrapper over :func:`dataclasses.replace` so callers can
+        mutate session state without reaching for a second import. Example::
+
+            conn.session = conn.session.with_(jwt=jwt, tier="paid")
+        """
+        return replace(self, **changes)
 
 
 def session_from_dict(raw: dict[str, str]) -> MCPSession:
@@ -98,8 +134,8 @@ def session_to_dict(session: MCPSession) -> dict[str, str]:
     """Reverse of :func:`session_from_dict`.
 
     ``authenticated_at`` is re-encoded as a stringified epoch integer so
-    the result is bit-compatible with the module-level ``_session`` dict.
-    A ``None`` datetime renders as an empty string, matching what
+    the result is bit-compatible with the legacy module-level ``_session``
+    dict. A ``None`` datetime renders as an empty string, matching what
     ``_require_tier`` treats as "never authenticated".
     """
     if session.authenticated_at is not None:
@@ -114,8 +150,54 @@ def session_to_dict(session: MCPSession) -> dict[str, str]:
     }
 
 
+def extract_session(conn: "MCPServerConnection | None") -> Any:
+    """Best-effort lookup of a ``ServerSession``-like object on the connection.
+
+    This is the canonical helper used by both :mod:`carl_studio.mcp.elicitation`
+    and :mod:`carl_studio.mcp.sampling` to reach the active FastMCP
+    ``ServerSession`` (the wire-level send/receive seam, **not**
+    :class:`MCPSession` which is carl-studio's auth-state snapshot).
+
+    Resolution order:
+
+    1. ``conn._session_override`` — test-harness hook that lets unit tests
+       attach a stub ``ServerSession`` without standing up a live FastMCP
+       request context.
+    2. ``conn.fastmcp.get_context().session`` — the public FastMCP 1.10+
+       accessor for the in-flight request's ``ServerSession``.
+
+    Returns ``None`` when no session is resolvable (connection is ``None``,
+    FastMCP absent, or we are outside a request context).
+    """
+    if conn is None:
+        return None
+
+    override = getattr(conn, "_session_override", None)
+    if override is not None:
+        return override
+
+    fastmcp = getattr(conn, "fastmcp", None)
+    if fastmcp is None:
+        return None
+
+    ctx_getter = getattr(fastmcp, "get_context", None)
+    if callable(ctx_getter):
+        try:
+            ctx = ctx_getter()
+        except Exception:
+            ctx = None
+        if ctx is not None:
+            session = getattr(ctx, "session", None)
+            if session is not None:
+                return session
+
+    return None
+
+
 __all__ = [
     "MCPSession",
+    "SESSION_MAX_AGE",
+    "extract_session",
     "session_from_dict",
     "session_to_dict",
 ]

@@ -312,6 +312,19 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Wire metrics sub-app — Prometheus scrape endpoint
+# ---------------------------------------------------------------------------
+try:
+    from carl_studio.cli.metrics import metrics_app
+
+    app.add_typer(metrics_app, name="metrics")
+except ImportError:
+    # metrics extra not installed; leave the verb out of the surface so
+    # `carl metrics serve` prints its own hint when the user invokes it.
+    pass
+
+
+# ---------------------------------------------------------------------------
 # Wire carl chat (top-level agentic chat)
 # ---------------------------------------------------------------------------
 # F1 — Two canonical surfaces only: `carl chat` (interactive) and

@@ -181,16 +181,20 @@ class TestMCPServerConnectionLifecycle(unittest.IsolatedAsyncioTestCase):
         assert ping_step.duration_ms is not None
         assert ping_step.duration_ms >= 0
 
-    async def test_session_property_reflects_module_dict(self) -> None:
-        from carl_studio.mcp import server as _server
-
+    async def test_session_property_owned_by_connection(self) -> None:
+        """Each connection owns its :class:`MCPSession` (H2, v0.7.1)."""
         async with MCPServerConnection() as conn:
             snapshot = conn.session
             assert isinstance(snapshot, MCPSession)
-            raw_session: dict[str, str] = (
-                _server._session  # pyright: ignore[reportPrivateUsage]
-            )
-            assert snapshot.tier == raw_session.get("tier", "free")
+            # Default snapshot is the empty / free-tier session.
+            assert snapshot.tier == "free"
+            assert snapshot.jwt == ""
+
+            # Writing through the setter replaces the snapshot atomically.
+            conn.session = conn.session.with_(jwt="j", tier="paid", user_id="u")
+            assert conn.session.jwt == "j"
+            assert conn.session.tier == "paid"
+            assert conn.session.user_id == "u"
 
 
 class TestBindConnectionToolTelemetry(unittest.IsolatedAsyncioTestCase):

@@ -32,8 +32,12 @@ from carl_core.tier import (
 from carl_core.tier import _TIER_RANK as _TIER_RANK  # pyright: ignore[reportPrivateUsage]
 from carl_core.tier import _UPGRADE_URLS  # pyright: ignore[reportPrivateUsage]
 
+from carl_studio.gating import GATE_TIER_INSUFFICIENT, emit_gate_event
+
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from carl_core.interaction import InteractionChain
 
 
 __all__ = [
@@ -44,6 +48,7 @@ __all__ = [
     "feature_tier",
     "tier_allows",
     # carl-studio-specific helpers
+    "TierPredicate",
     "detect_effective_tier",
     "tier_gate",
     "check_tier",
@@ -96,6 +101,70 @@ def _detect_hf_token() -> str | None:
 # ---------------------------------------------------------------------------
 
 
+class TierPredicate:
+    """A :class:`~carl_studio.gating.GatingPredicate` for a tier requirement.
+
+    Wraps the tier-comparison + feature-registry check used by
+    :func:`tier_gate` and :func:`check_tier` in the shared gate-predicate
+    shape. Resolves the effective tier from
+    :class:`~carl_studio.settings.CARLSettings` lazily inside
+    :meth:`check` so the predicate itself stays cheap to construct.
+    """
+
+    __slots__ = ("_required", "_feature", "_effective_override")
+
+    def __init__(
+        self,
+        required_tier: Tier,
+        feature: str | None = None,
+        *,
+        effective: Tier | None = None,
+    ) -> None:
+        self._required = required_tier
+        self._feature = feature
+        # Test hook: when supplied, skip the CARLSettings round-trip.
+        self._effective_override = effective
+
+    @property
+    def name(self) -> str:
+        return f"tier:{self._feature or self._required.value}"
+
+    @property
+    def required(self) -> Tier:
+        """Minimum tier required by this predicate."""
+        return self._required
+
+    @property
+    def feature(self) -> str | None:
+        """Feature name (for registry lookup), if any."""
+        return self._feature
+
+    def _effective(self) -> Tier:
+        if self._effective_override is not None:
+            return self._effective_override
+        # Lazy import: CARLSettings is heavy and we don't want to pull it
+        # into ``import carl_studio.tier`` at module load time.
+        from carl_studio.settings import CARLSettings
+
+        return detect_effective_tier(CARLSettings.load().tier)
+
+    def check(self) -> tuple[bool, str]:
+        """Return ``(allowed, reason)`` for the tier requirement."""
+        effective = self._effective()
+        feat_name = self._feature or ""
+        feature_ok = not feat_name or tier_allows(effective, feat_name)
+        rank_ok = effective >= self._required
+        if rank_ok and feature_ok:
+            return True, f"tier '{effective.value}' >= required '{self._required.value}'"
+        url = _UPGRADE_URLS.get(self._required, "https://terminals.tech/pricing")
+        return (
+            False,
+            f"'{feat_name or self._required.value}' requires CARL "
+            f"{self._required.value.title()}. Current tier: "
+            f"{effective.value.title()}. Upgrade at {url}",
+        )
+
+
 def tier_gate(required_tier: Tier, feature: str | None = None) -> Callable:
     """Decorator that gates a function behind a tier requirement.
 
@@ -108,6 +177,13 @@ def tier_gate(required_tier: Tier, feature: str | None = None) -> Callable:
         @tier_gate(Tier.ENTERPRISE, feature="mcp.serve")
         def mcp_serve():
             ...
+
+    On denial the raised :class:`TierGateError` additionally carries a
+    ``context`` attribute with a ``gate_code`` entry
+    (``carl.gate.tier_insufficient``) so operators can filter any gate
+    denial — consent or tier — on the shared ``carl.gate.*`` namespace
+    without collapsing the exception taxonomy. The legacy attributes
+    (``feature`` / ``required`` / ``current``) remain unchanged.
     """
 
     def decorator(func: Callable) -> Callable:
@@ -119,11 +195,31 @@ def tier_gate(required_tier: Tier, feature: str | None = None) -> Callable:
             effective = detect_effective_tier(settings.tier)
             feat_name = feature or func.__name__
 
-            # Check both: the explicit required_tier AND the feature registry.
-            # The decorator's required_tier is the authoritative minimum;
-            # the feature registry may also impose a minimum via tier_allows.
-            if effective < required_tier or not tier_allows(effective, feat_name):
-                raise TierGateError(feat_name, required_tier, effective)
+            predicate = TierPredicate(
+                required_tier, feat_name, effective=effective
+            )
+            # ``_gate_chain`` can be threaded in via kwargs for structured
+            # logging without changing the wrapped function's signature.
+            # Pop so we don't leak it into ``func`` (which would TypeError
+            # on an unexpected kwarg).
+            chain: InteractionChain | None = kwargs.pop("_gate_chain", None)
+            allowed, reason = predicate.check()
+            emit_gate_event(
+                predicate_name=predicate.name,
+                allowed=allowed,
+                reason=reason,
+                chain=chain,
+            )
+
+            if not allowed:
+                err = TierGateError(feat_name, required_tier, effective)
+                _attach_gate_context(
+                    err,
+                    feature=feat_name,
+                    required=required_tier,
+                    current=effective,
+                )
+                raise err
 
             return func(*args, **kwargs)
 
@@ -146,7 +242,35 @@ def check_tier(feature: str) -> tuple[bool, Tier, Tier]:
     settings = CARLSettings.load()
     effective = detect_effective_tier(settings.tier)
     required = feature_tier(feature)
-    return tier_allows(effective, feature), effective, required
+    # Route through the shared predicate so the tier-check accounting is
+    # identical across the decorator and inline-check paths. We don't
+    # raise from here (check_tier is for friendly UI), so no chain is
+    # wired — callers that want a gate event should use ``tier_gate``.
+    predicate = TierPredicate(required, feature, effective=effective)
+    allowed, _reason = predicate.check()
+    return allowed, effective, required
+
+
+def _attach_gate_context(
+    err: TierGateError,
+    *,
+    feature: str,
+    required: Tier,
+    current: Tier,
+) -> None:
+    """Attach a ``context`` dict (with ``gate_code``) to a TierGateError.
+
+    :class:`TierGateError` lives in ``carl_core.tier`` as a plain
+    ``Exception`` for primitive-layer portability; we layer the shared
+    ``carl.gate.*`` attribution at the carl-studio boundary instead of
+    mutating the primitive.
+    """
+    err.context = {  # pyright: ignore[reportAttributeAccessIssue]
+        "feature": feature,
+        "required": required.value,
+        "current": current.value,
+        "gate_code": GATE_TIER_INSUFFICIENT,
+    }
 
 
 def tier_message(feature: str) -> str | None:

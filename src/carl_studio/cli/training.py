@@ -135,6 +135,31 @@ def run_stop_cmd(
     _stop_impl(run_id)
 
 
+@run_app.command(name="diff")
+def run_diff_cmd(
+    run_a: str = typer.Argument(..., help="Run ID A"),
+    run_b: str = typer.Argument(..., help="Run ID B"),
+    steps: bool = typer.Option(False, "--steps", help="Include aligned per-step rows"),
+) -> None:
+    """Compute delta between two training runs."""
+    from carl_studio.db import LocalDB
+    from carl_studio.run_diff import compute_diff, render_diff
+
+    db = LocalDB()
+    ra = db.get_run(run_a)
+    rb = db.get_run(run_b)
+    if ra is None or rb is None:
+        typer.echo(
+            f"ERROR: run not found (a={ra is not None}, b={rb is not None})",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    ma = db.get_metrics(run_a)
+    mb = db.get_metrics(run_b)
+    report = compute_diff(ra, ma, rb, mb, steps=steps)
+    render_diff(report, get_console())
+
+
 # ---------------------------------------------------------------------------
 # carl eval
 # ---------------------------------------------------------------------------

@@ -25,14 +25,9 @@ What's in scope for Phase 1
 * :meth:`run` entry point that brackets the FastMCP serve loop in a
   ``transact("serve")`` so DEGRADED/ERROR telemetry is emitted if the
   loop crashes.
-* Read-only :attr:`session` snapshot bridging to ``server._session``.
-
-What's deferred
----------------
-* Multi-tenant session scoping (Phase 3 / T2).
-* 2025-11 MCP tasks/elicitation/sampling (Phase 3 / T2).
-* Moving the module-level ``_session`` dict onto the connection instance
-  (Phase 3 / T2 — done once ``FastMCP`` exposes a per-request context).
+* Per-connection :attr:`session` state (H2, v0.7.1). Each connection owns
+  its :class:`MCPSession`; auth writes no longer escape into a module
+  global.
 """
 
 from __future__ import annotations
@@ -52,7 +47,7 @@ from carl_core.connection import (
 from carl_core.interaction import InteractionChain
 
 from carl_studio.consent import consent_gate
-from carl_studio.mcp.session import MCPSession, session_from_dict
+from carl_studio.mcp.session import MCPSession
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
     from mcp.server.fastmcp import FastMCP
@@ -140,6 +135,11 @@ class MCPServerConnection(AsyncBaseConnection):
             metadata={"server_name": "carl-studio", "transport_choice": normalized},
         )
         self._fastmcp: FastMCP | None = None
+        # H2: per-connection session state. Before v0.7.1 this lived as a
+        # module-level dict in ``server.py`` and leaked across clients;
+        # now every connection has its own immutable snapshot and tools
+        # mutate it via ``conn.session = conn.session.with_(...)``.
+        self._session: MCPSession = MCPSession()
         super().__init__(chain=chain, connection_id=connection_id)
 
     # ------------------------------------------------------------------
@@ -158,22 +158,28 @@ class MCPServerConnection(AsyncBaseConnection):
 
     @property
     def session(self) -> MCPSession:
-        """Typed, read-only view of the current ``server._session`` dict.
+        """The current per-connection :class:`MCPSession`.
 
-        Mutations still flow through the ``authenticate`` tool (which
-        writes directly to ``server._session``). This property just
-        reflects whatever that dict holds at the moment of the call.
+        Snapshots are immutable; the setter atomically replaces the
+        underlying reference. Tools mutate via::
+
+            conn.session = conn.session.with_(jwt=..., tier=...)
         """
-        # Lazy import — importing server.py at module scope would trigger
-        # the FastMCP import chain even for callers that only touch the
-        # session view.
-        from carl_studio.mcp import server as _server
+        return self._session
 
-        # Phase 1: the legacy module-level state dict is still the source
-        # of truth. Phase 3 (T2) inverts ownership so the connection holds
-        # the session directly. Explicitly annotate + suppress until then.
-        raw: dict[str, str] = _server._session  # pyright: ignore[reportPrivateUsage]
-        return session_from_dict(raw)
+    @session.setter
+    def session(self, value: MCPSession) -> None:
+        """Atomically replace the active session snapshot.
+
+        The :class:`MCPSession` is ``frozen=True`` so this is the only
+        legitimate way to update auth state on an open connection. The
+        ``authenticate`` tool in ``server.py`` is the primary caller.
+        """
+        if not isinstance(value, MCPSession):  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise TypeError(
+                f"session must be an MCPSession, got {type(value).__name__}"
+            )
+        self._session = value
 
     async def run(self) -> None:
         """Start the FastMCP serve loop wrapped in a ``transact("serve")``.

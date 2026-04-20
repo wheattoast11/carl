@@ -28,18 +28,29 @@ Design notes
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
+import os
+import sqlite3
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from carl_core.interaction import ActionType, InteractionChain
+from carl_core.retry import RetryPolicy, retry
 
 from carl_studio.db import DEFAULT_RETENTION_DAYS, LocalDB
 from carl_studio.envutil import env_float, env_int
 from carl_studio.heartbeat.phases import ORDERED_PHASES, HeartbeatPhase
+from carl_studio.metrics import get_registry, is_available
 from carl_studio.sticky import StickyNote, StickyQueue
+
+if TYPE_CHECKING:
+    from wsgiref.simple_server import WSGIServer
+
+_METRICS_PORT_ENV = "CARL_METRICS_PORT"
+_METRICS_HOST = "127.0.0.1"
 
 StatusCallback = Callable[["str | dict[str, Any]"], None]
 
@@ -62,6 +73,20 @@ DEFAULT_MAINTENANCE_INTERVAL_CYCLES: int = 100
 #: run maintenance at least once per hour so WAL truncation and retention
 #: sweep still happen. Cycle-trigger alone would starve a quiet deployment.
 DEFAULT_MAINTENANCE_INTERVAL_SECONDS: float = 3600.0
+
+#: Retry policy applied to the maintenance tick. Transient sqlite / IO
+#: failures (e.g. ``database is locked`` during a WAL checkpoint) should not
+#: drop the cycle's reclaim + retention work — we retry up to three times
+#: with bounded backoff. Non-retryable exceptions (programming bugs like
+#: ``ValueError`` / ``AttributeError``) propagate immediately to the outer
+#: ``except BaseException`` guard in :meth:`HeartbeatLoop._run_maintenance`,
+#: which surfaces them via the status callback.
+_MAINTENANCE_RETRY_POLICY: RetryPolicy = RetryPolicy(
+    max_attempts=3,
+    backoff_base=1.0,
+    max_delay=5.0,
+    retryable=(sqlite3.OperationalError, OSError),
+)
 
 
 def _noop_status(_msg: str | dict[str, Any]) -> None:
@@ -143,6 +168,10 @@ class HeartbeatLoop:
             default=DEFAULT_MAINTENANCE_INTERVAL_SECONDS,
             minimum=0.0,
         )
+        # Metrics HTTP server handles — populated in :meth:`start` when
+        # ``CARL_METRICS_PORT`` is set and the optional extra is present.
+        self._metrics_server: WSGIServer | None = None
+        self._metrics_thread: threading.Thread | None = None
 
     # -- public lifecycle -------------------------------------------------
 
@@ -156,12 +185,20 @@ class HeartbeatLoop:
         """Spawn the worker thread. Idempotent — returns the existing thread
         if one is already running, so repeated ``start()`` calls do not
         create stacked daemons.
+
+        When ``CARL_METRICS_PORT`` is set and the ``[metrics]`` extra is
+        installed, also spawn a Prometheus scrape endpoint on
+        ``127.0.0.1:<port>/metrics`` in parallel with the worker. Metrics
+        hosting is best-effort: a parse failure or startup error is logged
+        and surfaced via the status callback but never prevents the
+        heartbeat itself from starting.
         """
         with self._start_lock:
             existing = self._thread
             if existing is not None and existing.is_alive():
                 return existing
             self._stop_event.clear()
+            self._maybe_start_metrics_server()
             thread = threading.Thread(
                 target=self._runner,
                 name="carl-heartbeat",
@@ -171,19 +208,94 @@ class HeartbeatLoop:
             self._thread = thread
             return thread
 
+    def _maybe_start_metrics_server(self) -> None:
+        """Spawn the Prometheus HTTP server if configured. No-op otherwise."""
+        raw = os.environ.get(_METRICS_PORT_ENV)
+        if not raw:
+            return
+        if not is_available():
+            self._on_status(
+                {
+                    "event": "heartbeat.metrics_skipped",
+                    "reason": "prometheus_client not installed",
+                },
+            )
+            return
+        try:
+            port = int(raw)
+        except ValueError:
+            self._on_status(
+                {
+                    "event": "heartbeat.metrics_skipped",
+                    "reason": f"invalid {_METRICS_PORT_ENV}={raw!r}",
+                },
+            )
+            return
+        try:
+            from prometheus_client import start_http_server
+
+            server, thread = start_http_server(
+                port,
+                addr=_METRICS_HOST,
+                registry=get_registry().registry,
+            )
+            self._metrics_server = server
+            self._metrics_thread = thread
+            bound_port = server.server_address[1]
+            self._on_status(
+                {
+                    "event": "heartbeat.metrics_started",
+                    "host": _METRICS_HOST,
+                    "port": bound_port,
+                },
+            )
+        except BaseException as exc:
+            _LOG.exception("heartbeat metrics server failed to start")
+            self._on_status(
+                {
+                    "event": "heartbeat.metrics_failed",
+                    "error": repr(exc),
+                },
+            )
+
     def stop(self, *, timeout: float = 3.0) -> None:
         """Signal the worker to exit and ``join`` it.
 
         ``timeout`` is passed to :meth:`threading.Thread.join` — callers
         on a tight shutdown budget can pass ``0.0`` to return immediately
         without waiting. Never raises.
+
+        Shutdown order:
+
+        1. Flip the stop event so the heartbeat loop exits between cycles.
+        2. Join the worker thread.
+        3. Shut down the metrics HTTP server (if running) — done last so
+           an in-flight scrape against the live registry is never mid-flight
+           when the loop decrements its final counter.
         """
         self._stop_event.set()
         thread = self._thread
-        if thread is None:
-            return
-        if thread.is_alive():
+        if thread is not None and thread.is_alive():
             thread.join(timeout=timeout)
+
+        metrics_server = self._metrics_server
+        metrics_thread = self._metrics_thread
+        if metrics_server is not None:
+            try:
+                metrics_server.shutdown()
+            except BaseException:  # pragma: no cover - defensive
+                pass
+            try:
+                metrics_server.server_close()
+            except BaseException:  # pragma: no cover - defensive
+                pass
+            self._metrics_server = None
+        if metrics_thread is not None:
+            try:
+                metrics_thread.join(timeout=2.0)
+            except BaseException:  # pragma: no cover - defensive
+                pass
+            self._metrics_thread = None
 
     # -- internals --------------------------------------------------------
 
@@ -238,6 +350,11 @@ class HeartbeatLoop:
             else:
                 await self._run_cycle(queue, note)
                 cycles_since_maintenance += 1
+                if is_available():
+                    try:
+                        get_registry().record_heartbeat_cycle()
+                    except BaseException:  # pragma: no cover - defensive
+                        pass
 
             elapsed = time.monotonic() - last_maintenance_monotonic
             cycle_trigger = (
@@ -268,8 +385,14 @@ class HeartbeatLoop:
             minimum=0,
         )
         try:
-            reclaimed = queue.reclaim_stale()
-            stats = queue.maintenance(retention_days=retention_days)
+            reclaimed = retry(
+                queue.reclaim_stale,
+                policy=_MAINTENANCE_RETRY_POLICY,
+            )
+            stats = retry(
+                functools.partial(queue.maintenance, retention_days=retention_days),
+                policy=_MAINTENANCE_RETRY_POLICY,
+            )
             payload: dict[str, Any] = {
                 "event": "heartbeat.maintenance",
                 "reclaimed": reclaimed,
@@ -282,8 +405,13 @@ class HeartbeatLoop:
                 reclaimed,
                 stats["notes_deleted"],
             )
-        except BaseException as exc:  # pragma: no cover - defensive
+        except BaseException as exc:
             _LOG.exception("heartbeat maintenance failed")
+            if is_available():
+                try:
+                    get_registry().record_maintenance_failure()
+                except BaseException:  # pragma: no cover - defensive
+                    pass
             try:
                 self._on_status(
                     {"event": "heartbeat.maintenance_failed", "error": repr(exc)},

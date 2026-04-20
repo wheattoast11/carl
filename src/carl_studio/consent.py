@@ -20,11 +20,19 @@ from __future__ import annotations
 
 import sys
 import warnings
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from carl_core import now_iso
 from carl_core.errors import CARLError
 from pydantic import BaseModel, Field
+
+from carl_studio.gating import (
+    GATE_CONSENT_DENIED,
+    emit_gate_event,
+)
+
+if TYPE_CHECKING:
+    from carl_core.interaction import InteractionChain
 
 _CONSENT_KEY = "consent_state"
 
@@ -207,10 +215,61 @@ def consent_state_from_profile(profile: Any) -> ConsentState:
     )
 
 
+class ConsentPredicate:
+    """A :class:`~carl_studio.gating.GatingPredicate` for a consent flag.
+
+    Wraps :meth:`ConsentManager.is_granted` in the shared gate-predicate
+    shape so :func:`consent_gate` and :func:`carl_studio.tier.tier_gate`
+    can share the same structured logging path without collapsing their
+    public APIs.
+    """
+
+    __slots__ = ("_flag", "_manager")
+
+    def __init__(
+        self,
+        flag: ConsentKey | str,
+        manager: ConsentManager | None = None,
+    ) -> None:
+        self._flag = str(flag)
+        self._manager = manager
+
+    @property
+    def name(self) -> str:
+        return f"consent:{self._flag}"
+
+    @property
+    def flag(self) -> str:
+        """The raw consent flag key being checked."""
+        return self._flag
+
+    def check(self) -> tuple[bool, str]:
+        """Return ``(allowed, reason)`` for the wrapped consent flag.
+
+        Unknown flags return ``(False, "unknown consent flag ...")`` —
+        fail-closed, matching :meth:`ConsentManager.is_granted`.
+        """
+        if self._flag not in CONSENT_KEYS:
+            return (
+                False,
+                f"unknown consent flag '{self._flag}' "
+                f"(valid: {', '.join(sorted(CONSENT_KEYS))})",
+            )
+        mgr = self._manager or ConsentManager()
+        if mgr.is_granted(self._flag):
+            return True, f"consent flag '{self._flag}' granted"
+        return (
+            False,
+            f"consent flag '{self._flag}' not granted — "
+            f"run `carl camp consent update {self._flag} --enable` to allow",
+        )
+
+
 def consent_gate(
     flag: ConsentKey | str,
     *,
     manager: ConsentManager | None = None,
+    chain: InteractionChain | None = None,
 ) -> None:
     """Raise :class:`ConsentError` if the given flag is not granted.
 
@@ -228,30 +287,57 @@ def consent_gate(
     manager
         Optional :class:`ConsentManager` to use. Tests typically inject a
         manager bound to a ``FakeDB`` to exercise the gate deterministically.
+    chain
+        Optional :class:`~carl_core.interaction.InteractionChain` to
+        record a structured gate event against. When supplied, every
+        allow *and* deny produces one :attr:`ActionType.GATE_CHECK` step
+        with the shared cross-gate shape (see
+        :func:`carl_studio.gating.emit_gate_event`).
 
     Raises
     ------
     ConsentError
         When the flag is unknown or not currently granted. The raised error
-        carries ``code="carl.consent.denied"`` and ``context={"flag": ...}``
-        so operators can distinguish a denied gate from other consent
-        failures in logs.
+        carries ``code="carl.consent.denied"`` and ``context={"flag": ...,
+        "gate_code": "carl.gate.consent_denied"}`` so operators can
+        distinguish a denied consent gate from other consent failures AND
+        filter on the cross-gate ``carl.gate.*`` namespace without
+        breaking the existing ``code`` taxonomy.
     """
     flag_str = str(flag)
+    predicate = ConsentPredicate(flag_str, manager=manager)
+
     if flag_str not in CONSENT_KEYS:
-        raise ConsentError(
+        # Unknown-flag path: preserve legacy code (carl.consent.unknown_flag)
+        # and still emit the shared event so audit consumers see the denial.
+        reason = (
             f"Unknown consent flag '{flag_str}'. "
-            f"Valid: {', '.join(sorted(CONSENT_KEYS))}",
-            code="carl.consent.unknown_flag",
-            context={"flag": flag_str},
+            f"Valid: {', '.join(sorted(CONSENT_KEYS))}"
         )
-    mgr = manager or ConsentManager()
-    if not mgr.is_granted(flag_str):
+        emit_gate_event(
+            predicate_name=predicate.name,
+            allowed=False,
+            reason=reason,
+            chain=chain,
+        )
         raise ConsentError(
-            f"consent flag '{flag_str}' not granted — "
-            f"run `carl camp consent update {flag_str} --enable` to allow",
+            reason,
+            code="carl.consent.unknown_flag",
+            context={"flag": flag_str, "gate_code": GATE_CONSENT_DENIED},
+        )
+
+    allowed, reason = predicate.check()
+    emit_gate_event(
+        predicate_name=predicate.name,
+        allowed=allowed,
+        reason=reason,
+        chain=chain,
+    )
+    if not allowed:
+        raise ConsentError(
+            reason,
             code="carl.consent.denied",
-            context={"flag": flag_str},
+            context={"flag": flag_str, "gate_code": GATE_CONSENT_DENIED},
         )
 
 
@@ -288,7 +374,10 @@ __all__ = [
     "ConsentFlag",
     "ConsentKey",
     "ConsentManager",
+    "ConsentPredicate",
     "ConsentState",
     "consent_gate",
     "consent_state_from_profile",
 ]
+
+

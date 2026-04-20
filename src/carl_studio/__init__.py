@@ -8,7 +8,7 @@ The entire paradigm in one import::
 See also: carl.py (300-line seed crystal at the repo root)
 """
 
-__version__ = "0.4.1"
+__version__ = "0.7.1"
 
 from carl_core.constants import KAPPA, SIGMA, DEFECT_THRESHOLD
 from carl_core import CoherenceProbe

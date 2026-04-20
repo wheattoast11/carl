@@ -269,6 +269,22 @@ Credential setup and provider auth → [docs/auth.md](docs/auth.md)
 
 ---
 
+## Changelog
+
+Full history lives in [`CHANGELOG.md`](CHANGELOG.md); the most recent entries:
+
+### v0.7.1 (2026-04-19) — Phase-2b close-out
+
+- x402 spend caps (daily + session) + `confirm_payment` hook.
+- MCP per-request session state — `_session` global replaced with `MCPServerConnection.session`; FastMCP `Context` DI on authenticated tools.
+- `carl metrics serve` — Prometheus text-format scrape endpoint (`metrics` extra); heartbeat auto-hosts when `CARL_METRICS_PORT` is set.
+- `carl run diff <a> <b>` — trajectory delta (phi, q_hat, crystallizations) with optional `--steps` alignment.
+- Shared `GatingPredicate` Protocol + `carl.gate.*` error namespace across `consent_gate` and `tier_gate`.
+- Heartbeat maintenance wrapped in `RetryPolicy(max_attempts=3)` for transient sqlite/IO.
+- `CARL_HOME` env now honored uniformly (db.py, settings.py, wallet_store.py, llm.py).
+
+---
+
 ## Star History
 
 <a href="https://star-history.com/#wheattoast11/carl&Date">

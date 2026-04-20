@@ -16,7 +16,8 @@ import os
 import sqlite3
 import time
 import urllib.request
-from pathlib import Path
+
+from carl_studio.settings import carl_home
 
 __all__ = ["LLMProvider", "parse_llm_json", "resolve_provider"]
 
@@ -24,7 +25,7 @@ __all__ = ["LLMProvider", "parse_llm_json", "resolve_provider"]
 # Response cache (SQLite, best-effort)
 # ---------------------------------------------------------------------------
 
-_CACHE_DB = Path.home() / ".carl" / "llm_cache.db"
+_CACHE_DB = carl_home() / "llm_cache.db"
 _CACHE_TTL_HOURS = 24
 
 
