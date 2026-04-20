@@ -19,10 +19,10 @@ boundary with the relevant :class:`ConsentFlag`. Gates currently wired:
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
+from carl_core import now_iso
 from carl_core.errors import CARLError
 from pydantic import BaseModel, Field
 
@@ -72,10 +72,6 @@ class ConsentState(BaseModel):
     telemetry: ConsentFlag = Field(default_factory=ConsentFlag)
     usage_analytics: ConsentFlag = Field(default_factory=ConsentFlag)
     contract_witnessing: ConsentFlag = Field(default_factory=ConsentFlag)
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class ConsentManager:
@@ -129,7 +125,7 @@ class ConsentManager:
                 f"Unknown consent key '{key}'. Valid: {', '.join(sorted(CONSENT_KEYS))}"
             )
         state = self.load()
-        flag = ConsentFlag(enabled=enabled, changed_at=_now_iso())
+        flag = ConsentFlag(enabled=enabled, changed_at=now_iso())
         state = state.model_copy(update={key: flag})
         self.save(state)
         return state
@@ -152,7 +148,7 @@ class ConsentManager:
         for key, remote_val in _remote_map.items():
             local_flag: ConsentFlag = getattr(state, key)
             if local_flag.changed_at is None and remote_val:
-                updates[key] = ConsentFlag(enabled=True, changed_at=_now_iso())
+                updates[key] = ConsentFlag(enabled=True, changed_at=now_iso())
         if updates:
             state = state.model_copy(update=updates)
             self.save(state)
@@ -160,7 +156,7 @@ class ConsentManager:
 
     def all_off(self) -> ConsentState:
         """Reset all consents to off (privacy-first defaults)."""
-        ts = _now_iso()
+        ts = now_iso()
         state = ConsentState(
             observability=ConsentFlag(enabled=False, changed_at=ts),
             telemetry=ConsentFlag(enabled=False, changed_at=ts),
@@ -180,7 +176,7 @@ class ConsentManager:
 
         import typer
 
-        ts = _now_iso()
+        ts = now_iso()
 
         typer.echo("\n  Privacy consent (all off by default, change any time):\n")
 

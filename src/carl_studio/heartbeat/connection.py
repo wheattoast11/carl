@@ -16,8 +16,6 @@ phase-transition strings between chat turns.
 
 from __future__ import annotations
 
-import logging
-import os
 from collections import deque
 from typing import Any
 
@@ -32,11 +30,12 @@ from carl_core.connection.spec import (
 )
 from carl_core.interaction import InteractionChain
 
+from carl_studio.envutil import env_float
 from carl_studio.heartbeat.loop import HeartbeatLoop
 from carl_studio.sticky import StickyQueue
 
-_LOG = logging.getLogger("carl.heartbeat.connection")
-
+# The parse-warn-fallback chain for this env var lives in
+# :func:`carl_studio.envutil.env_float`; no module-level logger is needed here.
 _SHUTDOWN_TIMEOUT_ENV = "CARL_HEARTBEAT_SHUTDOWN_TIMEOUT_S"
 _DEFAULT_SHUTDOWN_TIMEOUT_S = 30.0
 
@@ -105,38 +104,17 @@ class HeartbeatConnection(AsyncBaseConnection):
             on_status=self._status.append,
             poll_interval_s=poll_interval_s,
         )
-        self._shutdown_timeout_s = self._resolve_shutdown_timeout(shutdown_timeout_s)
-
-    @staticmethod
-    def _resolve_shutdown_timeout(explicit: float | None) -> float:
-        """Resolve shutdown budget: arg → env → default 30s.
-
-        The default used to be a hard-coded ``3.0`` passed to
-        :meth:`HeartbeatLoop.stop`, which killed any in-flight cycle on
-        SIGTERM. 30 seconds matches what most container orchestrators
-        grant between SIGTERM and SIGKILL and lets the current cycle
-        complete.
-
-        Values ``<= 0`` are clamped to ``0.0`` (return immediately — the
-        daemon thread will still exit because ``_stop_event`` is set, but
-        the caller does not wait).
-        """
-        if explicit is not None:
-            return max(0.0, float(explicit))
-        raw = os.environ.get(_SHUTDOWN_TIMEOUT_ENV, "").strip()
-        if raw:
-            try:
-                val = float(raw)
-            except ValueError:
-                _LOG.warning(
-                    "invalid %s=%r; falling back to default %.1fs",
-                    _SHUTDOWN_TIMEOUT_ENV,
-                    raw,
-                    _DEFAULT_SHUTDOWN_TIMEOUT_S,
-                )
-                return _DEFAULT_SHUTDOWN_TIMEOUT_S
-            return max(0.0, val)
-        return _DEFAULT_SHUTDOWN_TIMEOUT_S
+        # Shutdown budget: arg → env → default. ``env_float`` with
+        # ``minimum=0.0`` enforces "clamp negatives" while keeping the
+        # caller site a single line. The default 30s matches what most
+        # container orchestrators grant between SIGTERM and SIGKILL so
+        # the in-flight cycle has a realistic window to finish.
+        self._shutdown_timeout_s = env_float(
+            _SHUTDOWN_TIMEOUT_ENV,
+            default=_DEFAULT_SHUTDOWN_TIMEOUT_S,
+            explicit=shutdown_timeout_s,
+            minimum=0.0,
+        )
 
     # -- lifecycle hooks (AsyncBaseConnection contract) -----------------
 

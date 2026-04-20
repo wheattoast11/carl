@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Generator, TypedDict
 from uuid import uuid4
 
+from carl_core import now_iso
+
 
 class WalCheckpointResult(TypedDict):
     """Shape of the ``wal_checkpoint`` field returned by :meth:`LocalDB.maintenance`.
@@ -49,6 +51,15 @@ class MaintenanceResult(TypedDict):
 CARL_DIR = Path.home() / ".carl"
 DB_PATH = CARL_DIR / "carl.db"
 _RUN_JSON_COLUMNS: frozenset[str] = frozenset({"config", "result"})
+
+#: Default number of days to retain ``archived`` sticky-note rows before the
+#: maintenance sweep prunes them. Hoisted here (rather than in
+#: ``carl_studio.sticky``) because this module does not import ``sticky`` —
+#: the reverse *is* true, so ``sticky`` can (and does) re-export this
+#: symbol as ``DEFAULT_RETENTION_DAYS``. Every call site — the CLI, the
+#: heartbeat daemon, and ``StickyQueue.maintenance`` — pulls from the same
+#: constant so drift between surfaces is impossible (R2-005).
+DEFAULT_RETENTION_DAYS: int = 30
 
 # SQLite schema — executed on first connect
 _SCHEMA = """
@@ -159,10 +170,6 @@ def content_hash(entity: dict, exclude: set[str] | None = None) -> str:
     canonical = {k: v for k, v in sorted(entity.items()) if k not in exclude}
     blob = json.dumps(canonical, sort_keys=True, default=str).encode()
     return hashlib.sha256(blob).hexdigest()[:16]
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _encode_run_value(key: str, value: object) -> object:
@@ -284,7 +291,7 @@ class LocalDB:
     def maintenance(
         self,
         *,
-        retention_days: int = 30,
+        retention_days: int = DEFAULT_RETENTION_DAYS,
         vacuum: bool = False,
     ) -> MaintenanceResult:
         """Run periodic DB maintenance.
@@ -408,7 +415,7 @@ class LocalDB:
             conn.execute(
                 "INSERT INTO config (key, value, updated_at) VALUES (?, ?, ?)"
                 " ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = ?",
-                (key, value, _now(), value, _now()),
+                (key, value, now_iso(), value, now_iso()),
             )
             conn.commit()
 
@@ -421,7 +428,7 @@ class LocalDB:
             ).fetchone()
             if not row:
                 return None
-            if row["expires_at"] and row["expires_at"] < _now():
+            if row["expires_at"] and row["expires_at"] < now_iso():
                 return None  # expired
             return row["value"]
 

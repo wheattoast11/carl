@@ -29,6 +29,8 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from carl_core import now_iso
+
 from carl_core.errors import CARLError, CredentialError, NetworkError
 from carl_core.retry import RetryPolicy, retry
 from pydantic import BaseModel, Field
@@ -195,10 +197,6 @@ class CampProfile(BaseModel):
         }
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _load_db(db: Any | None) -> Any:
     if db is not None:
         return db
@@ -246,7 +244,7 @@ def cache_camp_profile(
     db = _load_db(db)
     db.set_auth("tier", profile.tier, ttl_hours=_CAMP_TIER_TTL_HOURS)
     db.set_config(_CAMP_PROFILE_KEY, profile.model_dump_json())
-    db.set_config(_CAMP_PROFILE_CACHED_AT_KEY, _now_iso())
+    db.set_config(_CAMP_PROFILE_CACHED_AT_KEY, now_iso())
     db.set_config(_CAMP_PROFILE_FETCHED_AT_KEY, f"{clock():.3f}")
     return profile
 

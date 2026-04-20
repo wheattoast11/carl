@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -126,6 +126,54 @@ class CascadeStage(BaseModel):
     )
 
 
+class CascadeConfig(BaseModel):
+    """Cascade gating configuration for GRPO + CARL runs.
+
+    The cascade gates CARL reward activation behind Stage B. Two gate
+    modes are supported:
+
+    - ``metric`` (default): watches a scalar reward signal and fires on a
+      running-percentile threshold. Self-calibrating but gameable by
+      reward volume alone.
+    - ``crystallization``: watches the CoherenceTrace field for
+      discontinuity events (delta_phi > DEFECT_THRESHOLD). Recommended
+      for GRPO + CARLReward runs — it is a structural property of the
+      output distribution and cannot be gamed by volume.
+
+    Defaults are chosen so existing fixed-cascade behavior is preserved
+    when ``cascade`` is omitted from ``carl.yaml``.
+    """
+
+    carl_start: int = Field(
+        default=50,
+        ge=0,
+        description="Step at which CARL (Stage B) activates in fixed mode",
+    )
+    warmup_steps: int = Field(
+        default=10,
+        ge=1,
+        description="Linear-warmup window for the CARL weight after carl_start",
+    )
+    gate_mode: Literal["metric", "crystallization"] = Field(
+        default="metric",
+        description=(
+            "Cascade gate mode. 'metric' watches a scalar reward signal; "
+            "'crystallization' watches CoherenceTrace phase transitions "
+            "(recommended for GRPO + CARLReward)."
+        ),
+    )
+    n_crystallizations_required: int = Field(
+        default=3,
+        ge=1,
+        description="Crystallization events required to fire the gate",
+    )
+    crystallization_window: int = Field(
+        default=10,
+        ge=1,
+        description="Rolling window length for crystallization counting",
+    )
+
+
 class ObservationConfig(BaseModel):
     """Configuration for the coherence observation pipeline."""
 
@@ -178,6 +226,24 @@ class TrainingConfig(BaseModel):
     lr_scheduler_type: str = Field(default="cosine")
     bf16: bool = Field(default=True)
     seed: int = Field(default=42)
+    deterministic: bool = Field(
+        default=False,
+        description=(
+            "Pin every randomness source (transformers.set_seed, torch.manual_seed, "
+            "np.random.seed, CUBLAS_WORKSPACE_CONFIG, PYTHONHASHSEED, "
+            "torch.use_deterministic_algorithms) for bit-identical runs. When "
+            "supported by the installed TRL version, also sets full_determinism=True "
+            "on SFTConfig/GRPOConfig."
+        ),
+    )
+    reward_class: Literal["static", "phase_adaptive"] = Field(
+        default="static",
+        description=(
+            "Which CARL reward composite to use. 'static' -> CARLReward with "
+            "constant 50/30/20 weights. 'phase_adaptive' -> PhaseAdaptiveCARLReward "
+            "which shifts weights based on the detected Kuramoto-R phase."
+        ),
+    )
 
     # GRPO-specific
     num_generations: int = Field(
@@ -195,6 +261,14 @@ class TrainingConfig(BaseModel):
     beta: float = Field(default=0.0, ge=0.0, description="KL penalty coefficient")
     cascade_stages: Optional[List[CascadeStage]] = Field(
         default=None, description="GRPO cascade stage definitions"
+    )
+    cascade: CascadeConfig = Field(
+        default_factory=CascadeConfig,
+        description=(
+            "Cascade gating for GRPO + CARL. See CascadeConfig — controls "
+            "carl_start, warmup, gate_mode ('metric' vs 'crystallization'), "
+            "and crystallization window/threshold."
+        ),
     )
     disable_thinking: bool = Field(
         default=True,
@@ -287,6 +361,43 @@ class TrainingConfig(BaseModel):
         if v not in allowed:
             raise ValueError(f"hub_strategy must be one of {allowed}, got {v!r}")
         return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def _auto_select_crystallization_gate(cls, data: Any) -> Any:
+        """Smart default: phase_adaptive implies crystallization gate.
+
+        When ``reward_class == "phase_adaptive"`` AND the user did not
+        explicitly configure ``cascade.gate_mode`` in the YAML/dict, default
+        the gate to ``"crystallization"``. The ``CascadeRewardManager``
+        docstring already describes crystallization gating as "recommended
+        for GRPO + CARLReward runs" — so coupling makes the recommendation
+        operational instead of advisory.
+
+        Lives in a ``mode="before"`` validator (rather than ``mode="after"``)
+        because we need to inspect the RAW input dict to distinguish "user
+        omitted cascade.gate_mode" from "user explicitly asked for metric".
+        By the time an ``after`` validator runs, every field has been
+        defaulted and that distinction is lost.
+        """
+        if not isinstance(data, dict):
+            return data
+        # Explicit cast so pyright knows what we're indexing into.
+        data_dict: dict[str, Any] = data  # type: ignore[assignment]
+        if data_dict.get("reward_class") != "phase_adaptive":
+            return data_dict
+        cascade_raw: Any = data_dict.get("cascade")
+        # Only inject when the cascade key is missing OR it's a dict that
+        # does not explicitly pin gate_mode. If the user passed a
+        # pre-built CascadeConfig instance we respect it verbatim.
+        if cascade_raw is None:
+            data_dict["cascade"] = {"gate_mode": "crystallization"}
+        elif isinstance(cascade_raw, dict) and "gate_mode" not in cascade_raw:
+            # Copy so we don't mutate caller-owned dicts.
+            new_cascade: dict[str, Any] = dict(cascade_raw)  # type: ignore[arg-type]
+            new_cascade["gate_mode"] = "crystallization"
+            data_dict["cascade"] = new_cascade
+        return data_dict
 
     @model_validator(mode="after")
     def validate_cascade_method(self) -> "TrainingConfig":

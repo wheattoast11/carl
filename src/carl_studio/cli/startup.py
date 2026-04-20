@@ -10,6 +10,7 @@ from typing import Callable
 import typer
 
 from carl_studio.console import get_console
+from carl_studio.sticky import DEFAULT_RECLAIM_MAX_AGE_S
 
 from .apps import app
 from .shared import (
@@ -160,9 +161,13 @@ def doctor(
         table.add_row("Queue", "unavailable", "sticky queue unavailable")
     else:
         # A non-None ``oldest_processing_s`` is the signal that at least
-        # one row is in ``processing``. If its age exceeds the default
-        # reclaim threshold (600s) we surface a warning-shaped status so
-        # operators see something is stuck without having to grep logs.
+        # one row is in ``processing``. If its age exceeds the shared
+        # :data:`DEFAULT_RECLAIM_MAX_AGE_S` threshold we surface a warning-
+        # shaped status so operators see something is stuck without having
+        # to grep logs. Keeping this bound to the *same* constant the
+        # daemon's in-loop reclaim uses eliminates the drift that used to
+        # make ``carl doctor`` flag "stuck" for work the daemon had
+        # already reclaimed (R2-005).
         queue_status = "empty" if queue_pending == 0 else "ready"
         queue_detail = (
             "no sticky notes pending"
@@ -171,7 +176,7 @@ def doctor(
         )
         if (
             queue_oldest_processing_s is not None
-            and queue_oldest_processing_s > 600.0
+            and queue_oldest_processing_s > float(DEFAULT_RECLAIM_MAX_AGE_S)
         ):
             queue_status = "stuck"
             queue_detail += (

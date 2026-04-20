@@ -452,6 +452,24 @@ def train(
         "--report-to",
         help="TRL metrics reporter: trackio|wandb|mlflow|tensorboard|none",
     ),
+    reward_class: str | None = typer.Option(
+        None,
+        "--reward-class",
+        help="CARL reward composite: static | phase_adaptive",
+    ),
+    deterministic: bool | None = typer.Option(
+        None,
+        "--deterministic/--no-deterministic",
+        help=(
+            "Pin every randomness source (torch/np/python/cuBLAS/PYTHONHASHSEED) "
+            "for bit-identical runs. Overrides config."
+        ),
+    ),
+    gate_mode: str | None = typer.Option(
+        None,
+        "--gate-mode",
+        help="Cascade gate mode: metric | crystallization",
+    ),
 ) -> None:
     """Start a CARL training run. Use --send-it for full autonomous pipeline."""
     import yaml
@@ -518,6 +536,20 @@ def train(
         raw["trace_dir"] = trace_dir
     if report_to is not None:
         raw["report_to"] = report_to
+    if reward_class is not None:
+        raw["reward_class"] = reward_class
+    if deterministic is not None:
+        raw["deterministic"] = deterministic
+    if gate_mode is not None:
+        # Nested field — stash under cascade.gate_mode without clobbering
+        # other cascade keys the YAML may already carry.
+        cascade_raw = raw.get("cascade")
+        if isinstance(cascade_raw, dict):
+            cascade_raw = dict(cascade_raw)
+            cascade_raw["gate_mode"] = gate_mode
+        else:
+            cascade_raw = {"gate_mode": gate_mode}
+        raw["cascade"] = cascade_raw
 
     if "base_model" not in raw:
         get_console().error("--model or base_model in config required")

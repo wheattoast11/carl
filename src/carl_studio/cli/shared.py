@@ -6,10 +6,10 @@ import importlib.util
 import json
 import re
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from carl_core import now_iso
 from pydantic import ValidationError
 import typer
 
@@ -17,6 +17,11 @@ from carl_studio import __version__
 from carl_studio.console import CampConsole, get_console
 
 from .apps import app
+
+# deprecated: backward-compat alias for sibling cli/*.py modules and any
+# external consumer that still imports `_now_iso` from this module. Prefer
+# `from carl_core import now_iso` going forward. Slated for removal in v0.7.
+_now_iso = now_iso
 
 
 def _camp_header() -> None:
@@ -185,10 +190,6 @@ _START_DEPENDENCY_GROUPS: dict[str, tuple[str, ...]] = {
     "tui": ("textual",),
     "diagnose": ("anthropic",),
 }
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _safe_json_object(value: Any) -> dict[str, Any]:
@@ -465,7 +466,7 @@ def _persist_training_run(training_config: Any, run: Any, mode: str) -> None:
     """Best-effort persistence for train/pipeline runs in the local ledger."""
     from carl_studio.db import LocalDB
 
-    now = _now_iso()
+    now = now_iso()
     db = LocalDB()
     existing = db.get_run(run.id)
     row = {

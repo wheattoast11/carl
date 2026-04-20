@@ -21,15 +21,43 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal, cast
 
+from carl_core import ISO8601_Z, now_iso
 from pydantic import BaseModel, Field
 
-from carl_studio.db import LocalDB
+from carl_studio.db import DEFAULT_RETENTION_DAYS, LocalDB
 
 StickyStatus = Literal["queued", "processing", "done", "archived"]
 
+# Explicit public surface — ``DEFAULT_RETENTION_DAYS`` is re-exported from
+# :mod:`carl_studio.db` so callers that think in sticky-note semantics have
+# a single import point. Pyright's ``reportPrivateImportUsage`` flags
+# implicit re-exports, so we list it here explicitly.
+__all__ = [
+    "DEFAULT_RECLAIM_MAX_AGE_S",
+    "DEFAULT_RETENTION_DAYS",
+    "StickyNote",
+    "StickyQueue",
+    "StickyStatus",
+]
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+# ---------------------------------------------------------------------------
+# Module-level knobs — hoisted so ``carl doctor``, ``carl queue reclaim``,
+# the heartbeat daemon's in-loop maintenance tick, and ``carl db maintenance``
+# all read the same source of truth. Drift between these sites was the
+# original motivating bug: the daemon would reclaim at 10 minutes while
+# ``carl doctor`` flagged "stuck" at a different threshold, producing false
+# positives (R2-005).
+#
+# ``DEFAULT_RETENTION_DAYS`` is owned by ``carl_studio.db`` (to avoid a
+# ``sticky → db → sticky`` circular import) and re-exported here so
+# consumers that already think in terms of sticky-note retention have a
+# single place to reach for the constant.
+# ---------------------------------------------------------------------------
+
+#: Default minimum age (seconds) before a ``processing`` sticky-note row is
+#: eligible for reclaim. Consumed by :meth:`StickyQueue.reclaim_stale`, the
+#: ``carl queue reclaim`` CLI, and the ``carl doctor`` stuck-row heuristic.
+DEFAULT_RECLAIM_MAX_AGE_S: int = 600
 
 
 def _gen_id() -> str:
@@ -46,7 +74,7 @@ class StickyNote(BaseModel):
     session_id: str | None = None
     jit_context: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
-    created_at: str = Field(default_factory=_now_iso)
+    created_at: str = Field(default_factory=now_iso)
     started_at: str | None = None
     completed_at: str | None = None
 
@@ -63,7 +91,12 @@ class StickyQueue:
         with self._db.connect() as conn:
             yield conn
 
-    def maintenance(self, *, retention_days: int = 30, vacuum: bool = False) -> dict[str, Any]:
+    def maintenance(
+        self,
+        *,
+        retention_days: int = DEFAULT_RETENTION_DAYS,
+        vacuum: bool = False,
+    ) -> dict[str, Any]:
         """Delegate to ``LocalDB.maintenance`` without leaking ``_db`` to callers."""
         return self._db.maintenance(retention_days=retention_days, vacuum=vacuum)
 
@@ -102,7 +135,7 @@ class StickyQueue:
             if not row:
                 return None
             note_id = cast(str, row[0])
-            now = _now_iso()
+            now = now_iso()
             cursor = conn.execute(
                 "UPDATE sticky_notes SET status = 'processing', started_at = ? "
                 "WHERE id = ? AND status = 'queued'",
@@ -123,7 +156,7 @@ class StickyQueue:
             conn.execute(
                 "UPDATE sticky_notes SET status = 'done', result = ?, completed_at = ? "
                 "WHERE id = ?",
-                (payload, _now_iso(), note_id),
+                (payload, now_iso(), note_id),
             )
             conn.commit()
 
@@ -163,7 +196,7 @@ class StickyQueue:
             conn.commit()
             return cursor.rowcount > 0
 
-    def reclaim_stale(self, *, max_age_seconds: int = 600) -> int:
+    def reclaim_stale(self, *, max_age_seconds: int = DEFAULT_RECLAIM_MAX_AGE_S) -> int:
         """Flip notes stuck in ``processing`` longer than ``max_age_seconds``
         back to ``queued``.
 
@@ -201,9 +234,9 @@ class StickyQueue:
                 "StickyQueue.reclaim_stale: max_age_seconds must be non-negative",
             )
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
-        cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+        cutoff_str = cutoff.strftime(ISO8601_Z)
         # ``<=`` not ``<`` — because ``started_at`` has one-second resolution
-        # (see ``_now_iso``) a row claimed in the current second would have
+        # (see ``carl_core.timeutil.now_iso``) a row claimed in the current second would have
         # ``started_at == cutoff`` when ``max_age_seconds`` is ``0``, and a
         # strict ``<`` would leave it behind. ``<=`` makes "reclaim now"
         # actually reclaim, and is harmless on the common path because a

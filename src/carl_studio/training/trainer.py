@@ -35,6 +35,70 @@ CARL_CHECKPOINT_FILE = ".carl_checkpoint.pt"
 
 
 # ---------------------------------------------------------------------------
+# Determinism
+# ---------------------------------------------------------------------------
+
+
+def _apply_determinism(cfg: TrainingConfig) -> None:
+    """Pin every randomness source for bit-identical runs under cfg.deterministic.
+
+    Always calls ``transformers.set_seed(cfg.seed)`` when transformers is
+    importable — that covers Python ``random``, NumPy, Torch, CUDA,
+    and TRL's own ``seed`` threading. ``cfg.seed`` alone only makes it as
+    far as TRL's ``seed`` argument, which is insufficient for downstream
+    libraries (tokenizer shufflers, torch CUDA kernels, dataset samplers).
+
+    When ``cfg.deterministic=True``, additionally:
+      - pin ``CUBLAS_WORKSPACE_CONFIG`` and ``PYTHONHASHSEED`` (env-level
+        determinism that must be set before cuBLAS init and interpreter
+        start, respectively)
+      - call ``torch.manual_seed`` / ``np.random.seed`` explicitly for
+        belt-and-suspenders coverage when transformers.set_seed missed
+        a sub-library
+      - enable ``torch.use_deterministic_algorithms(True, warn_only=True)``
+
+    Silently no-ops when transformers is not installed (training is an
+    optional extra). NumPy and torch failures are contained so an
+    optional-extra absence never aborts the training pipeline.
+    """
+    import os
+
+    try:
+        from transformers import set_seed as _set_seed
+    except ImportError:
+        # transformers is the 'training' optional extra. When it is not
+        # installed there is no TRL trainer to configure — _apply_determinism
+        # is just a no-op ahead of the ImportError that the caller will hit.
+        return
+
+    _set_seed(int(cfg.seed))
+    if not cfg.deterministic:
+        return
+
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    os.environ.setdefault("PYTHONHASHSEED", str(int(cfg.seed)))
+
+    try:
+        import torch  # type: ignore[import-not-found]
+
+        torch.manual_seed(int(cfg.seed))
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    except ImportError:
+        pass
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("determinism: torch configuration failed: %s", exc)
+
+    try:
+        import numpy as np
+
+        np.random.seed(int(cfg.seed))
+    except ImportError:
+        pass
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("determinism: numpy seeding failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Compute target -> backend mapping
 # ---------------------------------------------------------------------------
 
@@ -876,34 +940,8 @@ class CARLTrainer:
         output_dir = f"carl-sft-{self.run.id}"
         self._announce_existing_checkpoint(output_dir)
 
-        training_args = SFTConfig(
-            output_dir=output_dir,
-            push_to_hub=cfg.push_to_hub,
-            hub_model_id=cfg.output_repo,
-            hub_strategy=cfg.hub_strategy,
-            hub_token=hf_token,
-            hub_private_repo=cfg.hub_private,
-            num_train_epochs=cfg.num_train_epochs,
-            max_steps=cfg.max_steps,
-            per_device_train_batch_size=cfg.per_device_train_batch_size,
-            gradient_accumulation_steps=cfg.gradient_accumulation_steps,
-            learning_rate=cfg.learning_rate,
-            max_length=cfg.max_length,
-            warmup_ratio=cfg.warmup_ratio,
-            weight_decay=cfg.weight_decay,
-            max_grad_norm=cfg.max_grad_norm,
-            lr_scheduler_type=cfg.lr_scheduler_type,
-            bf16=cfg.bf16,
-            seed=cfg.seed,
-            gradient_checkpointing=True,
-            optim="adamw_8bit",
-            logging_steps=1,
-            logging_first_step=True,
-            save_strategy="steps",
-            save_steps=50,
-            save_total_limit=4,
-            report_to=cfg.report_to,
-            run_name=cfg.run_name,
+        training_args = self._build_sft_training_args(
+            SFTConfig=SFTConfig, output_dir=output_dir, hf_token=hf_token
         )
 
         trainer = SFTTrainer(
@@ -993,36 +1031,8 @@ class CARLTrainer:
         output_dir = f"carl-grpo-{self.run.id}"
         self._announce_existing_checkpoint(output_dir)
 
-        training_args = GRPOConfig(
-            output_dir=output_dir,
-            push_to_hub=cfg.push_to_hub,
-            hub_model_id=cfg.output_repo,
-            hub_strategy=cfg.hub_strategy,
-            hub_token=hf_token,
-            hub_private_repo=cfg.hub_private,
-            num_train_epochs=cfg.num_train_epochs,
-            max_steps=cfg.max_steps,
-            per_device_train_batch_size=cfg.per_device_train_batch_size,
-            gradient_accumulation_steps=cfg.gradient_accumulation_steps,
-            learning_rate=cfg.learning_rate,
-            warmup_ratio=cfg.warmup_ratio,
-            weight_decay=cfg.weight_decay,
-            max_grad_norm=cfg.max_grad_norm,
-            lr_scheduler_type=cfg.lr_scheduler_type,
-            bf16=cfg.bf16,
-            seed=cfg.seed,
-            num_generations=cfg.num_generations,
-            max_completion_length=cfg.max_completion_length,
-            beta=cfg.beta,
-            gradient_checkpointing=True,
-            optim="adamw_8bit",
-            logging_steps=1,
-            logging_first_step=True,
-            save_strategy="steps",
-            save_steps=25,
-            save_total_limit=8,
-            report_to=cfg.report_to,
-            run_name=cfg.run_name,
+        training_args = self._build_grpo_training_args(
+            GRPOConfig=GRPOConfig, output_dir=output_dir, hf_token=hf_token
         )
 
         trainer = GRPOTrainer(
@@ -1065,6 +1075,120 @@ class CARLTrainer:
             trainer.push_to_hub()
 
     # ------------------------------------------------------------------
+    # TRL training-args builders
+    # ------------------------------------------------------------------
+
+    def _build_sft_training_args(
+        self,
+        *,
+        SFTConfig: Any,
+        output_dir: str,
+        hf_token: str | None,
+    ) -> Any:
+        """Build the SFTConfig for TRL SFT training.
+
+        Applies determinism pinning at the top so the TRL seed argument
+        and the process-wide randomness sources (torch, numpy, python,
+        cuBLAS, PYTHONHASHSEED) all agree. Also passes
+        ``full_determinism=cfg.deterministic`` when the installed TRL
+        version supports the argument — older TRLs will raise
+        ``TypeError`` which we swallow and fall back.
+        """
+        _apply_determinism(self.config)
+        cfg = self.config
+
+        base_kwargs: dict[str, Any] = dict(
+            output_dir=output_dir,
+            push_to_hub=cfg.push_to_hub,
+            hub_model_id=cfg.output_repo,
+            hub_strategy=cfg.hub_strategy,
+            hub_token=hf_token,
+            hub_private_repo=cfg.hub_private,
+            num_train_epochs=cfg.num_train_epochs,
+            max_steps=cfg.max_steps,
+            per_device_train_batch_size=cfg.per_device_train_batch_size,
+            gradient_accumulation_steps=cfg.gradient_accumulation_steps,
+            learning_rate=cfg.learning_rate,
+            max_length=cfg.max_length,
+            warmup_ratio=cfg.warmup_ratio,
+            weight_decay=cfg.weight_decay,
+            max_grad_norm=cfg.max_grad_norm,
+            lr_scheduler_type=cfg.lr_scheduler_type,
+            bf16=cfg.bf16,
+            seed=cfg.seed,
+            gradient_checkpointing=True,
+            optim="adamw_8bit",
+            logging_steps=1,
+            logging_first_step=True,
+            save_strategy="steps",
+            save_steps=50,
+            save_total_limit=4,
+            report_to=cfg.report_to,
+            run_name=cfg.run_name,
+        )
+        if cfg.deterministic:
+            try:
+                return SFTConfig(**base_kwargs, full_determinism=True)
+            except TypeError:
+                logger.info(
+                    "TRL SFTConfig does not accept full_determinism; "
+                    "relying on _apply_determinism() for bit-identical runs."
+                )
+        return SFTConfig(**base_kwargs)
+
+    def _build_grpo_training_args(
+        self,
+        *,
+        GRPOConfig: Any,
+        output_dir: str,
+        hf_token: str | None,
+    ) -> Any:
+        """Build the GRPOConfig for TRL GRPO training. See _build_sft_training_args."""
+        _apply_determinism(self.config)
+        cfg = self.config
+
+        base_kwargs: dict[str, Any] = dict(
+            output_dir=output_dir,
+            push_to_hub=cfg.push_to_hub,
+            hub_model_id=cfg.output_repo,
+            hub_strategy=cfg.hub_strategy,
+            hub_token=hf_token,
+            hub_private_repo=cfg.hub_private,
+            num_train_epochs=cfg.num_train_epochs,
+            max_steps=cfg.max_steps,
+            per_device_train_batch_size=cfg.per_device_train_batch_size,
+            gradient_accumulation_steps=cfg.gradient_accumulation_steps,
+            learning_rate=cfg.learning_rate,
+            warmup_ratio=cfg.warmup_ratio,
+            weight_decay=cfg.weight_decay,
+            max_grad_norm=cfg.max_grad_norm,
+            lr_scheduler_type=cfg.lr_scheduler_type,
+            bf16=cfg.bf16,
+            seed=cfg.seed,
+            num_generations=cfg.num_generations,
+            max_completion_length=cfg.max_completion_length,
+            beta=cfg.beta,
+            gradient_checkpointing=True,
+            optim="adamw_8bit",
+            logging_steps=1,
+            logging_first_step=True,
+            save_strategy="steps",
+            save_steps=25,
+            save_total_limit=8,
+            report_to=cfg.report_to,
+            run_name=cfg.run_name,
+        )
+        if cfg.deterministic:
+            try:
+                return GRPOConfig(**base_kwargs, full_determinism=True)
+            except TypeError:
+                logger.info(
+                    "TRL GRPOConfig does not accept full_determinism; "
+                    "relying on _apply_determinism() for bit-identical runs."
+                )
+        return GRPOConfig(**base_kwargs)
+
+    # ------------------------------------------------------------------
     # Reward construction
     # ------------------------------------------------------------------
 
@@ -1086,14 +1210,20 @@ class CARLTrainer:
         from carl_studio.training.cascade import CascadeRewardManager
         from carl_studio.training.rewards.composite import make_carl_reward
 
-        # Resolve CARL activation step from cascade config or default
-        carl_start = 50
+        # Resolve cascade config. If the user supplied cascade_stages they
+        # override the default carl_start — preserving the pre-B3 behavior
+        # for runs that pin stage lengths by steps rather than by gate.
+        cas_cfg = self.config.cascade
+        carl_start = cas_cfg.carl_start
         if self.config.cascade_stages and len(self.config.cascade_stages) >= 2:
             carl_start = sum(s.steps for s in self.config.cascade_stages[:1])
 
         cascade = CascadeRewardManager(
             carl_start=carl_start,
-            warmup_steps=10,
+            warmup_steps=cas_cfg.warmup_steps,
+            gate_mode=cas_cfg.gate_mode,
+            n_crystallizations_required=cas_cfg.n_crystallizations_required,
+            crystallization_window=cas_cfg.crystallization_window,
         )
         self._cascade_manager = cascade
 
@@ -1106,6 +1236,7 @@ class CARLTrainer:
             tokenizer=tokenizer,
             vocab_size=getattr(tokenizer, "vocab_size", 128000),
             max_length=self.config.max_length,
+            reward_class=self.config.reward_class,
         )
 
         # (reward_fn, active_in_stages, weight)

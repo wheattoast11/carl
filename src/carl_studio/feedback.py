@@ -21,12 +21,11 @@ so ``carl train --from-queue`` can pick them up in a later session.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
-
+from carl_core import now_iso
 from carl_core.interaction import ActionType, InteractionChain
+from pydantic import BaseModel, ConfigDict, Field
 
 from carl_studio.db import LocalDB
 from carl_studio.sticky import StickyNote
@@ -40,10 +39,6 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 class EvalBaseline(BaseModel):
     """Pinned reference point for future eval comparisons."""
 
@@ -52,7 +47,7 @@ class EvalBaseline(BaseModel):
     run_id: str
     checkpoint: str
     metrics: dict[str, float] = Field(default_factory=dict)
-    recorded_at: str = Field(default_factory=_now_iso)
+    recorded_at: str = Field(default_factory=now_iso)
 
 
 ProposalType = Literal["curriculum", "reward_tweak", "checkpoint_rollback"]
@@ -70,7 +65,7 @@ class TrainingProposal(BaseModel):
     proposal_type: ProposalType = "curriculum"
     suggested_config: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
-    created_at: str = Field(default_factory=_now_iso)
+    created_at: str = Field(default_factory=now_iso)
 
 
 # ---------------------------------------------------------------------------

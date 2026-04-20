@@ -48,14 +48,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import signal
 import sys
 from pathlib import Path
 from typing import Any
 
-from carl_studio.db import LocalDB
+from carl_studio.db import DEFAULT_RETENTION_DAYS, LocalDB
+from carl_studio.envutil import env_float
 from carl_studio.heartbeat.connection import HeartbeatConnection
+from carl_studio.heartbeat.loop import (
+    DEFAULT_MAINTENANCE_INTERVAL_CYCLES,
+)
 from carl_studio.logging_config import configure_logging
 from carl_studio.sticky import StickyQueue
 
@@ -68,28 +71,18 @@ _POLL_INTERVAL_ENV = "CARL_HEARTBEAT_POLL_INTERVAL_S"
 def _resolve_poll_interval() -> float:
     """Resolve the loop poll interval from env with a safe default.
 
-    Invalid values fall back to the default — the daemon must not crash
-    on a mis-typed env var. Non-positive values are also rejected because
-    :class:`HeartbeatLoop` requires ``poll_interval_s > 0``.
+    Invalid values fall back to the default — the daemon must not crash on a
+    mis-typed env var. :class:`HeartbeatLoop` requires
+    ``poll_interval_s > 0`` (and finite), so after the shared parse we
+    reject ``<= 0`` and NaN explicitly. The ``env_float`` helper owns the
+    parse/warn/fallback chain; this shim only adds the finite-positive
+    validation that the helper deliberately leaves to callers.
     """
-    raw = os.environ.get(_POLL_INTERVAL_ENV, "").strip()
-    if not raw:
-        return _DEFAULT_POLL_INTERVAL_S
-    try:
-        val = float(raw)
-    except ValueError:
-        _LOG.warning(
-            "invalid %s=%r; falling back to default %.1fs",
-            _POLL_INTERVAL_ENV,
-            raw,
-            _DEFAULT_POLL_INTERVAL_S,
-        )
-        return _DEFAULT_POLL_INTERVAL_S
+    val = env_float(_POLL_INTERVAL_ENV, default=_DEFAULT_POLL_INTERVAL_S)
     if val <= 0.0 or val != val:  # NaN check via self-inequality
         _LOG.warning(
-            "invalid %s=%r (must be > 0); falling back to default %.1fs",
+            "invalid %s (must be > 0); falling back to default %.1fs",
             _POLL_INTERVAL_ENV,
-            raw,
             _DEFAULT_POLL_INTERVAL_S,
         )
         return _DEFAULT_POLL_INTERVAL_S
@@ -231,7 +224,11 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _print_help() -> None:
-    """Emit a short help screen. Kept stdlib-only; no Typer."""
+    """Emit a short help screen. Kept stdlib-only; no Typer.
+
+    Defaults are interpolated from the hoisted constants so the CLI help
+    and the actual runtime can never disagree (R2-005).
+    """
     sys.stdout.write(
         "carl-heartbeat — background worker daemon\n"
         "\n"
@@ -243,9 +240,9 @@ def _print_help() -> None:
         "\n"
         "Environment:\n"
         "  CARL_HEARTBEAT_SHUTDOWN_TIMEOUT_S  (default 30)\n"
-        "  CARL_HEARTBEAT_POLL_INTERVAL_S     (default 5)\n"
-        "  CARL_MAINTENANCE_INTERVAL_CYCLES   (default 100, 0 disables)\n"
-        "  CARL_STICKY_RETENTION_DAYS         (default 30)\n"
+        f"  CARL_HEARTBEAT_POLL_INTERVAL_S     (default {_DEFAULT_POLL_INTERVAL_S:g})\n"
+        f"  CARL_MAINTENANCE_INTERVAL_CYCLES   (default {DEFAULT_MAINTENANCE_INTERVAL_CYCLES}, 0 disables)\n"
+        f"  CARL_STICKY_RETENTION_DAYS         (default {DEFAULT_RETENTION_DAYS})\n"
         "  CARL_LOG_LEVEL / CARL_LOG_JSON     (see carl_studio.logging_config)\n",
     )
 

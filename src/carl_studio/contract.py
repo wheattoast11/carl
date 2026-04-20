@@ -12,11 +12,11 @@ import hashlib
 import json
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 from uuid import uuid4
 
+from carl_core import now_iso
 from carl_core.errors import CARLError
 from pydantic import BaseModel, Field
 
@@ -35,10 +35,6 @@ class ContractStatus(str, Enum):
     WITNESSED = "witnessed"
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 class ServiceContract(BaseModel):
     """A service agreement between parties."""
 
@@ -46,7 +42,7 @@ class ServiceContract(BaseModel):
     parties: list[str] = Field(default_factory=list)
     terms_hash: str = ""
     terms_url: str = ""
-    created_at: str = Field(default_factory=_now_iso)
+    created_at: str = Field(default_factory=now_iso)
     signed_at: str | None = None
     witness_hash: str | None = None
     chain: str | None = None
@@ -119,7 +115,7 @@ class ContractWitness:
             pass  # consent module not available — proceed
 
         artifacts = artifacts or {}
-        ts = _now_iso()
+        ts = now_iso()
         parties_hash = hashlib.sha256(
             json.dumps(sorted(contract.parties)).encode()
         ).hexdigest()

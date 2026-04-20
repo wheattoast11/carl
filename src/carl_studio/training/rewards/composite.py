@@ -341,6 +341,7 @@ def make_carl_reward(
     vocab_size: int = 128000,
     active_after_step: int = 0,
     max_length: int = 512,
+    reward_class: str = "static",
 ) -> Any:
     """Factory returning a TRL-compatible CARL reward function.
 
@@ -365,10 +366,23 @@ def make_carl_reward(
         vocab_size: Vocabulary size for entropy normalization.
         active_after_step: Return 0.0 before this step (cascade integration).
         max_length: Max token length for CARL forward pass.
+        reward_class: ``"static"`` -> CARLReward (constant 50/30/20 weights).
+            ``"phase_adaptive"`` -> PhaseAdaptiveCARLReward (weights shift
+            with detected Kuramoto-R phase). Unknown values raise
+            ``ValueError`` immediately — this is surfaced from YAML so a
+            typo should fail fast with a clear message.
     """
     import torch
 
-    carl = CARLReward()
+    if reward_class == "static":
+        carl: CARLReward = CARLReward()
+    elif reward_class == "phase_adaptive":
+        carl = PhaseAdaptiveCARLReward()
+    else:
+        raise ValueError(
+            "reward_class must be 'static' or 'phase_adaptive', got "
+            f"{reward_class!r}"
+        )
     _step_counter = [0]
     _last_metrics: list[Any] = [None]
     _last_components: list[Any] = [None]

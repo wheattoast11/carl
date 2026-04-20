@@ -12,11 +12,11 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Generator
 
+from carl_core import now_iso
 from pydantic import BaseModel, Field
 
 _CARL_DIR = Path.home() / ".carl"
@@ -43,10 +43,6 @@ CREATE TABLE IF NOT EXISTS carlitos (
 """
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 class CarlitoStatus(str, Enum):
     """Lifecycle status of a carlito."""
 
@@ -69,8 +65,8 @@ class CarlitoSpec(BaseModel):
     training_config_snapshot: dict[str, Any] = Field(default_factory=dict)
     status: CarlitoStatus = CarlitoStatus.INCUBATING
     curriculum_model_id: str = ""
-    created_at: str = Field(default_factory=_now_iso)
-    updated_at: str = Field(default_factory=_now_iso)
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: str = Field(default_factory=now_iso)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -165,7 +161,7 @@ class CarlitoRegistry:
         with self._connect() as conn:
             cursor = conn.execute(
                 "UPDATE carlitos SET status = ?, updated_at = ? WHERE name = ?",
-                (CarlitoStatus.DORMANT.value, _now_iso(), name),
+                (CarlitoStatus.DORMANT.value, now_iso(), name),
             )
         return cursor.rowcount > 0
 
@@ -243,7 +239,7 @@ class CarlitoSpawner:
         spec_updated = spec.model_copy(
             update={
                 "status": CarlitoStatus.DEPLOYED,
-                "updated_at": _now_iso(),
+                "updated_at": now_iso(),
             }
         )
         if self._registry is not None:

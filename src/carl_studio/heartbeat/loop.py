@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import threading
 import time
 from collections.abc import Callable
@@ -37,7 +36,8 @@ from typing import Any
 
 from carl_core.interaction import ActionType, InteractionChain
 
-from carl_studio.db import LocalDB
+from carl_studio.db import DEFAULT_RETENTION_DAYS, LocalDB
+from carl_studio.envutil import env_float, env_int
 from carl_studio.heartbeat.phases import ORDERED_PHASES, HeartbeatPhase
 from carl_studio.sticky import StickyNote, StickyQueue
 
@@ -45,16 +45,23 @@ StatusCallback = Callable[["str | dict[str, Any]"], None]
 
 _LOG = logging.getLogger("carl.heartbeat.loop")
 
-# Env override for periodic maintenance cadence. A value of 0 disables the
-# in-loop maintenance tick entirely — useful for tests and for deployments
-# that run ``carl db maintenance`` out of band. Values < 0 are clamped to 0.
+# Env overrides for periodic maintenance cadence. A cycle value of 0 disables
+# the in-loop maintenance tick entirely — useful for tests and for deployments
+# that run ``carl db maintenance`` out of band. Values < 0 are clamped to 0
+# by :func:`carl_studio.envutil.env_int` / :func:`env_float`.
 _MAINTENANCE_INTERVAL_ENV = "CARL_MAINTENANCE_INTERVAL_CYCLES"
 _MAINTENANCE_SECONDS_ENV = "CARL_MAINTENANCE_INTERVAL_SECONDS"
-_DEFAULT_MAINTENANCE_INTERVAL_CYCLES = 100
-# Idle-daemon safety net: even when the queue has been empty for hours, run
-# maintenance at least once per hour so WAL truncation and retention sweep
-# still happen. Cycle-trigger alone would starve a quiet deployment.
-_DEFAULT_MAINTENANCE_INTERVAL_SECONDS = 3600.0
+_RETENTION_DAYS_ENV = "CARL_STICKY_RETENTION_DAYS"
+
+#: Default completed cycles between in-loop maintenance ticks. Exported as a
+#: module-public constant so tests, docs, and downstream tools can reference
+#: the same literal the daemon does.
+DEFAULT_MAINTENANCE_INTERVAL_CYCLES: int = 100
+
+#: Idle-daemon safety net — even when the queue has been empty for hours,
+#: run maintenance at least once per hour so WAL truncation and retention
+#: sweep still happen. Cycle-trigger alone would starve a quiet deployment.
+DEFAULT_MAINTENANCE_INTERVAL_SECONDS: float = 3600.0
 
 
 def _noop_status(_msg: str | dict[str, Any]) -> None:
@@ -121,49 +128,21 @@ class HeartbeatLoop:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._start_lock = threading.Lock()
-        self._maintenance_interval_cycles = self._resolve_maintenance_interval(
-            maintenance_interval_cycles,
+        # Maintenance cadence: arg → env → default. ``envutil.env_int`` /
+        # ``env_float`` handle the parse + warning + fallback chain so this
+        # site collapses to a single call. ``minimum=0`` enforces the
+        # "disable with 0, never accept negatives" contract.
+        self._maintenance_interval_cycles = env_int(
+            _MAINTENANCE_INTERVAL_ENV,
+            default=DEFAULT_MAINTENANCE_INTERVAL_CYCLES,
+            explicit=maintenance_interval_cycles,
+            minimum=0,
         )
-        self._maintenance_interval_seconds = self._resolve_maintenance_seconds()
-
-    @staticmethod
-    def _resolve_maintenance_interval(explicit: int | None) -> int:
-        """Resolve the maintenance cadence from arg → env → default.
-
-        Negative/zero values disable the in-loop maintenance tick — callers
-        that want to run maintenance out of band (``carl db maintenance``)
-        should set ``CARL_MAINTENANCE_INTERVAL_CYCLES=0``.
-        """
-        if explicit is not None:
-            return max(0, int(explicit))
-        raw = os.environ.get(_MAINTENANCE_INTERVAL_ENV, "").strip()
-        if raw:
-            try:
-                return max(0, int(raw))
-            except ValueError:
-                _LOG.warning(
-                    "invalid %s=%r; falling back to default %d",
-                    _MAINTENANCE_INTERVAL_ENV,
-                    raw,
-                    _DEFAULT_MAINTENANCE_INTERVAL_CYCLES,
-                )
-        return _DEFAULT_MAINTENANCE_INTERVAL_CYCLES
-
-    @staticmethod
-    def _resolve_maintenance_seconds() -> float:
-        """Resolve the time-based maintenance cadence from env → default."""
-        raw = os.environ.get(_MAINTENANCE_SECONDS_ENV, "").strip()
-        if raw:
-            try:
-                return max(0.0, float(raw))
-            except ValueError:
-                _LOG.warning(
-                    "invalid %s=%r; falling back to default %.0fs",
-                    _MAINTENANCE_SECONDS_ENV,
-                    raw,
-                    _DEFAULT_MAINTENANCE_INTERVAL_SECONDS,
-                )
-        return _DEFAULT_MAINTENANCE_INTERVAL_SECONDS
+        self._maintenance_interval_seconds = env_float(
+            _MAINTENANCE_SECONDS_ENV,
+            default=DEFAULT_MAINTENANCE_INTERVAL_SECONDS,
+            minimum=0.0,
+        )
 
     # -- public lifecycle -------------------------------------------------
 
@@ -280,15 +259,14 @@ class HeartbeatLoop:
         the loop must keep running.
         """
         # Retention days come from the env so operators can lengthen or
-        # shorten retention without editing code. Invalid/missing values
-        # fall back to 30.
-        raw = os.environ.get("CARL_STICKY_RETENTION_DAYS", "").strip()
-        try:
-            retention_days = int(raw) if raw else 30
-        except ValueError:
-            retention_days = 30
-        if retention_days < 0:
-            retention_days = 0
+        # shorten retention without editing code. ``env_int`` handles the
+        # "arg → env → default with warn-on-parse" chain and the ``minimum``
+        # clamp replaces the hand-rolled ``< 0 → 0`` adjustment.
+        retention_days = env_int(
+            _RETENTION_DAYS_ENV,
+            default=DEFAULT_RETENTION_DAYS,
+            minimum=0,
+        )
         try:
             reclaimed = queue.reclaim_stale()
             stats = queue.maintenance(retention_days=retention_days)

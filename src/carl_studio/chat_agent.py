@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
+from carl_studio.agent_state import CostLedger, SessionState
+
 if TYPE_CHECKING:  # pragma: no cover — typing only
     from carl_core.memory import MemoryItem, MemoryLayer, MemoryStore
     from carl_studio.constitution import Constitution, ConstitutionalRule
@@ -693,7 +695,13 @@ class CARLAgent:
         self._api_key_source = api_key_source
         self._frame = frame
         self._workdir = str(Path(workdir).resolve())
-        self._messages: list[dict[str, Any]] = []
+        # Composed collaborators (Phase-1 extraction — see agent_state.py).
+        # Message history + turn counter + session theme live on SessionState.
+        # Cost / token accumulation lives on CostLedger. Legacy attribute
+        # access (``self._messages`` / ``self._turn_count`` / ``self._total_*``)
+        # is preserved via ``@property`` shims further down in this class.
+        self._session = SessionState()
+        self._cost = CostLedger()
         self._knowledge: list[dict[str, Any]] = []  # {text, source, words}
         self._token_count = 0
 
@@ -719,12 +727,8 @@ class CARLAgent:
         # flag to print a visible warning instead of silently starting fresh.
         self._last_load_quarantined: bool = False
 
-        # Cost tracking
-        self._total_cost_usd = 0.0
+        # Cost tracking — budget cap lives here; totals on self._cost.
         self._max_budget_usd = max_budget_usd  # 0 = unlimited
-        self._total_input_tokens = 0
-        self._total_output_tokens = 0
-        self._turn_count = 0
 
         # Permission hooks
         self._pre_tool_use = pre_tool_use
@@ -736,12 +740,11 @@ class CARLAgent:
         # primer without persistently mutating the base prompt.
         self._system_prompt_extension: str = ""
 
-        # JRN-009 — persisted across save/load. Tracks the lane the user
-        # started in so analytics and future prompts can distinguish
-        # ``move:explore`` from ``move:train`` sessions. Default ``""``
-        # means "not yet classified" — the CLI sets this on the first
-        # bootstrap turn; programmatic callers can set it explicitly.
-        self._session_theme: str = ""
+        # JRN-009 — persisted across save/load via SessionState.session_theme.
+        # Tracks the lane the user started in so analytics and future prompts
+        # can distinguish ``move:explore`` from ``move:train`` sessions.
+        # Default ``""`` means "not yet classified" — the CLI sets this on the
+        # first bootstrap turn; programmatic callers can set it explicitly.
 
         # Session
         self._session_id = session_id
@@ -849,6 +852,63 @@ class CARLAgent:
         }
 
     # ------------------------------------------------------------------
+    # Backward-compat shims — legacy tests + downstream code reach into
+    # these private attributes directly. They now delegate to the composed
+    # SessionState / CostLedger collaborators. Setters keep test snippets
+    # like ``agent._turn_count = 7`` and ``agent._messages = [...]`` working
+    # without churn. In-place list mutation (``agent._messages.append(...)``)
+    # works via the getter because it returns the underlying list.
+    # ------------------------------------------------------------------
+
+    @property
+    def _messages(self) -> list[dict[str, Any]]:
+        return self._session.messages
+
+    @_messages.setter
+    def _messages(self, value: list[dict[str, Any]]) -> None:
+        self._session.messages = list(value)
+
+    @property
+    def _turn_count(self) -> int:
+        return self._session.turn_count
+
+    @_turn_count.setter
+    def _turn_count(self, value: int) -> None:
+        self._session.turn_count = int(value)
+
+    @property
+    def _session_theme(self) -> str:
+        return self._session.session_theme
+
+    @_session_theme.setter
+    def _session_theme(self, value: str) -> None:
+        self._session.session_theme = str(value or "")
+
+    @property
+    def _total_cost_usd(self) -> float:
+        return self._cost.total_cost_usd
+
+    @_total_cost_usd.setter
+    def _total_cost_usd(self, value: float) -> None:
+        self._cost.total_cost_usd = float(value)
+
+    @property
+    def _total_input_tokens(self) -> int:
+        return self._cost.total_input_tokens
+
+    @_total_input_tokens.setter
+    def _total_input_tokens(self, value: int) -> None:
+        self._cost.total_input_tokens = int(value)
+
+    @property
+    def _total_output_tokens(self) -> int:
+        return self._cost.total_output_tokens
+
+    @_total_output_tokens.setter
+    def _total_output_tokens(self, value: int) -> None:
+        self._cost.total_output_tokens = int(value)
+
+    # ------------------------------------------------------------------
     # Chat loop
     # ------------------------------------------------------------------
 
@@ -881,8 +941,8 @@ class CARLAgent:
         # recall pass — this is the crystallize-in-place pattern.
         self._maybe_auto_remember(user_input)
 
-        self._messages.append({"role": "user", "content": augmented_input})
-        self._turn_count += 1
+        self._session.append_message({"role": "user", "content": augmented_input})
+        self._session.increment_turn()
 
         while True:
             # ------- Budget pre-check (upper-bound ceiling) -----------------
@@ -890,11 +950,12 @@ class CARLAgent:
                 est = _estimate_turn_upper_bound_cost(
                     self._model, _BUDGET_PRECHECK_MAX_OUTPUT_TOKENS,
                 )
-                projected = self._total_cost_usd + est
+                current_cost = self._cost.total_cost_usd
+                projected = current_cost + est
                 if projected > self._max_budget_usd:
                     msg = (
                         f"Budget pre-check blocked turn: projected "
-                        f"${projected:.4f} (current ${self._total_cost_usd:.4f} + "
+                        f"${projected:.4f} (current ${current_cost:.4f} + "
                         f"estimated ${est:.4f}) exceeds cap ${self._max_budget_usd:.4f}"
                     )
                     code = "carl.budget"
@@ -905,7 +966,7 @@ class CARLAgent:
                         logger.warning(
                             "BudgetError: %s",
                             BudgetError(msg, context={
-                                "current": self._total_cost_usd,
+                                "current": current_cost,
                                 "estimated": est,
                                 "cap": self._max_budget_usd,
                             }),
@@ -914,12 +975,12 @@ class CARLAgent:
                         pass
                     yield AgentEvent(kind="error", content=msg, code=code)
                     return
-                if self._total_cost_usd >= self._max_budget_usd:
+                if current_cost >= self._max_budget_usd:
                     # Hard floor — we already spent the whole budget.
                     yield AgentEvent(
                         kind="error",
                         content=(
-                            f"Budget exceeded: ${self._total_cost_usd:.4f} "
+                            f"Budget exceeded: ${current_cost:.4f} "
                             f">= ${self._max_budget_usd:.2f}"
                         ),
                         code="carl.budget",
@@ -1018,9 +1079,11 @@ class CARLAgent:
             usage = getattr(response, "usage", None)
             if usage is not None:
                 turn_cost = _compute_turn_cost(usage, self._model)
-                self._total_cost_usd += turn_cost
-                self._total_input_tokens += getattr(usage, "input_tokens", 0) or 0
-                self._total_output_tokens += getattr(usage, "output_tokens", 0) or 0
+                self._cost.add_turn(
+                    turn_cost,
+                    getattr(usage, "input_tokens", 0) or 0,
+                    getattr(usage, "output_tokens", 0) or 0,
+                )
 
             self._token_count = (
                 getattr(usage, "input_tokens", self._token_count)
@@ -1033,7 +1096,7 @@ class CARLAgent:
 
             # pause_turn: server-side tool iteration limit
             if getattr(response, "stop_reason", None) == "pause_turn":
-                self._messages = [
+                self._session.messages = [
                     {"role": "user", "content": user_input},
                     {"role": "assistant", "content": self._content_to_dicts(response.content)},
                 ]
@@ -1065,15 +1128,15 @@ class CARLAgent:
                     )
 
             if not tool_use_blocks:
-                self._messages.append({"role": "assistant", "content": assistant_content})
+                self._session.append_message({"role": "assistant", "content": assistant_content})
                 # A turn that made no tool calls resets the all-denied counter:
                 # the model exited the reflexive retry loop on its own.
                 self._consecutive_all_denied = 0
-                yield AgentEvent(kind="done", content=f"${self._total_cost_usd:.4f}")
+                yield AgentEvent(kind="done", content=f"${self._cost.total_cost_usd:.4f}")
                 return
 
             # Execute ALL tool calls with permission hooks
-            self._messages.append({"role": "assistant", "content": assistant_content})
+            self._session.append_message({"role": "assistant", "content": assistant_content})
 
             tool_results: list[dict[str, Any]] = []
             # Track whether this turn's tool calls were all denied. When 100%
@@ -1159,7 +1222,7 @@ class CARLAgent:
                             code="carl.hook_failed",
                         )
 
-            self._messages.append({"role": "user", "content": tool_results})
+            self._session.append_message({"role": "user", "content": tool_results})
 
             # ------- Terminal all-denied guard ------------------------------
             # When every tool in this turn was blocked by the permission hook,
@@ -1218,7 +1281,7 @@ class CARLAgent:
                 return
 
             if getattr(response, "stop_reason", None) == "end_turn":
-                yield AgentEvent(kind="done", content=f"${self._total_cost_usd:.4f}")
+                yield AgentEvent(kind="done", content=f"${self._cost.total_cost_usd:.4f}")
                 return
 
     # ------------------------------------------------------------------
@@ -1378,9 +1441,10 @@ class CARLAgent:
 
     def _recent_turns_digest(self, *, max_turns: int) -> str:
         """Compact textual digest of the last ``max_turns`` messages."""
-        if not self._messages:
+        messages = self._session.messages
+        if not messages:
             return ""
-        window = self._messages[-max_turns:]
+        window = messages[-max_turns:]
         lines: list[str] = []
         for msg in window:
             role = str(msg.get("role", "?"))
@@ -1421,9 +1485,11 @@ class CARLAgent:
         usage = getattr(response, "usage", None)
         if usage is not None:
             try:
-                self._total_cost_usd += _compute_turn_cost(usage, self._model)
-                self._total_input_tokens += getattr(usage, "input_tokens", 0) or 0
-                self._total_output_tokens += getattr(usage, "output_tokens", 0) or 0
+                self._cost.add_turn(
+                    _compute_turn_cost(usage, self._model),
+                    getattr(usage, "input_tokens", 0) or 0,
+                    getattr(usage, "output_tokens", 0) or 0,
+                )
             except Exception as exc:
                 logger.debug("one-shot cost attribution failed: %s", exc)
 
@@ -1502,9 +1568,11 @@ class CARLAgent:
         if usage is not None:
             try:
                 cost = _compute_turn_cost(usage, self._model)
-                self._total_cost_usd += cost
-                self._total_input_tokens += getattr(usage, "input_tokens", 0) or 0
-                self._total_output_tokens += getattr(usage, "output_tokens", 0) or 0
+                self._cost.add_turn(
+                    cost,
+                    getattr(usage, "input_tokens", 0) or 0,
+                    getattr(usage, "output_tokens", 0) or 0,
+                )
             except Exception as exc:
                 logger.debug("cost attribution failed: %s", exc)
             return
@@ -1513,8 +1581,11 @@ class CARLAgent:
         if partial_text_parts:
             output_tokens_est = max(1, sum(len(p) for p in partial_text_parts) // 4)
             _input_rate, output_rate = _MODEL_PRICING.get(self._model, _DEFAULT_PRICING)
-            self._total_cost_usd += output_tokens_est * output_rate / 1_000_000
-            self._total_output_tokens += output_tokens_est
+            self._cost.add_turn(
+                output_tokens_est * output_rate / 1_000_000,
+                0,
+                output_tokens_est,
+            )
 
     def _persist_partial_turn(self, response: Any, partial_text_parts: list[str]) -> None:
         """Append whatever the assistant emitted so session.save captures it."""
@@ -1523,7 +1594,7 @@ class CARLAgent:
             try:
                 dicts = self._content_to_dicts(response.content)
                 if dicts:
-                    self._messages.append({"role": "assistant", "content": dicts})
+                    self._session.append_message({"role": "assistant", "content": dicts})
                     return
             except Exception as exc:
                 logger.debug("persist partial: content_to_dicts failed: %s", exc)
@@ -1531,7 +1602,7 @@ class CARLAgent:
         # Fall back to reconstructed text from the delta stream.
         text = "".join(partial_text_parts).strip()
         if text:
-            self._messages.append({
+            self._session.append_message({
                 "role": "assistant",
                 "content": [{"type": "text", "text": text}],
             })
@@ -1571,8 +1642,9 @@ class CARLAgent:
         # Session theme (JRN-009) — only surfaces in the prompt when the
         # user picked a keyed move; free-form and unset sessions get no
         # extra steering here (they're driven by the primer extension).
-        if self._session_theme and self._session_theme.startswith("move:"):
-            parts.append(f"SESSION THEME: {self._session_theme}")
+        theme = self._session.session_theme
+        if theme and theme.startswith("move:"):
+            parts.append(f"SESSION THEME: {theme}")
             parts.append("")
 
         # Project context (cached at construction time)
@@ -1588,13 +1660,13 @@ class CARLAgent:
 
         # Greeting / proactive agency for new sessions
         # REV-004: gate on turn_count, not message history length.
-        # ``_messages`` is repopulated on resume, but ``_turn_count`` is also
+        # ``messages`` is repopulated on resume, but ``turn_count`` is also
         # restored from the saved session. We're inside the chat() loop
-        # AFTER ``self._turn_count += 1``, so:
-        #   * fresh session, first call   -> _turn_count == 1  (greet)
-        #   * fresh session, second call  -> _turn_count == 2  (no greet)
-        #   * resumed session, first call -> _turn_count >= 2  (no greet)
-        is_new_session = self._turn_count <= 1
+        # AFTER ``self._session.increment_turn()``, so:
+        #   * fresh session, first call   -> turn_count == 1  (greet)
+        #   * fresh session, second call  -> turn_count == 2  (no greet)
+        #   * resumed session, first call -> turn_count >= 2  (no greet)
+        is_new_session = self._session.is_fresh()
         if is_new_session:
             parts.append("SESSION START BEHAVIOR:")
             parts.append(self._GREETING_INSTRUCTIONS)
@@ -2093,11 +2165,12 @@ class CARLAgent:
 
     def _compact(self) -> None:
         """Summarize older messages to stay within context bounds."""
-        if len(self._messages) <= _KEEP_RECENT:
+        messages = self._session.messages
+        if len(messages) <= _KEEP_RECENT:
             return
 
-        old = self._messages[:-_KEEP_RECENT]
-        recent = self._messages[-_KEEP_RECENT:]
+        old = messages[:-_KEEP_RECENT]
+        recent = messages[-_KEEP_RECENT:]
 
         summary_parts: list[str] = []
         for msg in old:
@@ -2115,7 +2188,7 @@ class CARLAgent:
 
         summary = "Session summary (compacted):\n" + "\n".join(summary_parts[-20:])
 
-        self._messages = [
+        self._session.messages = [
             {"role": "user", "content": summary},
             {"role": "assistant", "content": "Understood. Continuing from the session summary."},
             *recent,
@@ -2141,14 +2214,16 @@ class CARLAgent:
             "title": title,
             "model": self._model,
             "workdir": self._workdir,
-            "messages": self._messages,
+            "messages": self._session.messages,
             "knowledge": self._knowledge,
             "frame": self._frame.model_dump() if self._frame and hasattr(self._frame, "model_dump") else None,
-            "total_cost_usd": self._total_cost_usd,
-            "total_input_tokens": self._total_input_tokens,
-            "total_output_tokens": self._total_output_tokens,
-            "turn_count": self._turn_count,
-            "session_theme": self._session_theme,
+            # Cost ledger — persist unrounded so resume is exact. ``as_dict``
+            # rounds for human-readable surfacing (see ``cost_summary``).
+            "total_cost_usd": self._cost.total_cost_usd,
+            "total_input_tokens": self._cost.total_input_tokens,
+            "total_output_tokens": self._cost.total_output_tokens,
+            "turn_count": self._session.turn_count,
+            "session_theme": self._session.session_theme,
         }
 
         s = store or SessionStore()
@@ -2183,14 +2258,15 @@ class CARLAgent:
             return False
 
         self._session_id = state.get("id", session_id)
-        self._messages = state.get("messages", [])
-        self._knowledge = state.get("knowledge", [])
-        self._total_cost_usd = state.get("total_cost_usd", 0.0)
-        self._total_input_tokens = state.get("total_input_tokens", 0)
-        self._total_output_tokens = state.get("total_output_tokens", 0)
-        self._turn_count = state.get("turn_count", 0)
+        # Rehydrate composed collaborators from persisted state.
+        self._session.messages = list(state.get("messages", []))
+        self._session.turn_count = int(state.get("turn_count", 0) or 0)
         # JRN-009 — restore session theme; default to "" for legacy sessions.
-        self._session_theme = state.get("session_theme", "") or ""
+        self._session.session_theme = state.get("session_theme", "") or ""
+        self._cost.total_cost_usd = float(state.get("total_cost_usd", 0.0) or 0.0)
+        self._cost.total_input_tokens = int(state.get("total_input_tokens", 0) or 0)
+        self._cost.total_output_tokens = int(state.get("total_output_tokens", 0) or 0)
+        self._knowledge = state.get("knowledge", [])
 
         # A resumed session can carry more chunks than the current cap (the
         # owner may have downsized max_knowledge_chunks) — trim aggressively
@@ -2232,21 +2308,22 @@ class CARLAgent:
         theme_str = str(theme or "").strip()
         if theme_str and theme_str not in self._VALID_SESSION_THEMES:
             logger.debug("Unrecognized session_theme=%r (accepted anyway)", theme_str)
-        self._session_theme = theme_str
+        self._session.session_theme = theme_str
 
     @property
     def session_theme(self) -> str:
         """Return the currently recorded session theme (or ``""``)."""
-        return self._session_theme
+        return self._session.session_theme
 
     @property
     def cost_summary(self) -> dict[str, Any]:
         """Current cost and token usage."""
-        return {
-            "total_cost_usd": round(self._total_cost_usd, 6),
-            "total_input_tokens": self._total_input_tokens,
-            "total_output_tokens": self._total_output_tokens,
-            "turn_count": self._turn_count,
-            "model": self._model,
-            "budget_remaining_usd": round(self._max_budget_usd - self._total_cost_usd, 6) if self._max_budget_usd > 0 else None,
-        }
+        summary: dict[str, Any] = dict(self._cost.as_dict())
+        summary["turn_count"] = self._session.turn_count
+        summary["model"] = self._model
+        summary["budget_remaining_usd"] = (
+            round(self._max_budget_usd - self._cost.total_cost_usd, 6)
+            if self._max_budget_usd > 0
+            else None
+        )
+        return summary

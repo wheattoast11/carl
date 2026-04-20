@@ -20,7 +20,7 @@ from typing import Annotated
 import typer
 
 from carl_studio.console import get_console
-from carl_studio.db import LocalDB
+from carl_studio.db import DEFAULT_RETENTION_DAYS, LocalDB
 
 from .apps import app
 
@@ -40,7 +40,7 @@ def db_maintenance(
             "--retention-days",
             help="Delete archived sticky notes older than this many days (0 disables)",
         ),
-    ] = 30,
+    ] = DEFAULT_RETENTION_DAYS,
     vacuum: Annotated[
         bool,
         typer.Option(

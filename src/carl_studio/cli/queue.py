@@ -20,7 +20,7 @@ import typer
 
 from carl_studio.console import get_console
 from carl_studio.db import LocalDB
-from carl_studio.sticky import StickyQueue, StickyStatus
+from carl_studio.sticky import DEFAULT_RECLAIM_MAX_AGE_S, StickyQueue, StickyStatus
 
 
 queue_app = typer.Typer(
@@ -149,7 +149,7 @@ def queue_reclaim(
             "--max-age",
             help="Minimum age (seconds) before a processing row is reclaimed",
         ),
-    ] = 600,
+    ] = DEFAULT_RECLAIM_MAX_AGE_S,
 ) -> None:
     """Flip notes stuck in ``processing`` > ``--max-age`` back to ``queued``.
 
