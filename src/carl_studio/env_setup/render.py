@@ -58,9 +58,30 @@ def render_training_config_yaml(state: EnvState) -> str:
         lines.append("# GRPO-specific:")
         lines.append("num_generations: 8")
         lines.append("beta: 0.04")
-        lines.append("reward_class: composite  # 50% coherence + 30% format + 20% discontinuity")
+        reward_class = _reward_class_for(state.reward)
+        lines.append(f"reward_class: {reward_class}")
+
+    if state.method == "cascade" and state.cascade_stages is not None:
+        lines.append("")
+        lines.append(f"cascade_stages: {state.cascade_stages}")
+
+    if state.eval_gate and state.eval_gate != "none":
+        lines.append("")
+        lines.append(f"eval_gate: {state.eval_gate}")
 
     return "\n".join(lines) + "\n"
+
+
+def _reward_class_for(reward: str | None) -> str:
+    """Map the 4-value question answer to a concrete reward_class string."""
+    if reward == "phase_adaptive":
+        return "phase_adaptive  # Kuramoto-R-weighted CARL composite"
+    if reward == "custom":
+        return "custom  # TODO: plug in your own reward fn"
+    if reward == "none":
+        return "null  # TODO: none → pure supervised loss, method should be sft"
+    # default / "static" → the canonical composite
+    return "composite  # 50% coherence + 30% format + 20% discontinuity"
 
 
 def render_summary_dict(state: EnvState) -> dict[str, Any]:

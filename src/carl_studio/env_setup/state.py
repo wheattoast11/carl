@@ -45,6 +45,19 @@ class EnvState(BaseModel):
         default=None,
         description="HF model id; when None, renderer uses CARLSettings.default_model",
     )
+    # v0.14 expanded question set
+    reward: str | None = Field(
+        default=None,
+        description="'static' | 'phase_adaptive' | 'custom' | 'none' — GRPO reward shape",
+    )
+    cascade_stages: int | None = Field(
+        default=None,
+        description="Number of cascade stages (1-3) when method=cascade",
+    )
+    eval_gate: str | None = Field(
+        default=None,
+        description="'none' | 'metric' | 'crystallization' — eval admission policy",
+    )
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # ------------------------------------------------------------------
@@ -72,7 +85,15 @@ class EnvState(BaseModel):
 
     @property
     def is_complete(self) -> bool:
-        """True when enough fields are populated to render a valid config."""
+        """True when enough fields are populated to render a valid config.
+
+        Gate shape:
+        * infer mode → just mode required.
+        * train/both → mode + method + dataset + compute. The expanded
+          v0.14 fields (reward, cascade_stages, eval_gate) have
+          sensible defaults in the renderer, so they're not required
+          for completeness — users can skip them.
+        """
         if self.mode in (None, ""):
             return False
         if self.mode == "infer":

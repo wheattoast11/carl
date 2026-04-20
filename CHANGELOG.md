@@ -2,6 +2,58 @@
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-04-20
+
+Tool-dispatch API extension + carl-env expansion. Clears the
+tool_dispatcher prerequisite that was blocking the full chat_agent
+tool-loop extraction and fleshes out carl-env with the 3 remaining
+questions from the original design.
+
+### Added
+
+- **`ToolDispatcher.execute_block()`** — full per-block lifecycle
+  (pre-hook → schema validation → dispatch → post-hook → outcome).
+  Returns `(ToolOutcome, list[ToolEvent])`. Consolidates what was
+  previously inlined in `chat_agent.py`'s tool-use loop, giving
+  the chat agent a single delegation point. The extraction of the
+  loop body itself is v0.15 scope.
+- **`ToolOutcome` + `ToolEvent`** — frozen dataclasses capturing
+  the outcome state ({tool_use_id, name, input, result, is_error,
+  outcome, duration_ms}) and agent-visible events ({kind, name,
+  content, code}).
+- **`ToolPermission` enum** — migrated from chat_agent.py to
+  tool_dispatcher.py so the permission contract lives with the
+  dispatcher that consumes it. chat_agent keeps its existing
+  import for back-compat.
+- **carl env expanded questions** (Q5/Q6/Q7):
+  - `reward` — GRPO reward shape (static CARL composite /
+    phase_adaptive / custom / none). Only asked when method is
+    grpo or cascade.
+  - `cascade_stages` — 2 (SFT→GRPO) or 3 (SFT→DPO→GRPO). Only
+    asked when method is cascade.
+  - `eval_gate` — none / metric / crystallization. BITC-aware
+    admission policy.
+- **`EnvState.reward`, `EnvState.cascade_stages`, `EnvState.eval_gate`**
+  fields. Renderer emits them when set; omitted when
+  `eval_gate == "none"` so the generated yaml stays clean.
+
+### Verification
+
+- Tests: 3088 pass / 0 fail (+18 since v0.13.0 — 8 execute_block,
+  10 expanded env). All v0.13 surfaces unchanged. ToolDispatcher
+  regression tests untouched; new execute_block tests are additive.
+- Build: 0.14.0 wheel clean.
+
+### Deferred to v0.15+
+
+- Full tool-loop extraction from `chat_agent.py` (now unblocked —
+  the execute_block API landed in v0.14; the loop body can migrate
+  to a single for-loop calling execute_block + recording outcomes).
+  Deferred because the delegate call fan-out into yields + chain
+  recording is load-bearing and wants a dedicated review session.
+- Marketplace search / discovery endpoints (carl.camp side).
+- HVM/py2bend integration (separate major effort).
+
 ## [0.13.0] — 2026-04-20
 
 Agent-marketplace activation. carl.camp backend endpoints are live

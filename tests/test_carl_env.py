@@ -90,6 +90,9 @@ class TestNextQuestion:
         assert q is None
 
     def test_progresses_through_registry(self) -> None:
+        """MVP 4 core questions answered → is_complete + flow continues
+        through the v0.14 expanded questions (reward skipped for sft,
+        eval_gate still prompts)."""
         s = EnvState(mode="train")
         q = next_question(s)
         assert q is not None
@@ -100,8 +103,11 @@ class TestNextQuestion:
         q3 = next_question(s)
         assert q3 is not None and q3.id == "compute"
         s = q3.handle(s, "local")
-        assert next_question(s) is None
+        # Core fields complete
         assert s.is_complete
+        # But expanded questions still advance (eval_gate for sft)
+        q4 = next_question(s)
+        assert q4 is not None and q4.id == "eval_gate"
 
 
 # ---------------------------------------------------------------------------
@@ -222,3 +228,135 @@ class TestEnvCli:
         payload = json.loads(result.output)
         assert payload["mode"] == "infer"
         assert payload["complete"] is True
+
+
+# ---------------------------------------------------------------------------
+# v0.14 expanded question set — reward / cascade / eval
+# ---------------------------------------------------------------------------
+
+
+class TestExpandedQuestions:
+    def test_reward_question_appears_for_grpo(self) -> None:
+        s = EnvState(
+            mode="train", method="grpo", dataset="hf/x", compute="local"
+        )
+        # is_complete is True (4-Q MVP fields), but next_question should
+        # still surface reward before the flow ends
+        q = next_question(s)
+        assert q is not None
+        assert q.id == "reward"
+
+    def test_reward_question_skipped_for_sft(self) -> None:
+        s = EnvState(
+            mode="train", method="sft", dataset="hf/x", compute="local"
+        )
+        # SFT doesn't use reward shaping — should skip directly to eval
+        q = next_question(s)
+        assert q is not None
+        assert q.id != "reward"
+        assert q.id == "eval_gate"
+
+    def test_cascade_question_only_for_cascade_method(self) -> None:
+        s = EnvState(
+            mode="train",
+            method="cascade",
+            dataset="hf/x",
+            compute="local",
+            reward="static",
+        )
+        q = next_question(s)
+        assert q is not None
+        assert q.id == "cascade_stages"
+
+    def test_cascade_stages_stored_as_int(self) -> None:
+        s = EnvState(
+            mode="train",
+            method="cascade",
+            dataset="hf/x",
+            compute="local",
+            reward="static",
+        )
+        q = next_question(s)
+        assert q is not None
+        s = q.handle(s, "2")  # choice index "1" maps to value "2"
+        assert s.cascade_stages == 2
+
+    def test_eval_gate_choices(self) -> None:
+        s = EnvState(
+            mode="train", method="sft", dataset="hf/x", compute="local"
+        )
+        q = next_question(s)
+        assert q is not None and q.id == "eval_gate"
+        s = q.handle(s, "crystallization")
+        assert s.eval_gate == "crystallization"
+
+    def test_full_train_flow_walks_all_questions(self) -> None:
+        """From empty → all 7 questions answered for a cascade run."""
+        s = EnvState()
+        answers = [
+            ("mode", "train"),
+            ("method", "cascade"),
+            ("dataset", "hf/tool-use"),
+            ("compute", "local"),
+            ("reward", "phase_adaptive"),
+            ("cascade_stages", "3"),  # choice index "2" maps to value "3"
+            ("eval_gate", "crystallization"),
+        ]
+        for expected_id, answer in answers:
+            q = next_question(s)
+            assert q is not None
+            assert q.id == expected_id
+            s = q.handle(s, answer)
+        # Now the flow is exhausted
+        assert next_question(s) is None
+        assert s.is_complete
+        assert s.reward == "phase_adaptive"
+        assert s.cascade_stages == 3
+        assert s.eval_gate == "crystallization"
+
+
+class TestExpandedRender:
+    def test_phase_adaptive_reward_renders(self) -> None:
+        s = EnvState(
+            mode="train",
+            method="grpo",
+            dataset="hf/x",
+            compute="local",
+            reward="phase_adaptive",
+        )
+        yaml_text = render_training_config_yaml(s)
+        assert "phase_adaptive" in yaml_text
+
+    def test_cascade_stages_render_in_yaml(self) -> None:
+        s = EnvState(
+            mode="train",
+            method="cascade",
+            dataset="hf/x",
+            compute="local",
+            reward="static",
+            cascade_stages=3,
+        )
+        yaml_text = render_training_config_yaml(s)
+        assert "cascade_stages: 3" in yaml_text
+
+    def test_eval_gate_renders_when_not_none(self) -> None:
+        s = EnvState(
+            mode="train",
+            method="sft",
+            dataset="hf/x",
+            compute="local",
+            eval_gate="crystallization",
+        )
+        yaml_text = render_training_config_yaml(s)
+        assert "eval_gate: crystallization" in yaml_text
+
+    def test_eval_gate_omitted_when_none(self) -> None:
+        s = EnvState(
+            mode="train",
+            method="sft",
+            dataset="hf/x",
+            compute="local",
+            eval_gate="none",
+        )
+        yaml_text = render_training_config_yaml(s)
+        assert "eval_gate" not in yaml_text

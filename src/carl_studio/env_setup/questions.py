@@ -153,6 +153,94 @@ def _handle_compute(state: EnvState, raw: str, choices: list[Choice]) -> EnvStat
 
 
 # ---------------------------------------------------------------------------
+# Q5 — reward shape (only when method is grpo or cascade)
+# ---------------------------------------------------------------------------
+
+
+def _q_reward(state: EnvState) -> Question | None:
+    if state.reward or state.mode == "infer":
+        return None
+    if state.method not in ("grpo", "cascade"):
+        return None
+    return Question(
+        id="reward",
+        prompt="GRPO reward shape?",
+        explainer=(
+            "Static is the canonical CARL composite (coherence + format + "
+            "discontinuity). Phase-adaptive shifts weights by Kuramoto R. "
+            "Custom leaves it for you to plug in later."
+        ),
+        choices=[
+            Choice("1", "static", "Static CARL composite (50/30/20)"),
+            Choice("2", "phase_adaptive", "Phase-adaptive (shift weights by R)"),
+            Choice("3", "custom", "Custom reward fn (I'll plug it in later)"),
+            Choice("4", "none", "No reward shaping (pure supervised loss)"),
+        ],
+    )
+
+
+def _handle_reward(state: EnvState, raw: str, choices: list[Choice]) -> EnvState:
+    value = _resolve_choice(raw, choices)
+    return state.model_copy(update={"reward": value})
+
+
+# ---------------------------------------------------------------------------
+# Q6 — cascade stages (only when method is cascade)
+# ---------------------------------------------------------------------------
+
+
+def _q_cascade(state: EnvState) -> Question | None:
+    if state.cascade_stages is not None or state.method != "cascade":
+        return None
+    return Question(
+        id="cascade_stages",
+        prompt="How many cascade stages?",
+        explainer=(
+            "2 = SFT → GRPO. 3 = SFT → DPO → GRPO. More stages = deeper "
+            "curriculum but longer runtime."
+        ),
+        choices=[
+            Choice("1", "2", "2 stages: SFT → GRPO"),
+            Choice("2", "3", "3 stages: SFT → DPO → GRPO"),
+        ],
+    )
+
+
+def _handle_cascade(state: EnvState, raw: str, choices: list[Choice]) -> EnvState:
+    value_str = _resolve_choice(raw, choices)
+    return state.model_copy(update={"cascade_stages": int(value_str)})
+
+
+# ---------------------------------------------------------------------------
+# Q7 — eval gate
+# ---------------------------------------------------------------------------
+
+
+def _q_eval(state: EnvState) -> Question | None:
+    if state.eval_gate or state.mode == "infer":
+        return None
+    return Question(
+        id="eval_gate",
+        prompt="Eval admission policy?",
+        explainer=(
+            "none = no eval gate (run anyway). metric = gate on a numeric "
+            "threshold (loss, accuracy). crystallization = gate on BITC "
+            "crystallization events (v0.11+ primitive; empirical)."
+        ),
+        choices=[
+            Choice("1", "none", "None — always admit"),
+            Choice("2", "metric", "Metric threshold (loss/accuracy)"),
+            Choice("3", "crystallization", "BITC crystallization events"),
+        ],
+    )
+
+
+def _handle_eval(state: EnvState, raw: str, choices: list[Choice]) -> EnvState:
+    value = _resolve_choice(raw, choices)
+    return state.model_copy(update={"eval_gate": value})
+
+
+# ---------------------------------------------------------------------------
 # Resolution + registry
 # ---------------------------------------------------------------------------
 
@@ -175,6 +263,9 @@ _HANDLERS: dict[str, Callable[[EnvState, str, list[Choice]], EnvState]] = {
     "method": _handle_method,
     "dataset": _handle_dataset,
     "compute": _handle_compute,
+    "reward": _handle_reward,
+    "cascade_stages": _handle_cascade,
+    "eval_gate": _handle_eval,
 }
 
 
@@ -186,6 +277,9 @@ QUESTION_REGISTRY: list[Callable[[EnvState], Question | None]] = [
     _q_method,
     _q_dataset,
     _q_compute,
+    _q_reward,
+    _q_cascade,
+    _q_eval,
 ]
 
 
