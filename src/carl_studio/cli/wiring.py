@@ -226,6 +226,17 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Wire carl env (v0.12)
+# ---------------------------------------------------------------------------
+try:
+    from .env import env_cmd
+
+    app.command(name="env")(env_cmd)
+except ImportError:
+    _make_stub(app, "env", doc="Env wizard requires the full carl-studio.")
+
+
+# ---------------------------------------------------------------------------
 # Wire marketplace sub-app + publish command
 # ---------------------------------------------------------------------------
 try:

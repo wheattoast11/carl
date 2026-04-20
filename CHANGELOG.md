@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-04-20
+
+Decomposition + wizard release. First cut of the long-deferred
+chat_agent.py god-class decomposition, plus the `carl env`
+progressive-disclosure wizard MVP.
+
+### Added
+
+- **`carl env`** — new top-level CLI command. 4-question wizard
+  (mode · method · dataset · compute) that builds a `carl.yaml`
+  training config. Resume-capable via `~/.carl/last_env_state.json`.
+  Flags: `--resume`, `--auto`, `--json`, `--dry-run`, `--output`.
+  Functor-composed questions so answer order doesn't matter when
+  fields are disjoint.
+- **`src/carl_studio/env_setup/`** new package — `state.py`
+  (`EnvState` Pydantic model), `questions.py` (registry +
+  `next_question`), `render.py` (YAML emission).
+
+### Changed
+
+- **`SessionStore` extracted** from `chat_agent.py` to a new
+  `src/carl_studio/sessions.py` module. First cut of the
+  multi-session god-class decomposition (was 3x deferred → auto-P1
+  per Anti-Deferral Protocol). `chat_agent.py` re-imports the
+  extracted names for back-compat; all existing callers continue to
+  work unchanged. `chat_agent.py` shrinks ~170 LOC.
+
+### Deferred (remaining god-class decomp scope)
+
+- Tool-dispatch loop extraction (`chat_agent.py:1280-1475`) →
+  candidate for v0.13 once `tool_dispatcher.py` gains the needed
+  API. Coherence probe lives here.
+- One-shot inference path (`_one_shot_text`, `_build_system_prompt`)
+  → v0.13.
+- Remaining `CARLAgent` class (~1700 LOC) → expected to settle
+  naturally as tool-dispatch and prompt-building extract.
+
+### Verification
+
+- Tests: 3060 pass / 0 fail (+19 carl-env; 3041 → 3060). All v0.11
+  surfaces unchanged. SessionStore tests pass via both the new
+  import path (`carl_studio.sessions`) and the legacy path
+  (`carl_studio.chat_agent`).
+- Build: 0.12.0 wheel clean.
+
 ## [0.11.0] — 2026-04-20
 
 Fano-followthrough release. Closes the two P1-P2 findings that v0.10.0
