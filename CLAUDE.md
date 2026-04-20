@@ -169,9 +169,45 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - `settings.py` defaults: `default_model=""`, `naming_prefix=""` — user must configure.
 - CLI `wiring.py` stubs print install hints when extras are missing (not silent `pass`).
 
+## Documentation header convention (as of 2026-04-20 · v0.8.0)
+
+All new or meaningfully-updated docs under `docs/` and `paper/` carry a
+YAML frontmatter stamp so readers and auditors can tell the provenance
+at a glance. Keep it minimal; do not add fields that would decay.
+
+```markdown
+---
+last_updated: 2026-04-20
+author: Tej Desai + Claude Opus 4.7 (1M context)
+applies_to: v0.8.0
+---
+```
+
+- `last_updated` — ISO date of the most recent meaningful edit (not
+  typo fixes). Update whenever you touch a section that changes meaning.
+- `author` — who did the edit. If co-authored with an agent, list both.
+- `applies_to` — the release the doc reflects. Bump on each tagged
+  release when the doc's claims are still accurate; if the doc goes
+  stale, either fix it or add a `stale_since` field noting the delta.
+
+**Scope.** Apply to `docs/*.md`. Do NOT apply to:
+- `CHANGELOG.md` — git history is the source of truth.
+- `README.md` — lives at the repo root with its own metadata block.
+- `paper/*.md` — papers carry full scholarly frontmatter (`authors`,
+  `date`, `keywords`, `license`) which covers the same provenance
+  surface. Don't double-stamp.
+- In-tree code comments — docstrings and module comments are not docs.
+
+The goal is provenance for operational docs that describe shipped
+behavior, not narration on every file.
+
+When a doc falls more than one minor version behind current, treat it
+as a review candidate: either update and re-stamp, or delete.
+
 ## Keep an eye on
 
 - Preserve optional dependency boundaries.
 - Preserve import-time lightness.
 - Keep docs current and minimal.
 - If docs disagree with code, fix the docs or explicitly note the mismatch.
+- Apply the YAML frontmatter stamp to every doc you create or substantially edit.

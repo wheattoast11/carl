@@ -1,3 +1,9 @@
+---
+last_updated: 2026-04-20
+author: Tej Desai + Claude Opus 4.7 (1M context)
+applies_to: v0.8.0
+---
+
 # CARL Methods Series — Index
 
 The CARL paper series is a flat directory of markdown drafts under

@@ -36,11 +36,6 @@ class _DifferentShape(BaseModel):
     extra: str = Field(default="x")
 
 
-@pytest.fixture
-def tmp_db(tmp_path: Path) -> LocalDB:
-    return LocalDB(db_path=tmp_path / "carl.db")
-
-
 # ---------------------------------------------------------------------------
 # Construction + key derivation
 # ---------------------------------------------------------------------------

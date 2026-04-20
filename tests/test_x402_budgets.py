@@ -25,11 +25,6 @@ from carl_studio.x402 import SpendTracker, X402Client, X402Config
 
 
 @pytest.fixture
-def tmp_db(tmp_path: Path) -> LocalDB:
-    return LocalDB(db_path=tmp_path / "carl.db")
-
-
-@pytest.fixture
 def frozen_clock():
     """Mutable clock — tests advance ``clock.value`` directly."""
 

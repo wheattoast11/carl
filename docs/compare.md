@@ -1,3 +1,9 @@
+---
+last_updated: 2026-04-18
+author: Tej Desai
+applies_to: v0.8.0
+---
+
 # carl-studio vs. the field
 
 Honest feature matrix as of v0.4.0. carl-studio is the **agentic workbench

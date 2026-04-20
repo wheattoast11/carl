@@ -40,13 +40,18 @@ and a hint to install the ``metrics`` extra.
 from __future__ import annotations
 
 from threading import Lock
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from carl_core.errors import CARLError
 
 if TYPE_CHECKING:
     from prometheus_client import CollectorRegistry
     from prometheus_client.registry import Collector
+
+
+# Error code raised when the ``[metrics]`` extra isn't installed — hoisted
+# so callers can filter on a single authoritative constant.
+METRICS_UNAVAILABLE_CODE: Final = "carl.metrics.unavailable"
 
 
 class _LazyPrometheus:
@@ -244,7 +249,7 @@ def public_registry() -> CollectorRegistry:
     except ImportError as exc:
         raise CARLError(
             _METRICS_UNAVAILABLE_MSG,
-            code="carl.metrics.unavailable",
+            code=METRICS_UNAVAILABLE_CODE,
             cause=exc,
         ) from exc
 

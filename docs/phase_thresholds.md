@@ -1,3 +1,9 @@
+---
+last_updated: 2026-04-19
+author: Tej Desai
+applies_to: v0.8.0
+---
+
 # Kuramoto-R phase thresholds
 
 PhaseAdaptiveCARLReward classifies the instantaneous training phase from the

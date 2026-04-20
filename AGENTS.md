@@ -201,3 +201,8 @@ Every operation is an **Interaction Net Cell**. Every tool invocation is an obse
 - `AGENTS.md` is the execution playbook for coding agents.
 - `CLAUDE.md` should stay concise, current, and code-truthful.
 - `README.md` is user-facing; change it only for user-visible behavior, setup, or workflow changes.
+- Docs under `docs/` and `paper/` carry the YAML frontmatter stamp
+  (`last_updated`, `author`, `applies_to`). Full spec in CLAUDE.md
+  under "Documentation header convention" (added v0.8.0). Apply
+  whenever you create or substantially edit a doc; skip for
+  `CHANGELOG.md` (git is the source of truth) and `README.md`.

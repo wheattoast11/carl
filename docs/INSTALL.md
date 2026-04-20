@@ -1,3 +1,9 @@
+---
+last_updated: 2026-04-19
+author: Tej Desai
+applies_to: v0.8.0
+---
+
 # Install
 
 `carl-studio` ships a minimal core + a matrix of optional extras. Pick what you need.

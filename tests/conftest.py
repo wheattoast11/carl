@@ -181,3 +181,16 @@ def _grant_all_consent_by_default(monkeypatch):
         lambda self, key: True,
     )
     yield
+
+
+@pytest.fixture
+def tmp_db(tmp_path: Path):
+    """Isolated LocalDB backed by a temp SQLite file.
+
+    Shared across modules that need a fresh DB per test (v0.8.0+:
+    test_config_registry, test_x402_budgets, and anything else that
+    exercises the ConfigRegistry/SpendTracker persistence path).
+    """
+    from carl_studio.db import LocalDB
+
+    return LocalDB(db_path=tmp_path / "carl.db")

@@ -1,3 +1,9 @@
+---
+last_updated: 2026-04-20
+author: Tej Desai + Claude Opus 4.7 (1M context)
+applies_to: v0.8.0
+---
+
 # MCP per-request session state (v0.7.1)
 
 Before v0.7.1, `carl_studio.mcp.server` owned a module-level

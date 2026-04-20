@@ -1,3 +1,9 @@
+---
+last_updated: 2026-04-17
+author: Tej Desai
+applies_to: v0.8.0
+---
+
 # CARL Studio Auth
 
 CARL Studio does not require a `.env` file, and it does not auto-load one.

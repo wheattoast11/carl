@@ -1,3 +1,9 @@
+---
+last_updated: 2026-04-17
+author: Tej Desai
+applies_to: v0.8.0
+---
+
 # CARL Studio Reference
 
 Detailed documentation for carl-studio. For the quick overview, see [README.md](../README.md).

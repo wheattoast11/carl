@@ -1,3 +1,9 @@
+---
+last_updated: 2026-04-20
+author: Tej Desai + Claude Opus 4.7 (1M context)
+applies_to: v0.8.0
+---
+
 # Private-runtime integration guide
 
 carl-studio is MIT-licensed; `terminals-runtime`, `carl-admin`, and the

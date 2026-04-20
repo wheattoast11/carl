@@ -1,3 +1,9 @@
+---
+last_updated: 2026-04-20
+author: Tej Desai + Claude Opus 4.7 (1M context)
+applies_to: v0.8.0
+---
+
 # carl-studio operations reference
 
 Surfaces that matter when you deploy carl-studio in a long-running context
