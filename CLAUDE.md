@@ -204,6 +204,49 @@ behavior, not narration on every file.
 When a doc falls more than one minor version behind current, treat it
 as a review candidate: either update and re-stamp, or delete.
 
+## v0.10 master plan (authoritative until superseded)
+
+`docs/v10_master_plan.md` is the phase-locked SOP for v0.10 (2026-04-20).
+Consolidates 4 vanilla-context peer-review JSON DAGs (math · architecture ·
+plan · IP), the Bend-style MECE-coalesced finding set, the antipattern
+catalog, the scope DAG, and the ER diagram. **Read it before taking any
+v0.10 action.** Supersedes partial content in v10_terminals_tech_deep_dive.md.
+
+## P0 open items (from peer review, 2026-04-20)
+
+1. **Tool-call witness debt** (P0-1). `chat_agent.py` tool-use loop
+   (lines 1286-1346) doesn't record `ActionType.TOOL_CALL` steps.
+   Breaks the witness-log claim. ~25 LOC fix, blocks nothing else but
+   must land before W7/W8.
+2. **carl.camp backend contract** (P0-2). `POST /api/sync/agent-cards`
+   is undefined. Blocks v0.10-A #1 (agent cards + Supabase) unless
+   stubbed.
+3. **py2bend LOC estimate** (P0-3). 350 is optimistic; 600-700
+   realistic. De-risk with minimal rollout.bend template first.
+
+## Anti-pattern catalog (confirmed via vanilla-context peer review)
+
+Vanilla-context agents (same model, no session history) surface the
+anti-patterns the full-context dispatcher misses. Pre-registered for
+future-session filtering:
+
+- **AP-1:** Assuming tool-call witness coverage. Reality: NOT recorded
+  in `chat_agent.py`. Verify by reading the execution path end-to-end.
+- **AP-2:** Assuming `BaseGate` = "coherence-gated routing." Reality:
+  gates on predicates only; `kuramoto_r` is schema-present but
+  unconsulted. Trace data flow, not schema.
+- **AP-3:** LOC underestimation by ~1.8×. Count: impl + tests +
+  error path + fallback + docs.
+- **AP-4:** Taking MIT license on faith. Verify package.json AND
+  LICENSE AND per-file headers before any copy-or-mirror.
+- **AP-5:** Proposing new primitives when composition suffices. Run
+  the 80/20 test — if it's 80% composition of X, Y, Z, just compose.
+- **AP-6 (resolved):** Treating κ discrepancy as a bug. 64/3 is
+  canonical exact; 21.37 is calibrated runtime. Delta is intentional.
+- **AP-7 (seeded):** Framing HVM integration as speed optimization.
+  The reframe is in this file — rollout loop compilation IS the IRE
+  on HVM native substrate; speed is a side effect.
+
 ## v0.9 + v0.10 roadmap (docs landed 2026-04-20, implementation pending Tej sign-off)
 
 Four design docs under `docs/v09_*.md` + `docs/v10_*.md`:

@@ -206,3 +206,37 @@ Every operation is an **Interaction Net Cell**. Every tool invocation is an obse
   under "Documentation header convention" (added v0.8.0). Apply
   whenever you create or substantially edit a doc; skip for
   `CHANGELOG.md` (git is the source of truth) and `README.md`.
+- `docs/v10_master_plan.md` is the phase-locked v0.10 SOP. Read before
+  any v0.10 action.
+
+## Subagent dispatch conventions (added v0.10)
+
+When dispatching parallel agents for review or research:
+
+1. **Structured JSON output** for aggregatable tasks. Schema:
+   `{agent_id, date, scope, findings[], gaps[], recommendations[], counterfactuals[], summary}`.
+   Write to `/tmp/<task>_<aspect>.json`. Enables Bend-style MECE coalesce.
+
+2. **Vanilla-context peer review** for counterfactual critique.
+   Subagents are same-model bare-harness; they are the dispatcher's
+   mirror. Anti-patterns they surface are the dispatcher's own biases.
+   Pre-register expected anti-patterns in the dispatch prompt; verify
+   against returned findings.
+
+3. **Path constraint before ast-grep/rg.** Large codebases (terminals-
+   tech-landing is millions of LOC). Always narrow the tree with
+   `ls <path>` reconnaissance first. Then ast-grep on narrowed subtree.
+
+4. **Temporal grounding in every prompt.** State the current date
+   explicitly. Tell agents not to default to prior-year conventions.
+   Library versions, API surfaces, framework patterns have moved.
+
+5. **IP discipline by default.** Every prompt that touches terminals-
+   runtime paths MUST include: "BUSL-1.1. Do NOT copy code. Document
+   by path reference only. Gate any integration behind admin.py +
+   lazy-import pattern."
+
+6. **Confidence banding required.** Every finding carries
+   high/medium/low. Low = speculation, exclude from conclusions.
+   Medium = grounded but unverified. High = file:line evidence.
+   Mark explicitly.
