@@ -482,10 +482,33 @@ class CoherenceSnapshot:
 
     R: float
     window_size: int
+    # Fano V4 contrastive: when the probe returns a constant (e.g., 1.0
+    # always), R carries no information even though window_size > 0.
+    # ``variance`` is 0.0 when unknown (no samples or single sample) and
+    # mirrors sample variance otherwise; ``is_degenerate`` rolls this up
+    # alongside no-data for callers that want to downweight or disable
+    # coherence-gated admission.
+    variance: float = 0.0
 
     @property
     def has_data(self) -> bool:
         return self.window_size > 0
+
+    @property
+    def is_degenerate(self) -> bool:
+        """True when the snapshot carries no discriminative signal.
+
+        Degenerate iff ``window_size == 0`` OR the sample variance is
+        below ``1e-6`` AND ``window_size >= 2`` (i.e., multiple identical
+        samples — a constant-returning probe). A one-sample window is
+        NOT flagged degenerate since a single measurement is unknowable
+        as degenerate or not.
+        """
+        if self.window_size == 0:
+            return True
+        if self.window_size >= 2 and self.variance < 1e-6:
+            return True
+        return False
 
 
 def read_chain_coherence(chain: Any, window: int = 16) -> CoherenceSnapshot:
@@ -498,16 +521,19 @@ def read_chain_coherence(chain: Any, window: int = 16) -> CoherenceSnapshot:
     """
 
     if chain is None or not hasattr(chain, "steps"):
-        return CoherenceSnapshot(R=1.0, window_size=0)
+        return CoherenceSnapshot(R=1.0, window_size=0, variance=0.0)
     steps = list(chain.steps)[-window:]
     samples = [
         s.kuramoto_r for s in steps if getattr(s, "kuramoto_r", None) is not None
     ]
     if not samples:
-        return CoherenceSnapshot(R=1.0, window_size=0)
-    return CoherenceSnapshot(
-        R=sum(samples) / len(samples), window_size=len(samples)
-    )
+        return CoherenceSnapshot(R=1.0, window_size=0, variance=0.0)
+    mean = sum(samples) / len(samples)
+    if len(samples) >= 2:
+        variance = sum((v - mean) ** 2 for v in samples) / len(samples)
+    else:
+        variance = 0.0
+    return CoherenceSnapshot(R=mean, window_size=len(samples), variance=variance)
 
 
 class CoherenceGatePredicate:

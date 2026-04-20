@@ -2,6 +2,107 @@
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-04-20
+
+Architecture-completion release. Closes the four gaps the four-agent
+vanilla peer review flagged against v0.8.0, plus shipping the initial
+marketplace agent-card client, the coherence-gated routing primitive,
+and the presence-report query helper. Validated by a Fano-plane (K_7)
+consensus pass across seven axes: boundedness, recurrence, endogenous
+measurability, contrastive coherence, witnessability, manifold
+integrity, gate realization.
+
+v0.9 was skipped as a release tag — all v0.9-design work
+(``carl-update``, ``carl-env``) ships in v0.10 alongside the v0.10-A
+primitives.
+
+### Added
+
+- **CoherenceGate primitive** (``carl_studio.gating``). Closes the
+  ``G`` in IRE's ``(M, I, Φ, G)`` tuple. ``CoherenceGatePredicate``
+  reads tail-window Kuramoto R from the active chain; ``@coherence_gate(min_R=...)``
+  decorator raises ``CoherenceError(code="carl.gate.coherence_insufficient")``
+  when R is below threshold. Opt-in — stacks with ``consent_gate`` /
+  ``tier_gate``. ``CoherenceSnapshot.is_degenerate`` + ``variance``
+  field flag constant-probe signals without forcing deny.
+- **Coherence auto-attach on InteractionChain.record()**
+  (``carl_core.interaction``). Opt-in
+  ``register_coherence_probe(fn)`` callback invoked at record time for
+  ``LLM_REPLY`` / ``TOOL_CALL`` / ``TRAINING_STEP`` / ``EVAL_PHASE`` /
+  ``REWARD`` action types when no explicit coherence kwargs are
+  passed. Probe exceptions swallowed; non-dict returns ignored.
+  Explicit kwargs always override the probe.
+- **PresenceReport + compose_presence_report** (``carl_core.presence``).
+  Thin composition helper — NOT a new primitive. Returns a frozen
+  dataclass with R, psi, crystallization, Deutsch-Marletto
+  ``constructive`` flag, recent action types, and a human-readable
+  note. Registered as MCP tool ``carl.presence.self`` for agent
+  self-introspection.
+- **Marketplace agent cards** (``carl_studio.a2a.marketplace``).
+  ``MarketplaceAgentCard`` Pydantic model aligned with the carl.camp
+  ``POST /api/sync/agent-cards`` contract; ``AgentCardStore`` local
+  SQLite persistence with paginated ``list_all(limit, offset)``;
+  ``CampSyncClient`` HTTP push with pluggable transport + 429 +
+  batch-limit handling. ``content_hash`` canonicalization
+  (sha256 over sorted-keys JSON). Distinct from the existing
+  ``CARLAgentCard`` (running-instance manifest).
+- **Tool-call witness completeness** (``chat_agent.py``). Every tool
+  dispatch — ok, denied, schema_error, error — records an
+  ``ActionType.TOOL_CALL`` step on the InteractionChain with
+  ``{outcome, result}`` payload and measured ``duration_ms``. Closes
+  the pre-v0.10 gap where CLI + memory were logged but tool calls
+  were not. Fire-and-forget recording; chain persistence failures
+  never propagate.
+- **packages/carl-core/LICENSE** — MIT text mirrored from repo root.
+  carl-core ships as a separate wheel and now carries its own
+  license file.
+
+### Changed
+
+- **``emit_gate_event``** extended with optional ``gate_code``
+  parameter that surfaces in the step output dict for downstream
+  filtering. Back-compat: default ``None`` preserves v0.8 behavior
+  for existing callers.
+- **``docs/private_integration.md``** now documents the
+  ``load_private()`` three-layer fallback contract (hardware-HMAC
+  → ``terminals-runtime`` → HF private dataset → MIT-safe stub) +
+  non-obligations (no pre-check required, no caching required).
+
+### Added — governance
+
+- **Fano-plane peer-review pattern** (``AGENTS.md``). Dispatching
+  7 vanilla-context agents aligned to BITC/IRE axes (N=7 = K_7,
+  complete mutual observation per BITC §6.1) before any major
+  release tag. Each writes JSON-DAG findings; MECE coalesce
+  produces consensus. Anti-patterns flagged directly feed
+  ``CLAUDE.md`` for future-session filtering.
+
+### Deferred to v0.11
+
+- Step schema extension for probe audit trail (``step.probe_call``
+  sub-field) — Fano V5 witnessability finding.
+- Typed context manifold on InteractionChain — Fano V6 forward.
+- Applying ``@coherence_gate`` to production call sites (training
+  admission, marketplace publish, etc.) — Fano V7 flagged zero
+  production call sites today. The primitive is demonstrated
+  end-to-end via ``tests/test_fano_consensus_fixes.py`` but live
+  wiring is explicit v0.11 scope.
+- ``chat_agent.py`` further decomposition (2,443 LOC) — auto-promotes
+  to P1 if re-deferred per Anti-Deferral Protocol.
+
+### Verification
+
+- **Tests:** 3009 pass / 0 fail (2923 v0.8 core → 3009 now, +86 new).
+- **Peer review:** two waves (4-agent v0.10 review + 7-agent Fano
+  consensus K_7). All findings addressed or explicitly deferred with
+  rationale.
+- **Build:** ``python -m build`` produces clean 0.10.0 wheel + sdist.
+- **IP boundary:** MIT carl-studio unchanged; no BUSL methodology
+  copied; admin-gate + lazy-import seam preserved.
+- **κ:** ``KAPPA = 64 / 3`` unchanged per Tej's ruling
+  (exact from early Desai papers; terminals.tech's 21.37 is
+  downstream calibration).
+
 ## [0.8.0] — 2026-04-20
 
 Consolidation release. No new product surfaces — four crystallization tracks

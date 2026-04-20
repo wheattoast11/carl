@@ -53,9 +53,11 @@ class MarketplaceAgentCard(BaseModel):
     description: str | None = None
     capabilities: list[dict[str, Any]] = Field(
         default_factory=list,
+        max_length=100,  # Fano V1 boundedness: hard cap on array length
         description=(
             "Free-form JSONB array. Marketplace UI renders best when each "
-            "element has {id: str, description: str} (A2A-compatible)."
+            "element has {id: str, description: str} (A2A-compatible). "
+            "Capped at 100 elements to preserve BITC axiom 1 (finite support)."
         ),
     )
     public_key: str | None = Field(
@@ -226,13 +228,36 @@ class AgentCardStore:
         finally:
             conn.close()
 
-    def list_all(self) -> list[MarketplaceAgentCard]:
+    def list_all(
+        self,
+        *,
+        limit: int = 500,
+        offset: int = 0,
+    ) -> list[MarketplaceAgentCard]:
+        """List stored cards. Fano V1 boundedness fix: pagination required.
+
+        Default ``limit=500`` preserves the original ergonomic ("show me
+        everything") for small local stores while bounding memory for
+        stores that grow past a few hundred cards.
+        """
+        if limit < 0 or offset < 0:
+            raise ValueError(f"limit/offset must be non-negative (got limit={limit}, offset={offset})")
         conn = self._db.connect()
         try:
             rows = conn.execute(
-                "SELECT * FROM agent_cards ORDER BY updated_at DESC"
+                "SELECT * FROM agent_cards ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall()
             return [self._row_to_card(r) for r in rows]
+        finally:
+            conn.close()
+
+    def count(self) -> int:
+        """Total stored cards — cheap counter for pagination planning."""
+        conn = self._db.connect()
+        try:
+            row = conn.execute("SELECT COUNT(*) FROM agent_cards").fetchone()
+            return int(row[0]) if row is not None else 0
         finally:
             conn.close()
 
