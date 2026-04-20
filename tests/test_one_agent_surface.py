@@ -1,6 +1,12 @@
-"""Tests for the one-agent CLI surface:
-  - Bare `carl` routes to chat via the default callback
-  - `carl ask "<prompt>"` runs a single agent turn
+"""Tests for the one-agent CLI surface (F1 — two canonical surfaces):
+
+- Bare ``carl`` prints help + a 1-line nudge (no auto-route to chat).
+- ``carl ask "<prompt>"`` runs a single agent turn.
+- ``carl chat`` is the interactive loop.
+
+The former bare-routing-to-chat behaviour was retired in v0.7 so new
+users discover both entry points explicitly instead of landing in the
+interactive loop by accident.
 """
 from __future__ import annotations
 
@@ -18,13 +24,18 @@ def _register_routing() -> None:
 
 
 class TestDefaultCallback:
-    def test_bare_carl_calls_chat(self) -> None:
+    def test_bare_carl_prints_help_and_nudge(self) -> None:
+        """Bare ``carl`` must show help and point users at chat/ask."""
         _register_routing()
         runner = CliRunner()
         with patch("carl_studio.cli.chat.chat_cmd") as fake_chat:
             result = runner.invoke(app, [])
-        # Callback fires when no subcommand is invoked
-        assert fake_chat.called, result.output
+        # F1 — bare `carl` no longer auto-routes to chat. The callback
+        # still fires (to render help + nudge) but chat_cmd MUST NOT run.
+        assert not fake_chat.called, result.output
+        assert result.exit_code == 0
+        assert "carl chat" in result.output
+        assert "carl ask" in result.output
 
     def test_subcommand_skips_default(self) -> None:
         _register_routing()

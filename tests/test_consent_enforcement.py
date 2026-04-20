@@ -26,7 +26,6 @@ import pytest
 
 from carl_studio.consent import (
     ConsentError,
-    ConsentFlagKey,
     ConsentManager,
     ConsentState,
     consent_gate,
@@ -94,7 +93,7 @@ class TestConsentGate:
         monkeypatch.undo()  # drop autouse grant-all; exercise real load()
         mgr = ConsentManager(db=_FakeDB())
         with pytest.raises(ConsentError) as exc:
-            consent_gate(ConsentFlagKey.TELEMETRY, manager=mgr)
+            consent_gate("telemetry", manager=mgr)
         assert exc.value.code == "carl.consent.denied"
         assert exc.value.context["flag"] == "telemetry"
 
@@ -104,7 +103,7 @@ class TestConsentGate:
         mgr = ConsentManager(db=db)
         mgr.update("telemetry", True)
         # No raise -> success.
-        consent_gate(ConsentFlagKey.TELEMETRY, manager=mgr)
+        consent_gate("telemetry", manager=mgr)
 
     def test_gate_accepts_string_flag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.undo()

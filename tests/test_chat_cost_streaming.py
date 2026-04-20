@@ -5,9 +5,17 @@ Covers the helpers ``_read_total_cost`` and ``_emit_turn_cost_delta`` in
 
     turn: $0.0120  session: $0.0450
 
-The helpers must be defensive — chat observability is valuable but
-never load-bearing, so a mock agent with a missing ``cost_summary`` or
-a callable-instead-of-property shape should never raise.
+R2-007 collapsed the helper's three-way fallback (property -> callable
+-> private attribute) to a single property-read path. The tests here
+exercise:
+
+* the canonical shape (``cost_summary`` is a property returning a dict);
+* broken agents (raise / missing) — helper must never bubble up;
+* delta math (positive prints, zero/negative suppress).
+
+Agents that only expose the legacy private ``_total_cost_usd`` attribute
+now resolve to ``0.0`` — this is intentional: tests that want cost
+visibility should provide ``cost_summary`` directly, matching production.
 """
 
 from __future__ import annotations
@@ -46,23 +54,6 @@ class _AgentWithProperty:
         }
 
 
-class _AgentWithCallable:
-    """Shape for tests where cost_summary is a method (defensive path)."""
-
-    def __init__(self, total_cost_usd: float) -> None:
-        self._total = total_cost_usd
-
-    def cost_summary(self) -> dict[str, Any]:
-        return {"total_cost_usd": self._total}
-
-
-class _AgentWithoutSummary:
-    """Fallback path — only the private ``_total_cost_usd`` is exposed."""
-
-    def __init__(self, total_cost_usd: float) -> None:
-        self._total_cost_usd = total_cost_usd
-
-
 class _AgentBroken:
     """Agent whose cost_summary raises — must not bubble up."""
 
@@ -71,16 +62,12 @@ class _AgentBroken:
         raise RuntimeError("boom")
 
 
+class _AgentWithoutSummary:
+    """Agent that lacks cost_summary entirely — must collapse to 0.0."""
+
+
 def test_read_total_from_property() -> None:
     assert _read_total_cost(_AgentWithProperty(0.0120)) == pytest.approx(0.0120)
-
-
-def test_read_total_from_callable() -> None:
-    assert _read_total_cost(_AgentWithCallable(0.0037)) == pytest.approx(0.0037)
-
-
-def test_read_total_fallback_to_private_attr() -> None:
-    assert _read_total_cost(_AgentWithoutSummary(0.0099)) == pytest.approx(0.0099)
 
 
 def test_read_total_safe_on_exception() -> None:
@@ -88,9 +75,25 @@ def test_read_total_safe_on_exception() -> None:
     assert _read_total_cost(_AgentBroken()) == 0.0
 
 
+def test_read_total_safe_on_missing_summary() -> None:
+    """Agents without cost_summary collapse to 0.0 (no private-attr fallback)."""
+    assert _read_total_cost(_AgentWithoutSummary()) == 0.0
+
+
 def test_read_total_safe_on_empty_agent() -> None:
     class _Empty: ...
     assert _read_total_cost(_Empty()) == 0.0
+
+
+def test_read_total_handles_non_dict_summary() -> None:
+    """If cost_summary is not a dict (e.g. a bare number), collapse to 0.0."""
+
+    class _Weird:
+        @property
+        def cost_summary(self) -> Any:  # type: ignore[override]
+            return 42  # no .get() method
+
+    assert _read_total_cost(_Weird()) == 0.0
 
 
 def test_emit_positive_delta_prints_line() -> None:
@@ -107,7 +110,7 @@ def test_emit_positive_delta_prints_line() -> None:
 
 
 def test_emit_zero_delta_suppresses_line() -> None:
-    """No delta → no visible noise; still updates the running total."""
+    """No delta -> no visible noise; still updates the running total."""
     c = _RecordingConsole()
     agent = _AgentWithProperty(0.05)
     new_total = _emit_turn_cost_delta(c, agent, prev_total=0.05)

@@ -20,7 +20,6 @@ Features:
 
 from __future__ import annotations
 
-import concurrent.futures
 import json
 import logging
 import os
@@ -31,11 +30,16 @@ import sys
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator, cast
 
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
 from carl_studio.agent_state import CostLedger, SessionState
+from carl_studio.knowledge_store import KnowledgeStore, _KNOWLEDGE_MAX_CHUNKS
+from carl_studio.tool_dispatcher import (
+    ToolDispatcher,
+    _MAX_CONSECUTIVE_ALL_DENIED as _TD_MAX_CONSECUTIVE_ALL_DENIED,
+)
 
 if TYPE_CHECKING:  # pragma: no cover — typing only
     from carl_core.memory import MemoryItem, MemoryLayer, MemoryStore
@@ -634,9 +638,13 @@ class CARLAgent:
       - **DENY terminal**: all-tools-denied turns fail fast after a few rounds
     """
 
-    # Class defaults — overridable via constructor kwargs.
-    _KNOWLEDGE_MAX_CHUNKS: int = 2000
-    _MAX_CONSECUTIVE_ALL_DENIED: int = 5
+    # Class defaults — overridable via constructor kwargs. The canonical
+    # values live on the extracted collaborators (``knowledge_store`` and
+    # ``tool_dispatcher``); these class attributes are kept because legacy
+    # tests read ``CARLAgent._KNOWLEDGE_MAX_CHUNKS`` / ``_MAX_CONSECUTIVE_ALL_DENIED``
+    # as class-level constants.
+    _KNOWLEDGE_MAX_CHUNKS: int = _KNOWLEDGE_MAX_CHUNKS
+    _MAX_CONSECUTIVE_ALL_DENIED: int = _TD_MAX_CONSECUTIVE_ALL_DENIED
 
     def __init__(
         self,
@@ -690,7 +698,26 @@ class CARLAgent:
                 raise ImportError(
                     "Anthropic SDK required: pip install carl-studio[observe]"
                 ) from exc
-            self._client = anthropic.Anthropic(api_key=api_key or None)
+            # J2 — rate-limit retry. ``max_retries=4`` covers 429, 503,
+            # and connection errors; the SDK applies exponential backoff
+            # between attempts. The ``httpx.Timeout`` caps total wall-clock
+            # at 60s with a 10s connect budget so a single wedged TCP
+            # handshake can't block the agent indefinitely.
+            try:
+                import httpx
+
+                self._client = anthropic.Anthropic(
+                    api_key=api_key or None,
+                    max_retries=4,
+                    timeout=httpx.Timeout(60.0, connect=10.0),
+                )
+            except ImportError:  # pragma: no cover — httpx ships with anthropic
+                # Fallback: if httpx is somehow absent, still get the retry
+                # behaviour but accept the SDK default timeout.
+                self._client = anthropic.Anthropic(
+                    api_key=api_key or None,
+                    max_retries=4,
+                )
         self._model = model
         self._api_key_source = api_key_source
         self._frame = frame
@@ -702,25 +729,45 @@ class CARLAgent:
         # is preserved via ``@property`` shims further down in this class.
         self._session = SessionState()
         self._cost = CostLedger()
-        self._knowledge: list[dict[str, Any]] = []  # {text, source, words}
         self._token_count = 0
 
         # Knowledge chunk cap — overridable per-instance, falls back to class.
+        # Validation must precede store construction so a bad value raises
+        # cleanly instead of poisoning the store.
         if max_knowledge_chunks is not None:
             if max_knowledge_chunks < 1:
                 raise ValueError(
                     "max_knowledge_chunks must be >= 1 when provided",
                 )
-            self._max_knowledge_chunks: int = max_knowledge_chunks
+            resolved_cap = int(max_knowledge_chunks)
         else:
-            self._max_knowledge_chunks = self._KNOWLEDGE_MAX_CHUNKS
-        # Fire the eviction warning at most once per agent instance to avoid
-        # log spam when the knowledge base is consistently full.
-        self._knowledge_evicted_warned: bool = False
+            resolved_cap = int(self._KNOWLEDGE_MAX_CHUNKS)
+        # Composed collaborator: owns the bounded knowledge list, the LRU
+        # eviction policy, and the single-warning-per-session guard. Legacy
+        # access via ``self._knowledge`` / ``self._max_knowledge_chunks`` /
+        # ``self._knowledge_evicted_warned`` / ``self._enforce_knowledge_cap``
+        # is preserved via ``@property`` shims further down in this class.
+        self._knowledge_store = KnowledgeStore(max_chunks=resolved_cap)
 
-        # Terminal guard: if the model keeps requesting tools that are all
-        # DENIED by the permission hook, break out after N consecutive turns.
-        self._consecutive_all_denied: int = 0
+        # Composed collaborator: tool registry + timeouts + dispatch loop
+        # + terminal-denial counter. The ``_tool_*`` methods below bind
+        # themselves into the registry so the dispatcher stays agnostic
+        # of domain-specific behavior. Legacy ``self._dispatch_tool`` /
+        # ``self._dispatch_tool_safe`` / ``self._consecutive_all_denied``
+        # are preserved via ``@property`` shims.
+        # ``timeout_resolver`` reads the module-level ``_TOOL_TIMEOUTS_S``
+        # at dispatch time so tests that monkeypatch the constant AFTER
+        # agent construction see their value flow through to the live
+        # dispatcher without rebuilding it. The resolver falls back to
+        # the module's ``_DEFAULT_TOOL_TIMEOUT_S`` for unregistered tools.
+        self._dispatcher = ToolDispatcher(
+            default_timeout_s=_DEFAULT_TOOL_TIMEOUT_S,
+            max_consecutive_all_denied=int(self._MAX_CONSECUTIVE_ALL_DENIED),
+            timeout_resolver=lambda name: _TOOL_TIMEOUTS_S.get(
+                name, _DEFAULT_TOOL_TIMEOUT_S,
+            ),
+        )
+        self._register_tools(self._dispatcher)
 
         # Surfaced by load_session when the underlying file was corrupt and
         # was rolled into the quarantine directory. Callers (CLI) read this
@@ -740,11 +787,9 @@ class CARLAgent:
         # primer without persistently mutating the base prompt.
         self._system_prompt_extension: str = ""
 
-        # JRN-009 — persisted across save/load via SessionState.session_theme.
-        # Tracks the lane the user started in so analytics and future prompts
-        # can distinguish ``move:explore`` from ``move:train`` sessions.
-        # Default ``""`` means "not yet classified" — the CLI sets this on the
-        # first bootstrap turn; programmatic callers can set it explicitly.
+        # Session theme persists via ``SessionState.session_theme``. Default
+        # ``""`` means "not yet classified"; CLI sets on the first bootstrap
+        # turn, programmatic callers can set it explicitly.
 
         # Session
         self._session_id = session_id
@@ -908,6 +953,62 @@ class CARLAgent:
     def _total_output_tokens(self, value: int) -> None:
         self._cost.total_output_tokens = int(value)
 
+    # -- KnowledgeStore shims ------------------------------------------
+    # Tests (``tests/test_chat_agent_robustness.py``, ``tests/test_agent.py``,
+    # ``tests/test_uat_e2e.py``) mutate ``_knowledge`` in place via append
+    # and by wholesale assignment. Returning the backing list from the
+    # getter preserves the in-place path; the setter replaces the store's
+    # ``chunks`` list so ``agent._knowledge = [...]`` still routes through
+    # the collaborator.
+
+    @property
+    def _knowledge(self) -> list[dict[str, Any]]:
+        return self._knowledge_store.chunks
+
+    @_knowledge.setter
+    def _knowledge(self, value: list[dict[str, Any]]) -> None:
+        self._knowledge_store.chunks = list(value)
+
+    @property
+    def _max_knowledge_chunks(self) -> int:
+        return self._knowledge_store.max_chunks
+
+    @_max_knowledge_chunks.setter
+    def _max_knowledge_chunks(self, value: int) -> None:
+        self._knowledge_store.max_chunks = int(value)
+
+    @property
+    def _knowledge_evicted_warned(self) -> bool:
+        return self._knowledge_store.evicted_warned
+
+    @_knowledge_evicted_warned.setter
+    def _knowledge_evicted_warned(self, value: bool) -> None:
+        self._knowledge_store.evicted_warned = bool(value)
+
+    # -- ToolDispatcher shims ------------------------------------------
+    # ``_dispatch_tool`` / ``_dispatch_tool_safe`` delegate to the
+    # collaborator. ``_consecutive_all_denied`` mirrors the counter so
+    # tests that set it directly (``agent._consecutive_all_denied = 3``)
+    # keep working.
+
+    def _dispatch_tool(self, name: str, args: dict[str, Any]) -> str:
+        """Public dispatch (back-compat). Returns only the content string."""
+        return self._dispatcher.dispatch(name, args)
+
+    def _dispatch_tool_safe(
+        self, name: str, args: dict[str, Any],
+    ) -> tuple[str, bool]:
+        """Dispatch with timeout + error handling. Returns ``(content, is_error)``."""
+        return self._dispatcher.dispatch_safe(name, args)
+
+    @property
+    def _consecutive_all_denied(self) -> int:
+        return self._dispatcher.consecutive_all_denied
+
+    @_consecutive_all_denied.setter
+    def _consecutive_all_denied(self, value: int) -> None:
+        self._dispatcher.consecutive_all_denied = int(value)
+
     # ------------------------------------------------------------------
     # Chat loop
     # ------------------------------------------------------------------
@@ -1007,7 +1108,29 @@ class CARLAgent:
                 try:
                     stream_cm = self._client.messages.stream(**kwargs)
                 except Exception as exc:
-                    # API call could not even be issued.
+                    # J2 — rate-limit is a distinct, retriable failure mode
+                    # with a stable ``carl.rate_limit`` code so CLI/UI can
+                    # present a tailored message instead of a generic API
+                    # error. The Anthropic SDK's own ``max_retries=4`` has
+                    # already been exhausted by the time this lands here,
+                    # so it's a *persistent* 429 — the caller should back
+                    # off on the outer loop rather than retry immediately.
+                    try:
+                        import anthropic as _anthropic
+                        is_rate_limit = isinstance(exc, _anthropic.RateLimitError)
+                    except Exception:  # pragma: no cover — SDK absent
+                        is_rate_limit = False
+                    if is_rate_limit:
+                        yield AgentEvent(
+                            kind="error",
+                            content=(
+                                f"rate limited — backoff exhausted after "
+                                f"retries: {exc}"
+                            ),
+                            code="carl.rate_limit",
+                        )
+                        return
+                    # API call could not even be issued (other failure).
                     yield AgentEvent(
                         kind="error",
                         content=f"API error: {exc}",
@@ -1063,14 +1186,30 @@ class CARLAgent:
                     response = None
                 self._attribute_partial_cost(response, partial_text_parts)
                 self._persist_partial_turn(response, partial_text_parts)
-                code = (
-                    "carl.interrupted"
-                    if isinstance(exc, KeyboardInterrupt)
-                    else "carl.stream_error"
-                )
+                # J2 — surface RateLimitError that escaped the inner
+                # ``stream(**kwargs)`` try-block (e.g. raised during
+                # context-manager entry) with the stable rate-limit code.
+                is_rate_limit = False
+                try:
+                    import anthropic as _anthropic
+                    is_rate_limit = isinstance(exc, _anthropic.RateLimitError)
+                except Exception:  # pragma: no cover — SDK absent
+                    pass
+                if is_rate_limit:
+                    code = "carl.rate_limit"
+                    content = (
+                        f"rate limited — backoff exhausted after retries: {exc}"
+                    )
+                else:
+                    code = (
+                        "carl.interrupted"
+                        if isinstance(exc, KeyboardInterrupt)
+                        else "carl.stream_error"
+                    )
+                    content = f"Stream error: {exc}"
                 yield AgentEvent(
                     kind="error",
-                    content=f"Stream error: {exc}",
+                    content=content,
                     code=code,
                 )
                 return
@@ -1639,9 +1778,9 @@ class CARLAgent:
             parts.append("No frame set. When the user describes their goal, call set_frame immediately.")
             parts.append("")
 
-        # Session theme (JRN-009) — only surfaces in the prompt when the
-        # user picked a keyed move; free-form and unset sessions get no
-        # extra steering here (they're driven by the primer extension).
+        # Session theme only surfaces in the prompt when the user picked a
+        # keyed move; free-form and unset sessions are driven by the primer
+        # extension instead.
         theme = self._session.session_theme
         if theme and theme.startswith("move:"):
             parts.append(f"SESSION THEME: {theme}")
@@ -1653,9 +1792,12 @@ class CARLAgent:
             parts.append("")
 
         # Knowledge base
-        if self._knowledge:
-            sources = len({k["source"] for k in self._knowledge})
-            parts.append(f"KNOWLEDGE BASE: {len(self._knowledge)} chunks from {sources} sources.")
+        if not self._knowledge_store.is_empty():
+            sources = len(self._knowledge_store.sources())
+            parts.append(
+                f"KNOWLEDGE BASE: {len(self._knowledge_store)} chunks "
+                f"from {sources} sources.",
+            )
             parts.append("")
 
         # Greeting / proactive agency for new sessions
@@ -1754,70 +1896,51 @@ class CARLAgent:
         return result
 
     # ------------------------------------------------------------------
-    # Tool dispatch
+    # Tool registry wiring (dispatch lives on ``self._dispatcher``)
     # ------------------------------------------------------------------
 
-    def _dispatch_tool(self, name: str, args: dict[str, Any]) -> str:
-        """Public dispatch (back-compat).
+    def _register_tools(self, dispatcher: ToolDispatcher) -> None:
+        """Bind this agent's ``_tool_*`` methods into the dispatcher registry.
 
-        Retained for tests and callers that don't need the ``is_error`` flag.
-        The return value is the raw tool output string; when a tool errors,
-        the string is prefixed with ``"Error:"`` or the tool's own error text.
+        Called once from ``__init__`` after the dispatcher is constructed.
+        Each entry takes the raw ``args`` dict the Claude API emitted and
+        returns whatever shape the underlying handler produces — the
+        simple string tools route through ``register_simple`` so they
+        auto-wrap as ``(output, False)``; tools that already return
+        ``(output, is_error)`` (``dispatch_cli``) use :meth:`register`.
         """
-        result, _is_error = self._dispatch_tool_safe(name, args)
-        return result
-
-    def _dispatch_tool_safe(
-        self, name: str, args: dict[str, Any]
-    ) -> tuple[str, bool]:
-        """Run a tool with per-tool timeout + error handling.
-
-        Returns ``(content, is_error)`` so the caller can flag the API
-        ``tool_result`` as erroring so the model can self-correct.
-        """
-        timeout_s = _TOOL_TIMEOUTS_S.get(name, _DEFAULT_TOOL_TIMEOUT_S)
-
-        def _run() -> tuple[str, bool]:
-            try:
-                if name == "ingest_source":
-                    return self._tool_ingest(args.get("path", "")), False
-                if name == "query_knowledge":
-                    return self._tool_query(args.get("question", "")), False
-                if name == "run_analysis":
-                    return self._tool_run(args.get("code", "")), False
-                if name == "create_file":
-                    return self._tool_create(args.get("path", ""), args.get("content", "")), False
-                if name == "read_file":
-                    return self._tool_read(args.get("path", "")), False
-                if name == "set_frame":
-                    return self._tool_frame(args), False
-                if name == "list_files":
-                    return self._tool_list(args.get("path", "."), args.get("pattern", "*")), False
-                if name == "dispatch_cli":
-                    return self._tool_dispatch_cli(args)
-                return f"Unknown tool: {name}", True
-            except subprocess.TimeoutExpired:
-                return f"Tool {name} timed out after {timeout_s:.0f}s", True
-            except TimeoutError:
-                return f"Tool {name} timed out after {timeout_s:.0f}s", True
-            except Exception as exc:
-                return f"Error: {exc}", True
-
-        # Wrap synchronous tool invocation in a bounded worker so we can enforce
-        # a wall-clock timeout even for CPU-bound tools. subprocess-based tools
-        # (run_analysis) already have their own subprocess timeout, but this
-        # guards everything else uniformly.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(_run)
-            try:
-                return future.result(timeout=timeout_s)
-            except concurrent.futures.TimeoutError:
-                # Cancel best-effort; the worker will continue running until
-                # it naturally returns, but its result is dropped.
-                future.cancel()
-                return f"Tool {name} timed out after {timeout_s:.0f}s", True
-            except Exception as exc:
-                return f"Error: {exc}", True
+        dispatcher.register_simple(
+            "ingest_source",
+            lambda a: self._tool_ingest(a.get("path", "")),
+        )
+        dispatcher.register_simple(
+            "query_knowledge",
+            lambda a: self._tool_query(a.get("question", "")),
+        )
+        dispatcher.register_simple(
+            "run_analysis",
+            lambda a: self._tool_run(a.get("code", "")),
+        )
+        dispatcher.register_simple(
+            "create_file",
+            lambda a: self._tool_create(a.get("path", ""), a.get("content", "")),
+        )
+        dispatcher.register_simple(
+            "read_file",
+            lambda a: self._tool_read(a.get("path", "")),
+        )
+        dispatcher.register_simple(
+            "set_frame",
+            lambda a: self._tool_frame(a),
+        )
+        dispatcher.register_simple(
+            "list_files",
+            lambda a: self._tool_list(a.get("path", "."), a.get("pattern", "*")),
+        )
+        dispatcher.register(
+            "dispatch_cli",
+            lambda a: self._tool_dispatch_cli(a),
+        )
 
     # ------------------------------------------------------------------
     # Tool handlers
@@ -1830,58 +1953,37 @@ class CARLAgent:
         chunks = ingester.ingest(path)
         modalities: dict[str, int] = {}
         for c in chunks:
-            self._knowledge.append({
+            self._knowledge_store.append_dict({
                 "text": c.text,
                 "source": c.source,
                 "words": set(c.text.lower().split()),
             })
             mod = getattr(c, "modality", "text")
             modalities[mod] = modalities.get(mod, 0) + 1
-        evicted = self._enforce_knowledge_cap()
+        evicted = self._knowledge_store.enforce_cap()
         summary = ", ".join(f"{v} {k}" for k, v in sorted(modalities.items()))
-        trailer = f" (evicted {evicted} oldest to cap {self._max_knowledge_chunks})" if evicted else ""
+        cap = self._knowledge_store.max_chunks
+        trailer = f" (evicted {evicted} oldest to cap {cap})" if evicted else ""
         return f"Ingested {len(chunks)} chunks from {path} ({summary}){trailer}"
 
     def _enforce_knowledge_cap(self) -> int:
-        """Evict oldest knowledge chunks until ``len <= max``. Returns evicted count.
+        """Back-compat wrapper — delegates to :meth:`KnowledgeStore.enforce_cap`.
 
-        Logs a single warning per agent instance on the first eviction so a
-        long-running session doesn't flood the log. The cap is intended as a
-        memory/O(n)-scan safety net, not as a correctness guarantee — callers
-        that need durable search should back the store with a vector DB.
+        Retained because tests call it directly. The real eviction policy
+        lives on the store collaborator; this shim only routes the call.
         """
-        cap = self._max_knowledge_chunks
-        excess = len(self._knowledge) - cap
-        if excess <= 0:
-            return 0
-        # Drop the oldest entries (front of the list is oldest by insertion).
-        del self._knowledge[:excess]
-        if not self._knowledge_evicted_warned:
-            logger.warning(
-                "CARLAgent knowledge cap reached (%d): evicted %d oldest chunk(s); "
-                "further evictions will be silent for this session.",
-                cap, excess,
-            )
-            self._knowledge_evicted_warned = True
-        return excess
+        return self._knowledge_store.enforce_cap()
 
     def _tool_query(self, question: str) -> str:
-        if not self._knowledge:
+        if self._knowledge_store.is_empty():
             return "Knowledge base is empty. Ingest files first with ingest_source."
-        terms = set(question.lower().split())
-        scored: list[tuple[int, dict[str, Any]]] = []
-        for chunk in self._knowledge:
-            overlap = len(terms & chunk.get("words", set()))
-            if overlap > 0:
-                scored.append((overlap, chunk))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        results = scored[:5]
+        results = self._knowledge_store.recall(question, limit=5)
         if not results:
             return "No relevant chunks found for that query."
         parts: list[str] = []
         for score, chunk in results:
-            text = str(chunk["text"])[:1500]
-            parts.append(f"[{chunk['source']}] (relevance: {score})\n{text}")
+            text = str(chunk.get("text", ""))[:1500]
+            parts.append(f"[{chunk.get('source', '?')}] (relevance: {score})\n{text}")
         return "\n\n---\n\n".join(parts)
 
     def _tool_run(self, code: str) -> str:
@@ -2215,7 +2317,11 @@ class CARLAgent:
             "model": self._model,
             "workdir": self._workdir,
             "messages": self._session.messages,
-            "knowledge": self._knowledge,
+            # KnowledgeStore owns the wire-format conversion (sets -> sorted
+            # lists); SessionStore.save keeps a compatibility pass over the
+            # same structure for legacy callers that wrote the dict shape
+            # inline.
+            "knowledge": self._knowledge_store.to_list(),
             "frame": self._frame.model_dump() if self._frame and hasattr(self._frame, "model_dump") else None,
             # Cost ledger — persist unrounded so resume is exact. ``as_dict``
             # rounds for human-readable surfacing (see ``cost_summary``).
@@ -2261,17 +2367,25 @@ class CARLAgent:
         # Rehydrate composed collaborators from persisted state.
         self._session.messages = list(state.get("messages", []))
         self._session.turn_count = int(state.get("turn_count", 0) or 0)
-        # JRN-009 — restore session theme; default to "" for legacy sessions.
+        # Restore session theme; default to "" for legacy sessions.
         self._session.session_theme = state.get("session_theme", "") or ""
         self._cost.total_cost_usd = float(state.get("total_cost_usd", 0.0) or 0.0)
         self._cost.total_input_tokens = int(state.get("total_input_tokens", 0) or 0)
         self._cost.total_output_tokens = int(state.get("total_output_tokens", 0) or 0)
-        self._knowledge = state.get("knowledge", [])
-
-        # A resumed session can carry more chunks than the current cap (the
-        # owner may have downsized max_knowledge_chunks) — trim aggressively
-        # so we don't blow the budget mid-turn.
-        self._enforce_knowledge_cap()
+        # Rebuild the knowledge store from persisted state. ``from_list``
+        # handles set-vs-list deserialization for ``words`` and enforces
+        # the current cap so a downsized ``max_knowledge_chunks`` trims
+        # rather than overflowing on the next ingest.
+        raw_knowledge_any: Any = state.get("knowledge", [])
+        raw_knowledge: list[dict[str, Any]] = []
+        if isinstance(raw_knowledge_any, list):
+            for entry_any in cast(list[Any], raw_knowledge_any):
+                if isinstance(entry_any, dict):
+                    raw_knowledge.append(cast(dict[str, Any], entry_any))
+        self._knowledge_store = KnowledgeStore.from_list(
+            raw_knowledge,
+            max_chunks=self._knowledge_store.max_chunks,
+        )
 
         frame_data = state.get("frame")
         if frame_data:
@@ -2285,7 +2399,7 @@ class CARLAgent:
         return True
 
     # ------------------------------------------------------------------
-    # Session theme (JRN-009)
+    # Session theme
     # ------------------------------------------------------------------
 
     _VALID_SESSION_THEMES: tuple[str, ...] = (

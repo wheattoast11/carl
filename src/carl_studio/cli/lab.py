@@ -195,115 +195,21 @@ def dev(
 
 
 # ---------------------------------------------------------------------------
-# carl chat — interactive agent REPL
+# carl lab repl — REMOVED (F1). Kept as a tombstone so existing muscle
+# memory gets a clear pointer to the canonical surface instead of a
+# "no such command" dead-end.
 # ---------------------------------------------------------------------------
 
 
-@app.command(name="chat", hidden=True)
-def chat_repl(
+def repl_removed(
     ctx: typer.Context = typer.Option(None, hidden=True),
-    model: str = typer.Option("claude-sonnet-4-6", "--model", "-m", help="Claude model for agent"),
-    config: str = typer.Option("carl.yaml", "--config", "-c", help="Project config for context"),
-    api_key: str | None = typer.Option(
-        None, "--api-key", envvar="ANTHROPIC_API_KEY", help="Anthropic API key"
-    ),
 ) -> None:
-    """[legacy] Simple REPL chat. For the full agentic loop use: carl chat."""
+    """[removed] ``carl lab repl`` has been retired — use ``carl chat`` instead."""
+    del ctx  # suppress unused-arg
     c = get_console()
-    _warn_legacy_command_alias(c, ctx, "carl lab chat")
-    if not api_key:
-        from carl_studio.cli.prompt import require
-        api_key = require("ANTHROPIC_API_KEY")
-
-    try:
-        import anthropic
-    except ImportError as exc:
-        _render_extra_install_hint(
-            c,
-            "observe",
-            "Anthropic SDK support is not installed.",
-            exc,
-            quoted=True,
-        )
-        raise typer.Exit(1)
-
-    from carl_core.constants import KAPPA, SIGMA
-
-    # Load project context if available
-    project_context = ""
-    try:
-        from carl_studio.project import load_project
-
-        proj = load_project(config)
-        project_context = f"""Current project: {proj.name}
-Model: {proj.base_model}
-Method: {proj.method}
-Compute: {proj.compute_target} via {proj.backend}
-Dataset: {proj.dataset_repo}
-CARL enabled: {proj.carl_enabled}
-Use case: {proj.stack.use_case}"""
-    except Exception:
-        project_context = "No carl.yaml found. Help the user set up a project."
-
-    system_prompt = f"""You are CARL, a coherence-aware training assistant powered by terminals OS (Intuition Labs LLC).
-
-Conservation law: T* = kappa * d, where kappa = {KAPPA:.4f}, sigma = {SIGMA:.4f}, kappa*sigma = 4 bits/dim.
-
-{project_context}
-
-You help users:
-1. Configure training runs (model, hardware, data, rewards)
-2. Recommend 2-3 options for any training decision
-3. Explain CARL coherence metrics (Phi, cloud quality, discontinuity)
-4. Dispatch training via carl CLI commands
-
-Keep responses concise. Lead with recommendations, not explanations."""
-
-    client = anthropic.Anthropic(api_key=api_key)
-    messages: list[dict] = []
-
-    director = c.theme.persona.value.upper()
-    c.blank()
-    c.header(f"Campfire Chat with {director}")
-    c.kv("Model", model)
-    c.info("Type 'quit' or Ctrl+C to exit.")
-    c.blank()
-
-    while True:
-        try:
-            user_input = input("  you> ").strip()
-        except (KeyboardInterrupt, EOFError):
-            c.blank()
-            c.voice("farewell")
-            break
-
-        if not user_input or user_input.lower() in ("quit", "exit", "q"):
-            c.voice("farewell")
-            break
-
-        messages.append({"role": "user", "content": user_input})
-
-        try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=1024,
-                system=system_prompt,
-                messages=messages,
-            )
-            assistant_text = ""
-            for block in response.content:
-                if hasattr(block, "text"):
-                    assistant_text += block.text
-
-            messages.append({"role": "assistant", "content": assistant_text})
-            c.blank()
-            from rich.markdown import Markdown
-
-            c.print(Markdown(f"**carl>** {assistant_text}"))
-            c.blank()
-
-        except Exception as e:
-            c.error(str(e))
+    c.warn("`carl lab repl` was retired in v0.7.")
+    c.info("Use `carl chat` for the interactive loop or `carl ask \"<prompt>\"` for one-shot.")
+    raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------

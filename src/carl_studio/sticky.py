@@ -41,17 +41,13 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Module-level knobs — hoisted so ``carl doctor``, ``carl queue reclaim``,
-# the heartbeat daemon's in-loop maintenance tick, and ``carl db maintenance``
-# all read the same source of truth. Drift between these sites was the
-# original motivating bug: the daemon would reclaim at 10 minutes while
-# ``carl doctor`` flagged "stuck" at a different threshold, producing false
-# positives (R2-005).
+# Module-level knobs — hoisted so every caller (``carl doctor``,
+# ``carl queue reclaim``, the heartbeat daemon, ``carl db maintenance``)
+# reads the same threshold. Drift between sites would produce false
+# positives (daemon reclaiming at N minutes while doctor flags at M).
 #
-# ``DEFAULT_RETENTION_DAYS`` is owned by ``carl_studio.db`` (to avoid a
-# ``sticky → db → sticky`` circular import) and re-exported here so
-# consumers that already think in terms of sticky-note retention have a
-# single place to reach for the constant.
+# ``DEFAULT_RETENTION_DAYS`` is owned by ``carl_studio.db`` to avoid a
+# circular import; re-exported here for sticky-note consumers.
 # ---------------------------------------------------------------------------
 
 #: Default minimum age (seconds) before a ``processing`` sticky-note row is
@@ -235,12 +231,8 @@ class StickyQueue:
             )
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=max_age_seconds)
         cutoff_str = cutoff.strftime(ISO8601_Z)
-        # ``<=`` not ``<`` — because ``started_at`` has one-second resolution
-        # (see ``carl_core.timeutil.now_iso``) a row claimed in the current second would have
-        # ``started_at == cutoff`` when ``max_age_seconds`` is ``0``, and a
-        # strict ``<`` would leave it behind. ``<=`` makes "reclaim now"
-        # actually reclaim, and is harmless on the common path because a
-        # real wedge will be many seconds beyond the cutoff.
+        # Inclusive ``<=``: ``started_at`` has one-second resolution, so an
+        # equality match must still reclaim when ``max_age_seconds=0``.
         with self._conn() as conn:
             cursor = conn.execute(
                 "UPDATE sticky_notes SET status = 'queued', started_at = NULL "

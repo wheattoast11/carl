@@ -1,16 +1,21 @@
-"""Core utility commands (bundle, compute, push)."""
+"""Core utility commands (bundle, compute).
+
+``carl push`` lives in ``carl_studio.cli.push`` since v0.7 where it was
+promoted to a first-class verb with an expanded signature (run id
+lookup, positional repo argument, etc.). Importing ``push`` from this
+module still works via the shim below so downstream scripts that did
+``from carl_studio.cli.core import push`` keep resolving.
+"""
 
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
 import typer
 
 from carl_studio.console import get_console
 
 from .apps import app
-from .shared import _render_extra_install_hint
 
 # ---------------------------------------------------------------------------
 # carl bundle
@@ -69,49 +74,9 @@ def compute_cmd() -> None:
 
 
 # ---------------------------------------------------------------------------
-# carl push
+# carl push — promoted to `carl_studio.cli.push`. The wiring below keeps a
+# `push` symbol exported from this module for legacy `from carl_studio.cli.core
+# import push` imports. The actual command is registered via `cli/wiring.py`.
 # ---------------------------------------------------------------------------
-@app.command()
-def push(
-    model_path: str = typer.Argument(..., help="Local model/adapter directory to push"),
-    repo_id: str = typer.Option(..., "--repo", "-r", help="HuggingFace Hub repo ID"),
-    base_model: str = typer.Option("", "--base-model", "-b", help="Base model ID for model card"),
-    method: str = typer.Option("grpo", "--method", help="Training method (sft, grpo, dpo)"),
-    dataset: str = typer.Option("", "--dataset", "-d", help="Training dataset ID"),
-    private: bool = typer.Option(False, "--private", help="Make repo private"),
-) -> None:
-    """Push model to HuggingFace Hub with CARL coherence metadata."""
-    import anyio
-
-    c = get_console()
-    artifact_path = Path(model_path)
-    if not artifact_path.exists():
-        c.error(f"Model path not found: {model_path}")
-        raise typer.Exit(1)
-
-    try:
-        from carl_studio.hub.models import push_with_metadata
-    except ImportError as exc:
-        _render_extra_install_hint(c, "hf", "Hub publishing support is not installed.", exc)
-        raise typer.Exit(1)
-
-    c.info(f"Publishing artifacts from {model_path} -> {repo_id}")
-
-    try:
-        url = anyio.run(
-            push_with_metadata,
-            model_path,
-            repo_id,
-            base_model,
-            method,
-            dataset,
-            None,  # coherence_metrics
-            private,
-        )
-    except Exception as exc:
-        c.error(f"Publish failed: {exc}")
-        raise typer.Exit(1)
-
-    c.ok(f"Published: {url}")
-    c.blank()
+from .push import push_cmd as push  # noqa: E402,F401  — re-export shim
 

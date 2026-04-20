@@ -171,6 +171,86 @@ class TestSampleProject:
         assert init_mod._offer_sample_project(InteractionChain()) is False
         assert not (workdir / "carl.yaml").exists()
 
+    # ------------------------------------------------------------------
+    # F4 — context-aware scaffold overrides
+    # ------------------------------------------------------------------
+
+    def test_sample_project_uses_hf_model_from_context(
+        self, isolated_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """When ~/.carl/context.json has hf_model, the scaffold must pin it."""
+        init_mod._save_context({"hf_model": "mistralai/Mistral-7B-v0.1"})
+
+        workdir = tmp_path / "ctx-model"
+        workdir.mkdir()
+        monkeypatch.chdir(workdir)
+        monkeypatch.setattr("typer.confirm", lambda *_a, **_k: True)
+
+        from carl_core.interaction import InteractionChain
+
+        assert init_mod._offer_sample_project(InteractionChain()) is True
+
+        import yaml as _yaml
+
+        body = _yaml.safe_load((workdir / "carl.yaml").read_text())
+        assert body["base_model"] == "mistralai/Mistral-7B-v0.1"
+        # GitHub repo absent -> dataset stays on the baseline.
+        assert body["dataset_repo"] == "wikitext"
+
+    def test_sample_project_uses_github_repo_from_context(
+        self, isolated_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        init_mod._save_context({"github_repo": "acme/superproject"})
+
+        workdir = tmp_path / "ctx-repo"
+        workdir.mkdir()
+        monkeypatch.chdir(workdir)
+        monkeypatch.setattr("typer.confirm", lambda *_a, **_k: True)
+
+        from carl_core.interaction import InteractionChain
+
+        assert init_mod._offer_sample_project(InteractionChain()) is True
+
+        import yaml as _yaml
+
+        body = _yaml.safe_load((workdir / "carl.yaml").read_text())
+        assert body["dataset_repo"] == "acme/superproject"
+        # HF model absent -> base_model falls back to TinyLlama.
+        assert body["base_model"] == "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+
+    def test_sample_project_without_context_falls_back_to_defaults(
+        self, isolated_home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """No context.json -> TinyLlama + wikitext baseline."""
+        workdir = tmp_path / "no-ctx"
+        workdir.mkdir()
+        monkeypatch.chdir(workdir)
+        monkeypatch.setattr("typer.confirm", lambda *_a, **_k: True)
+
+        from carl_core.interaction import InteractionChain
+
+        assert init_mod._offer_sample_project(InteractionChain()) is True
+
+        import yaml as _yaml
+
+        body = _yaml.safe_load((workdir / "carl.yaml").read_text())
+        assert body["base_model"] == "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+        assert body["dataset_repo"] == "wikitext"
+
+    def test_render_sample_project_yaml_overrides_roundtrip(
+        self, isolated_home: Path
+    ) -> None:
+        """Unit-level check for the pure renderer: both overrides land."""
+        init_mod._save_context({
+            "hf_model": "google/gemma-2-9b",
+            "github_repo": "tej/superrepo",
+        })
+        body, overrides = init_mod._render_sample_project_yaml()
+        assert overrides["base_model"] == "google/gemma-2-9b"
+        assert overrides["dataset_repo"] == "tej/superrepo"
+        assert "google/gemma-2-9b" in body
+        assert "tej/superrepo" in body
+
 
 # ---------------------------------------------------------------------------
 # JRN-008 — celebration + guidance block
@@ -372,8 +452,8 @@ class TestPumpEvents:
     def test_event_pump_handles_all_event_kinds(self) -> None:
         """One helper must cover every event kind without raising.
 
-        Exercises both paths by calling the helper with the flag set
-        expected by the one-shot path AND the interactive path.
+        Exercises both paths by calling the helper with the enum-keyed
+        render mode expected by the one-shot path AND the interactive path.
         """
         events = [
             _event("text_delta", content="hello"),
@@ -388,27 +468,35 @@ class TestPumpEvents:
 
         # One-shot path: no tool_blocked surfacing, no trailing blanks.
         c_oneshot = _RecordingConsole()
-        chat_mod._pump_events(iter(events), c_oneshot)
+        chat_mod._pump_events(
+            iter(events), c_oneshot, mode=chat_mod.RenderMode.ONE_SHOT
+        )
         # At least one info call for tool_call + tool_result, no warn for blocked.
         assert any("ingest_source" in m for m in c_oneshot.info_calls)
         # tool_result preview must be truncated with '...'
         assert any(m.endswith("...") for m in c_oneshot.info_calls)
+        # One-shot must NOT surface tool_blocked as a warn.
+        assert not any("denied" in m for m in c_oneshot.warn_calls)
 
         # Interactive path: surface_blocked + blank_after_done + carl_prefix_newline.
         c_interactive = _RecordingConsole()
         chat_mod._pump_events(
-            iter(events),
-            c_interactive,
-            surface_blocked=True,
-            blank_after_done=True,
-            carl_prefix_newline=True,
+            iter(events), c_interactive, mode=chat_mod.RenderMode.INTERACTIVE
         )
         # The interactive path emits a warn for tool_blocked
         # (one-shot path does not).
-        # We don't track warn explicitly — inspect prints as a proxy.
+        assert any("denied" in m for m in c_interactive.warn_calls)
         # Minimal: the blank_count on the interactive run must exceed the
         # one-shot run (extra blanks after done / text).
         assert c_interactive.blank_count > c_oneshot.blank_count
+
+    def test_event_pump_defaults_to_one_shot_mode(self) -> None:
+        """No mode argument -> the quiet one-shot surface."""
+        events = [_event("tool_blocked", tool_name="x", content="denied")]
+        c = _RecordingConsole()
+        chat_mod._pump_events(iter(events), c)
+        # tool_blocked is silenced by default.
+        assert c.warn_calls == []
 
     def test_event_pump_tolerates_exception_mid_stream(self) -> None:
         """A stream that raises mid-iteration must route to ``c.error`` and exit."""
@@ -420,6 +508,13 @@ class TestPumpEvents:
         c = _RecordingConsole()
         chat_mod._pump_events(_bad_stream(), c)
         assert any("boom" in m for m in c.error_calls)
+
+    def test_render_mode_is_stable_enum(self) -> None:
+        """Each surface must bind to a distinct value."""
+        assert chat_mod.RenderMode.ONE_SHOT is not chat_mod.RenderMode.INTERACTIVE
+        # Stable string value is part of the contract (e.g. tracing/logging).
+        assert chat_mod.RenderMode.ONE_SHOT.value == "one_shot"
+        assert chat_mod.RenderMode.INTERACTIVE.value == "interactive"
 
 
 # ---------------------------------------------------------------------------

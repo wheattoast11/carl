@@ -65,7 +65,7 @@ class CostLedger:
 class SessionState:
     """Message history + turn accounting. One instance per chat session.
 
-    ``session_theme`` (JRN-009) records the lane the user started in —
+    ``session_theme`` records the lane the user started in —
     ``""`` = not yet classified, ``"move:explore"`` / ``"move:train"`` /
     ``"move:eval"`` / ``"move:sticky"`` / ``"free-form"`` = canonical moves.
     """

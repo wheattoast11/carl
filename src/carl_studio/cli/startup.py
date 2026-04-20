@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import typer
 
@@ -21,10 +21,32 @@ from .shared import (
     _render_command_inventory,
 )
 
-# JRN-005 — Next-steps block is suppressed once the first-run marker is
-# older than this (in seconds). 7 days aligns with the rest of the post-
-# onboarding grace period surfaces.
+# Next-steps block is suppressed once the first-run marker is older than
+# this (in seconds). 7 days matches the post-onboarding grace window.
 _DOCTOR_NEXT_STEPS_MAX_AGE_S: float = 7 * 24 * 60 * 60
+
+
+def _compute_doctor_verdict(
+    readiness: dict[str, Any],
+    dependencies: dict[str, Any],
+) -> str:
+    """Collapse doctor signals into one of ``"ready"|"partial"|"not_yet"``.
+
+    - ``not_yet`` whenever the guided workbench is gated by a blocker.
+    - ``ready`` when there are no blockers AND the core optional surfaces
+      (training, remote_jobs, diagnose) are all green.
+    - ``partial`` otherwise — no blockers, but something optional needs
+      setup. This is the common post-install state before the user has
+      installed extras or authed with HF/Anthropic.
+    """
+    if readiness.get("blocking_issues"):
+        return "not_yet"
+    core_ready = (
+        bool(dependencies.get("training"))
+        and bool(readiness.get("remote_jobs"))
+        and bool(readiness.get("diagnose"))
+    )
+    return "ready" if core_ready else "partial"
 
 
 def _next_steps_should_show(
@@ -119,84 +141,117 @@ def doctor(
     c.blank()
     c.header("CARL Doctor")
 
-    table = c.make_table("Check", "Status", "Detail", title="Readiness")
-    table.add_row(
-        "Guided workbench",
-        "ready" if readiness["guided_workbench"] else "needs setup",
-        "Project, config, and training deps are aligned"
-        if readiness["guided_workbench"]
-        else readiness["blocking_issues"][0],
-    )
-    table.add_row("Project", _project_status_label(project), str(project.get("path") or "(none)"))
-    table.add_row(
-        "Training deps",
-        "ready" if dependencies["training"] else "missing",
-        "pip install 'carl-studio[training]'"
-        if not dependencies["training"]
-        else "local train/eval available",
-    )
-    table.add_row(
-        "HF jobs",
-        "ready" if readiness["remote_jobs"] else "optional",
-        "remote jobs + push available"
-        if readiness["remote_jobs"]
-        else "install carl-studio[hf] and run hf auth login",
-    )
-    table.add_row(
-        "Observe live",
-        "ready" if readiness["live_observe"] else "optional",
-        "textual TUI available" if readiness["live_observe"] else "install carl-studio[tui]",
-    )
-    table.add_row(
-        "Diagnose",
-        "ready" if readiness["diagnose"] else "optional",
-        "Claude diagnosis available"
-        if readiness["diagnose"]
-        else "install carl-studio[observe] and export ANTHROPIC_API_KEY",
-    )
-    table.add_row("Camp", _camp_status_label(summary), "carl camp login")
-    if queue_error is not None:
-        table.add_row("Queue", "error", queue_error)
-    elif queue_pending is None:
-        table.add_row("Queue", "unavailable", "sticky queue unavailable")
+    # F2 — Plain-English verdict. One line at the TOP of the output so the
+    # user knows the state of the world before they scan the table. The
+    # verdict has three bands:
+    #
+    # * READY    — no blockers, optional surfaces all ready.
+    # * PARTIAL  — no blockers, but some optional surfaces need setup.
+    # * NOT YET  — at least one blocker; training is gated.
+    verdict = _compute_doctor_verdict(readiness, dependencies)
+    if verdict == "ready":
+        c.ok("READY — carl train / carl ask / carl chat are all good to go.")
+    elif verdict == "partial":
+        c.info("PARTIAL — core commands work; some optional features need setup.")
     else:
-        # A non-None ``oldest_processing_s`` is the signal that at least
-        # one row is in ``processing``. If its age exceeds the shared
-        # :data:`DEFAULT_RECLAIM_MAX_AGE_S` threshold we surface a warning-
-        # shaped status so operators see something is stuck without having
-        # to grep logs. Keeping this bound to the *same* constant the
-        # daemon's in-loop reclaim uses eliminates the drift that used to
-        # make ``carl doctor`` flag "stuck" for work the daemon had
-        # already reclaimed (R2-005).
-        queue_status = "empty" if queue_pending == 0 else "ready"
-        queue_detail = (
-            "no sticky notes pending"
-            if queue_pending == 0
-            else f"{queue_pending} pending"
+        c.warn("NOT YET — see blockers below.")
+    c.blank()
+
+    if verbose:
+        table = c.make_table("Check", "Status", "Detail", title="Readiness")
+        table.add_row(
+            "Guided workbench",
+            "ready" if readiness["guided_workbench"] else "needs setup",
+            "Project, config, and training deps are aligned"
+            if readiness["guided_workbench"]
+            else readiness["blocking_issues"][0],
         )
-        if (
-            queue_oldest_processing_s is not None
+        table.add_row(
+            "Project", _project_status_label(project), str(project.get("path") or "(none)")
+        )
+        table.add_row(
+            "Training deps",
+            "ready" if dependencies["training"] else "missing",
+            "pip install 'carl-studio[training]'"
+            if not dependencies["training"]
+            else "local train/eval available",
+        )
+        table.add_row(
+            "HF jobs",
+            "ready" if readiness["remote_jobs"] else "optional",
+            "remote jobs + push available"
+            if readiness["remote_jobs"]
+            else "install carl-studio[hf] and run hf auth login",
+        )
+        table.add_row(
+            "Observe live",
+            "ready" if readiness["live_observe"] else "optional",
+            "textual TUI available" if readiness["live_observe"] else "install carl-studio[tui]",
+        )
+        table.add_row(
+            "Diagnose",
+            "ready" if readiness["diagnose"] else "optional",
+            "Claude diagnosis available"
+            if readiness["diagnose"]
+            else "install carl-studio[observe] and export ANTHROPIC_API_KEY",
+        )
+        table.add_row("Camp", _camp_status_label(summary), "carl camp login")
+        if queue_error is not None:
+            table.add_row("Queue", "error", queue_error)
+        elif queue_pending is None:
+            table.add_row("Queue", "unavailable", "sticky queue unavailable")
+        else:
+            # Warn when a processing row exceeds :data:`DEFAULT_RECLAIM_MAX_AGE_S`
+            # — same constant the daemon's reclaim uses, so doctor and
+            # daemon can't disagree about what counts as stuck.
+            queue_status = "empty" if queue_pending == 0 else "ready"
+            queue_detail = (
+                "no sticky notes pending"
+                if queue_pending == 0
+                else f"{queue_pending} pending"
+            )
+            if (
+                queue_oldest_processing_s is not None
+                and queue_oldest_processing_s > float(DEFAULT_RECLAIM_MAX_AGE_S)
+            ):
+                queue_status = "stuck"
+                queue_detail += (
+                    f" (oldest processing {queue_oldest_processing_s:.0f}s — "
+                    "run: carl queue reclaim)"
+                )
+            elif queue_oldest_processing_s is not None:
+                queue_detail += (
+                    f" (oldest processing {queue_oldest_processing_s:.0f}s)"
+                )
+            table.add_row("Queue", queue_status, queue_detail)
+        c.print(table)
+        c.blank()
+    else:
+        # Compact default: only surface the Queue row when it is actively
+        # broken or stuck. The verdict + blocker list + Next steps are
+        # enough guidance for the common case; the full table is behind
+        # --verbose.
+        if queue_error is not None:
+            c.warn(f"Queue: error — {queue_error}")
+            c.blank()
+        elif (
+            queue_pending is not None
+            and queue_pending > 0
+            and queue_oldest_processing_s is not None
             and queue_oldest_processing_s > float(DEFAULT_RECLAIM_MAX_AGE_S)
         ):
-            queue_status = "stuck"
-            queue_detail += (
-                f" (oldest processing {queue_oldest_processing_s:.0f}s — "
-                "run: carl queue reclaim)"
+            c.warn(
+                f"Queue: {queue_pending} pending; oldest processing "
+                f"{queue_oldest_processing_s:.0f}s — run: carl queue reclaim"
             )
-        elif queue_oldest_processing_s is not None:
-            queue_detail += (
-                f" (oldest processing {queue_oldest_processing_s:.0f}s)"
-            )
-        table.add_row("Queue", queue_status, queue_detail)
-    c.print(table)
-    c.blank()
+            c.blank()
 
     if readiness["blocking_issues"]:
         c.print("  [camp.primary]Needs attention[/]")
         for idx, issue in enumerate(readiness["blocking_issues"], start=1):
             c.print(f"    {idx}. {issue}")
         c.blank()
-    else:
+    elif verbose:
         c.ok("Local workbench is ready.")
         c.info("Start with: carl train --config carl.yaml")
         c.blank()
@@ -216,9 +271,9 @@ def doctor(
                 )
             c.blank()
 
-    # JRN-005 — humanize doctor with a short Next steps block. Hidden when
-    # there are blocking issues (don't distract from red messages) and
-    # gated to recently initialized installs unless --verbose is on.
+    # Short "Next steps" block. Hidden when there are blocking issues
+    # (don't distract from red) and gated to recently initialized installs
+    # unless --verbose.
     if not readiness["blocking_issues"]:
         try:
             from carl_studio.cli.init import FIRST_RUN_MARKER

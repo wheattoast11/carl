@@ -1,7 +1,9 @@
-"""Chat CLI — ``carl chat``.
+"""Chat CLI — ``carl chat`` and ``carl ask``.
 
-Primary natural language interface to CARL. Launches an agentic chat loop
-with tool use, frame awareness, and proactive guidance.
+Two canonical surfaces for talking to CARL:
+
+- ``carl chat`` — interactive loop (full CARLAgent, streaming, sessions).
+- ``carl ask "<prompt>"`` — one-shot single-turn reply with tools.
 
 Session persistence: --session <id> resumes, auto-saves on exit.
 Session listing: --sessions lists all saved sessions.
@@ -10,6 +12,8 @@ Cost tracking: --budget <usd> sets a hard spending cap.
 
 from __future__ import annotations
 
+import warnings
+from enum import Enum
 from typing import Any, Iterable
 
 import typer
@@ -17,30 +21,48 @@ import typer
 from carl_studio.console import get_console
 
 
+class RenderMode(str, Enum):
+    """Render mode for the agent event stream.
+
+    Two call sites drive the pump:
+
+    * :attr:`ONE_SHOT` — ``carl ask`` path. Single turn, no tool-blocked
+      surfacing, no interstitial blanks, no pre-``carl>`` prompt blank.
+    * :attr:`INTERACTIVE` — ``carl chat`` REPL. Surfaces ``tool_blocked``
+      as a warn, adds a blank after each ``done`` (separates turns), and
+      emits a leading blank before the first ``carl> `` prompt line.
+    """
+
+    ONE_SHOT = "one_shot"
+    INTERACTIVE = "interactive"
+
+
 def _pump_events(
     events: Iterable[Any],
     c: Any,
     *,
-    surface_blocked: bool = False,
-    blank_after_done: bool = False,
-    carl_prefix_newline: bool = False,
+    mode: RenderMode = RenderMode.ONE_SHOT,
 ) -> None:
     """Render agent event stream to the console.
 
     Shared by the one-shot path (``ask_cmd``) and the interactive loop
     (``chat_cmd``). The two paths used to diverge on formatting, which made
-    the stream renderer a drift magnet. Differences are captured via flags:
+    the stream renderer a drift magnet. Differences are captured via a
+    single :class:`RenderMode` flag:
 
-    ``surface_blocked``
-        Emit a ``warn`` when a tool_blocked event arrives (interactive
-        loop); the one-shot path does not surface tool_blocked.
-    ``blank_after_done``
-        Print a trailing blank line after a ``done`` event (interactive
-        loop only — keeps successive turns visually separated).
-    ``carl_prefix_newline``
-        Emit a blank before printing the ``carl> `` prefix on the first
-        text delta (interactive loop — separates the prompt line).
+    ``INTERACTIVE``
+        Emit a ``warn`` when a ``tool_blocked`` event arrives, print a
+        trailing blank after a ``done`` event (separates successive turns),
+        and emit a blank before the first ``carl> `` prefix line.
+    ``ONE_SHOT``
+        The three behaviours above are suppressed — the caller already
+        framed the turn with a header / footer block.
     """
+    interactive = mode is RenderMode.INTERACTIVE
+    surface_blocked = interactive
+    blank_after_done = interactive
+    carl_prefix_newline = interactive
+
     streaming_text = False
     try:
         for event in events:
@@ -144,6 +166,39 @@ def _list_sessions() -> None:
         console.print(table)
 
 
+def _context_prompt_extension() -> str:
+    """Build a compact priming block from ``~/.carl/context.json``.
+
+    Returns an empty string when no useful context exists. The block is
+    injected once into the agent via ``_system_prompt_extension`` so Carl
+    knows the user's starting GitHub repo and/or HF model without having
+    to re-ask. Any filesystem or JSON error collapses to empty — context
+    priming is best-effort and must never block the chat loop.
+    """
+    try:
+        from carl_studio.cli.init import _load_context
+    except Exception:  # pragma: no cover — defensive
+        return ""
+    try:
+        ctx = _load_context()
+    except Exception:
+        return ""
+    lines: list[str] = []
+    repo = ctx.get("github_repo")
+    model = ctx.get("hf_model")
+    if repo:
+        lines.append(f"- Starting GitHub repo: {repo}")
+    if model:
+        lines.append(f"- Starting HF model: {model}")
+    if not lines:
+        return ""
+    return (
+        "User context (from carl init):\n"
+        + "\n".join(lines)
+        + "\nUse these as defaults when the user does not specify otherwise."
+    )
+
+
 def run_one_shot_agent(
     prompt: str,
     *,
@@ -178,13 +233,20 @@ def run_one_shot_agent(
         max_budget_usd=budget,
     )
 
+    # Prime the agent with any GitHub/HF context the user captured during
+    # `carl init`. One-shot turns benefit the most — there is no REPL to
+    # re-state the starting repo/model in, so the priming is load-bearing.
+    ctx_ext = _context_prompt_extension()
+    if ctx_ext and hasattr(agent, "_system_prompt_extension"):
+        agent._system_prompt_extension = ctx_ext  # pyright: ignore[reportPrivateUsage]
+
     info = agent.provider_info
     c.blank()
     c.kv("Model", info["model"])
     c.kv("Prompt", prompt[:120] + ("..." if len(prompt) > 120 else ""))
     c.blank()
 
-    _pump_events(agent.chat(prompt), c)
+    _pump_events(agent.chat(prompt), c, mode=RenderMode.ONE_SHOT)
 
     cost = agent.cost_summary
     if cost["turn_count"] > 0:
@@ -216,23 +278,13 @@ def ask_cmd(
 def _read_total_cost(agent: Any) -> float:
     """Read the session's running cost from the agent, safely.
 
-    ``CARLAgent.cost_summary`` is a property returning a dict with
-    ``total_cost_usd``. We fall back to the underlying
-    ``_total_cost_usd`` attribute if that property is unavailable
-    (pre-existing agents, mocks in tests). Non-numeric values collapse
-    to ``0.0`` — cost streaming must never break the chat loop.
+    The canonical source is :attr:`CARLAgent.cost_summary` — a property
+    returning a dict with ``total_cost_usd``. Non-numeric values or a
+    missing/broken property collapse to ``0.0``; cost streaming must never
+    break the chat loop.
     """
     try:
-        summary = agent.cost_summary
-        if callable(summary):
-            summary = summary()
-        if isinstance(summary, dict):
-            value = summary.get("total_cost_usd", 0.0)
-            return float(value) if value is not None else 0.0
-    except Exception:
-        pass
-    try:
-        return float(getattr(agent, "_total_cost_usd", 0.0) or 0.0)
+        return float(agent.cost_summary.get("total_cost_usd", 0.0))
     except Exception:
         return 0.0
 
@@ -339,6 +391,14 @@ def chat_cmd(
         session_id=session,
     )
 
+    # Prime the interactive loop with user context so Carl knows the
+    # starting repo/model without the user having to re-type it. Skipped
+    # when resuming a session — the session already carries its own state.
+    if not session:
+        ctx_ext = _context_prompt_extension()
+        if ctx_ext and hasattr(agent, "_system_prompt_extension"):
+            agent._system_prompt_extension = ctx_ext  # pyright: ignore[reportPrivateUsage]
+
     # Resume session if requested
     if session:
         resumed = agent.load_session(session)
@@ -429,10 +489,8 @@ def chat_cmd(
             bootstrap_done = True
             move_key = parse_intro_selection(user_input)
 
-            # JRN-009 — session theme tracking. Map the intro selection to a
-            # stable label the agent persists with its session state so the
-            # system prompt and downstream analytics can reason about "which
-            # lane did the user start in."
+            # Map the intro selection to a stable session-theme label so the
+            # agent can persist "which lane did the user start in."
             _MOVE_KEY_TO_THEME: dict[str | None, str] = {
                 "e": "move:explore",
                 "t": "move:train",
@@ -491,9 +549,7 @@ def chat_cmd(
         _pump_events(
             agent.chat(primed_input),
             c,
-            surface_blocked=True,
-            blank_after_done=True,
-            carl_prefix_newline=True,
+            mode=RenderMode.INTERACTIVE,
         )
 
         # Per-turn cost visibility — emit AFTER the turn's events have
@@ -524,6 +580,21 @@ def chat_cmd(
             except Exception as exc:
                 c.warn(f"frame bootstrap skipped: {exc}")
         bootstrap_ctx = None  # one-shot — never re-apply on later turns
+
+
+def deprecated_positional_ask(prompt: str, **kwargs: Any) -> None:
+    """Back-compat shim for the removed ``carl "<prompt>"`` positional form.
+
+    Surfaces a :class:`DeprecationWarning` and routes to :func:`run_one_shot_agent`
+    so existing scripts keep working while users migrate to the canonical
+    ``carl ask "<prompt>"`` form.
+    """
+    warnings.warn(
+        "`carl \"<prompt>\"` (bare positional) is deprecated; use `carl ask \"<prompt>\"` instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    run_one_shot_agent(prompt, **kwargs)
 
 
 def _exit_session(c: Any, agent: Any) -> None:

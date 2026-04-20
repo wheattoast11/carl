@@ -1466,3 +1466,136 @@ class TestSystemPromptExtension:
     def test_extension_default_is_empty(self) -> None:
         agent = CARLAgent(model="test", _client=MagicMock())
         assert agent._system_prompt_extension == ""
+
+
+# =========================================================================
+# J2 — Anthropic rate-limit retry + carl.rate_limit error event
+# =========================================================================
+
+
+class TestRateLimitErrorHandling:
+    """Verify the agent surfaces a stable ``carl.rate_limit`` code when
+    the Anthropic SDK's own ``max_retries`` budget is exhausted.
+
+    The SDK raises :class:`anthropic.RateLimitError` after backoff on
+    persistent 429s. The agent must:
+
+    1. Catch that specific exception (not the generic ``API error``
+       catchall) and yield an ``error`` event with ``code="carl.rate_limit"``,
+    2. Never propagate the exception out of the generator.
+    """
+
+    def _make_rate_limit_exc(self) -> Exception:
+        """Construct a real ``anthropic.RateLimitError`` for the mock client.
+
+        Uses a minimal ``httpx.Response`` so the SDK's constructor (which
+        requires ``response=`` + ``body=`` kwargs) accepts the build. We
+        cannot fake this with a plain ``RuntimeError`` because the agent's
+        branch is keyed on ``isinstance(..., anthropic.RateLimitError)``.
+        """
+        import anthropic
+        import httpx
+        resp = httpx.Response(
+            status_code=429,
+            request=httpx.Request("POST", "https://api.anthropic.com/x"),
+        )
+        return anthropic.RateLimitError(
+            "too many requests",
+            response=resp,
+            body=None,
+        )
+
+    def test_rate_limit_raised_at_stream_entry_yields_carl_rate_limit(
+        self,
+    ) -> None:
+        """SDK raises ``RateLimitError`` when opening the stream — we
+        must surface ``code=carl.rate_limit`` and return cleanly."""
+        bad_client = MagicMock()
+        bad_client.messages.stream.side_effect = self._make_rate_limit_exc()
+        agent = CARLAgent(model="test-model", _client=bad_client)
+
+        events = list(agent.chat("hi"))  # must not raise
+        errors = [e for e in events if e.kind == "error"]
+        assert errors, "expected an error event"
+        assert errors[0].code == "carl.rate_limit"
+        assert "rate limited" in errors[0].content.lower()
+        # No ``done`` event because we returned early.
+        assert not any(e.kind == "done" for e in events)
+
+    def test_rate_limit_during_context_manager_mapped_to_same_code(
+        self,
+    ) -> None:
+        """If the exception sneaks through the ctx-manager exit instead
+        of the inner try-block, the outer catchall must still tag it
+        ``carl.rate_limit`` rather than the generic stream_error."""
+        rate_exc = self._make_rate_limit_exc()
+
+        class _FailingCtx:
+            def __enter__(self) -> Any:
+                raise rate_exc
+
+            def __exit__(self, *args: Any) -> bool:
+                return False
+
+        client = MagicMock()
+        client.messages.stream = MagicMock(return_value=_FailingCtx())
+        agent = CARLAgent(model="test-model", _client=client)
+
+        events = list(agent.chat("hi"))
+        errors = [e for e in events if e.kind == "error"]
+        assert errors
+        # The inner guard catches it at ``.stream(**kwargs)`` return, so
+        # the code should be carl.rate_limit. If the SDK ever moves the
+        # raise into the CM enter path, the outer catchall covers it.
+        assert errors[0].code == "carl.rate_limit"
+
+    def test_non_rate_limit_errors_still_mapped_to_api_error(self) -> None:
+        """Regression guard — RuntimeError (non-rate-limit) must stay on
+        the ``carl.api_error`` code path to preserve legacy BC."""
+        bad_client = MagicMock()
+        bad_client.messages.stream.side_effect = RuntimeError(
+            "cannot open stream",
+        )
+        agent = CARLAgent(model="test-model", _client=bad_client)
+
+        events = list(agent.chat("hi"))
+        errors = [e for e in events if e.kind == "error"]
+        assert errors
+        assert errors[0].code in ("carl.api_error", "carl.stream_error")
+        assert errors[0].code != "carl.rate_limit"
+
+    def test_agent_client_has_retries_configured(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When we construct an agent without injecting a client, the
+        ``anthropic.Anthropic(...)`` call must pass ``max_retries=4`` and
+        an explicit ``httpx.Timeout`` so the J2 retry contract holds.
+
+        We monkeypatch ``anthropic.Anthropic`` to a spy so we can assert
+        the kwargs without depending on the specific attribute the SDK
+        happens to store them on — which varies across SDK versions and
+        across test runs where earlier modules may have stubbed the class.
+        """
+        try:
+            import anthropic
+            import httpx
+        except ImportError:
+            pytest.skip("anthropic SDK not installed")
+
+        captured_kwargs: dict[str, Any] = {}
+
+        class _SpyAnthropic:
+            def __init__(self, **kwargs: Any) -> None:
+                captured_kwargs.update(kwargs)
+
+        monkeypatch.setattr(anthropic, "Anthropic", _SpyAnthropic)
+
+        CARLAgent(
+            model="test-model",
+            api_key="sk-ant-fake-for-init-only",
+        )
+        assert captured_kwargs.get("max_retries") == 4
+        # Timeout should be an ``httpx.Timeout`` so a wedged handshake
+        # cannot stall the agent indefinitely.
+        timeout = captured_kwargs.get("timeout")
+        assert isinstance(timeout, httpx.Timeout)

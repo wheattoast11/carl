@@ -6,21 +6,21 @@ Local state is authoritative — the server cannot silently enable tracking.
 Enforcement
 -----------
 Runtime network-egress paths MUST call :func:`consent_gate` at their
-boundary with the relevant :class:`ConsentFlag`. Gates currently wired:
+boundary with the relevant consent flag. Gates currently wired:
 
-* ``TELEMETRY`` — :func:`carl_studio.sync.push` / :func:`~carl_studio.sync.pull`,
+* ``"telemetry"`` — :func:`carl_studio.sync.push` / :func:`~carl_studio.sync.pull`,
   MCP ``authenticate`` tool.
-* ``CONTRACT_WITNESSING`` — :class:`carl_studio.x402.X402Client.execute` and
+* ``"contract_witnessing"`` — :class:`carl_studio.x402.X402Client.execute` and
   :meth:`carl_studio.x402_connection.PaymentConnection.get` (payments create
   service-contract witnesses).
-* ``OBSERVABILITY`` — reserved for outbound coherence-probe publish paths.
+* ``"observability"`` — reserved for outbound coherence-probe publish paths.
 """
 
 from __future__ import annotations
 
 import sys
-from enum import Enum
-from typing import Any
+import warnings
+from typing import Any, Literal
 
 from carl_core import now_iso
 from carl_core.errors import CARLError
@@ -35,21 +35,15 @@ CONSENT_KEYS = frozenset({
     "contract_witnessing",
 })
 
-
-class ConsentFlagKey(str, Enum):
-    """Enumerates the runtime consent flags.
-
-    Values match :class:`ConsentState` field names and the string keys
-    accepted by :meth:`ConsentManager.update`. The name ``ConsentFlagKey``
-    (rather than ``ConsentFlag``) avoids a collision with the pre-existing
-    :class:`ConsentFlag` pydantic model below, which represents the stored
-    state of a single flag (``enabled`` + ``changed_at``).
-    """
-
-    OBSERVABILITY = "observability"
-    TELEMETRY = "telemetry"
-    USAGE_ANALYTICS = "usage_analytics"
-    CONTRACT_WITNESSING = "contract_witnessing"
+#: Literal alias for consent-flag keys. Enables static checking at call
+#: sites (``consent_gate("telemetry")``) without introducing a parallel
+#: enum. Runtime validation still goes through :data:`CONSENT_KEYS`.
+ConsentKey = Literal[
+    "observability",
+    "telemetry",
+    "usage_analytics",
+    "contract_witnessing",
+]
 
 
 class ConsentError(CARLError):
@@ -102,13 +96,13 @@ class ConsentManager:
         """Persist consent state to LocalDB config table."""
         self._get_db().set_config(_CONSENT_KEY, state.model_dump_json())
 
-    def is_granted(self, key: str | ConsentFlagKey) -> bool:
+    def is_granted(self, key: ConsentKey | str) -> bool:
         """Return ``True`` iff the consent flag *key* is currently enabled.
 
         Unknown keys return ``False`` (fail-closed — a typo or removed flag
         must never leak into granted-by-mistake behavior).
         """
-        flag_str = key.value if isinstance(key, ConsentFlagKey) else str(key)
+        flag_str = str(key)
         if flag_str not in CONSENT_KEYS:
             return False
         state = self.load()
@@ -214,7 +208,7 @@ def consent_state_from_profile(profile: Any) -> ConsentState:
 
 
 def consent_gate(
-    flag: ConsentFlagKey | str,
+    flag: ConsentKey | str,
     *,
     manager: ConsentManager | None = None,
 ) -> None:
@@ -228,9 +222,9 @@ def consent_gate(
     Parameters
     ----------
     flag
-        A :class:`ConsentFlagKey` enum member or the equivalent string
-        (``"observability"``, ``"telemetry"``, ``"usage_analytics"``,
-        ``"contract_witnessing"``).
+        One of the :data:`ConsentKey` literals (``"observability"``,
+        ``"telemetry"``, ``"usage_analytics"``, ``"contract_witnessing"``).
+        Accepts a bare ``str`` for runtime flexibility; unknown values raise.
     manager
         Optional :class:`ConsentManager` to use. Tests typically inject a
         manager bound to a ``FakeDB`` to exercise the gate deterministically.
@@ -243,7 +237,7 @@ def consent_gate(
         so operators can distinguish a denied gate from other consent
         failures in logs.
     """
-    flag_str = flag.value if isinstance(flag, ConsentFlagKey) else str(flag)
+    flag_str = str(flag)
     if flag_str not in CONSENT_KEYS:
         raise ConsentError(
             f"Unknown consent flag '{flag_str}'. "
@@ -261,11 +255,38 @@ def consent_gate(
         )
 
 
+class _ConsentFlagKeyShim:
+    """Namespace matching the retired ``ConsentFlagKey`` enum values.
+
+    Each attribute exposes the underlying string so ``.value`` / equality
+    checks against strings continue to work. Emits a ``DeprecationWarning``
+    on first access (the module-level ``__getattr__`` does the warn, this
+    class only carries the constants).
+    """
+
+    OBSERVABILITY = "observability"
+    TELEMETRY = "telemetry"
+    USAGE_ANALYTICS = "usage_analytics"
+    CONTRACT_WITNESSING = "contract_witnessing"
+
+
+def __getattr__(name: str) -> Any:
+    if name == "ConsentFlagKey":
+        warnings.warn(
+            "ConsentFlagKey is deprecated; use the ConsentKey Literal alias "
+            "or CONSENT_KEYS strings directly. Removal in v0.8.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return _ConsentFlagKeyShim
+    raise AttributeError(f"module 'carl_studio.consent' has no attribute {name!r}")
+
+
 __all__ = [
     "CONSENT_KEYS",
     "ConsentError",
     "ConsentFlag",
-    "ConsentFlagKey",
+    "ConsentKey",
     "ConsentManager",
     "ConsentState",
     "consent_gate",

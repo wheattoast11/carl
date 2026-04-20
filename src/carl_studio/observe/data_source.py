@@ -8,12 +8,11 @@ Three backends:
 
 Consent gate
 ------------
-``TrackioSource`` is gated by
-:attr:`~carl_studio.consent.ConsentFlagKey.OBSERVABILITY`. File-backed
-sources run fully offline and are unaffected. The Trackio path touches
-the user's Hugging Face Space (via ``gradio_client``) to pull training
-metrics, which is an observability egress by design — enable
-observability consent to use it.
+``TrackioSource`` is gated by the ``"observability"`` consent flag.
+File-backed sources run fully offline and are unaffected. The Trackio
+path touches the user's Hugging Face Space (via ``gradio_client``) to
+pull training metrics, which is an observability egress by design —
+enable observability consent to use it.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ from pathlib import Path
 from typing import Iterator
 from urllib.parse import urlparse
 
-from carl_studio.consent import ConsentFlagKey, consent_gate
+from carl_studio.consent import consent_gate
 
 
 @dataclass
@@ -279,7 +278,7 @@ class TrackioSource:
         # ``carl_studio.observe``. Raise before any network / import of
         # gradio_client so the telemetry surface stays cleanly off by
         # default.
-        consent_gate(ConsentFlagKey.OBSERVABILITY)
+        consent_gate("observability")
 
         try:
             from gradio_client import Client

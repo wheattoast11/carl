@@ -19,6 +19,7 @@ for _module in (
     "shared",
     "startup",
     "training",
+    "push",
     "core",
     "observe",
     "project_data",

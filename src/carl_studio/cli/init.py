@@ -24,7 +24,7 @@ from carl_studio.settings import CARL_HOME, GLOBAL_CONFIG
 FIRST_RUN_MARKER = CARL_HOME / ".initialized"
 CONTEXT_FILE = CARL_HOME / "context.json"
 
-# Provider -> default chat model mapping for JRN-004. Keep in sync with
+# Provider -> default chat model. Keep in sync with
 # ``carl_studio.chat_agent._MODEL_PRICING`` and the OpenRouter catalog.
 _PROVIDER_DEFAULT_MODEL: dict[str, str] = {
     "Anthropic": "claude-sonnet-4-6",
@@ -75,7 +75,7 @@ def init_cmd(
     if provider_ok:
         steps_done.append("LLM provider")
 
-    # 2b. JRN-004 — persist default_chat_model so bare `carl` just works.
+    # 2b. Persist default_chat_model so bare `carl` just works.
     if _persist_default_chat_model(provider_label, chain):
         steps_done.append("default chat model")
 
@@ -87,13 +87,15 @@ def init_cmd(
     if not skip_project and _ensure_project(chain):
         steps_done.append("project config")
 
-    # 4b. JRN-006 — optional sample-project scaffold.
-    if not skip_project and _offer_sample_project(chain):
-        steps_done.append("sample project scaffold")
-
-    # 4c. JRN-010 — optional context gathering (GitHub repo / HF model).
+    # 4b. Context gathering (GitHub repo / HF model). Runs BEFORE the
+    # sample scaffold so the scaffold can pin base_model / dataset_repo
+    # from context.json.
     if _offer_context_gathering(chain):
         steps_done.append("context gathered")
+
+    # 4c. Optional sample-project scaffold (reads context.json).
+    if not skip_project and _offer_sample_project(chain):
+        steps_done.append("sample project scaffold")
 
     # 5. Consent
     if _ensure_consent(chain):
@@ -110,8 +112,8 @@ def init_cmd(
     c.blank()
     c.ok("Ready.")
 
-    # JRN-008 — celebration + guidance. Informative only (no prompt); the
-    # user picks their next command organically from the listed paths.
+    # Celebration + guidance. Informative only (no prompt); the user
+    # picks their next command organically from the listed paths.
     _celebrate_and_guide(c)
 
     if json_output:
@@ -226,8 +228,8 @@ def _ensure_llm_provider(chain: InteractionChain) -> tuple[bool, str | None]:
     """Resolve an LLM provider. Returns (success, provider_label_or_None).
 
     ``provider_label`` is the key into :data:`_PROVIDER_DEFAULT_MODEL` — used
-    by JRN-004 to write a sane ``default_chat_model`` so ``carl`` works
-    immediately after ``carl init`` without any further config.
+    to write a sane ``default_chat_model`` so ``carl`` works immediately
+    after ``carl init`` without any further config.
     """
     c = get_console()
     detected = _detect_any_provider()
@@ -296,7 +298,7 @@ def _persisted_default_chat_model() -> str:
 
 
 def _persist_default_chat_model(provider_label: str | None, chain: InteractionChain) -> bool:
-    """JRN-004 — persist ``default_chat_model`` to ~/.carl/config.yaml.
+    """Persist ``default_chat_model`` to ~/.carl/config.yaml.
 
     After a provider is chosen, resolve a sane default chat model for that
     provider and save it via :meth:`CARLSettings.save`. This is what makes
@@ -515,7 +517,7 @@ def _ensure_consent(chain: InteractionChain) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Step: sample project scaffold (JRN-006)
+# Step: sample project scaffold
 # ---------------------------------------------------------------------------
 
 # Minimal carl.yaml schema for the scaffold. Kept intentionally tiny —
@@ -543,6 +545,47 @@ stack:
 """
 
 
+def _render_sample_project_yaml() -> tuple[str, dict[str, Any]]:
+    """Render the scaffold YAML with context-aware overrides applied.
+
+    F4 — when ``~/.carl/context.json`` exists, override the scaffold's
+    ``base_model`` and ``dataset_repo`` fields with the user's declared
+    ``hf_model`` and ``github_repo``. Empty / missing context leaves the
+    hardcoded TinyLlama + wikitext baseline untouched. Returns the
+    rendered YAML body and a structured record of which fields were
+    overridden (for the InteractionChain trace).
+    """
+    import yaml as _yaml
+
+    overrides: dict[str, Any] = {}
+    # Parse the baseline once so we can mutate a dict and re-dump. The
+    # keys here mirror ``_SAMPLE_PROJECT_YAML`` exactly; pyyaml preserves
+    # insertion order so the rendered file stays human-readable.
+    base: dict[str, Any] = _yaml.safe_load(_SAMPLE_PROJECT_YAML) or {}
+
+    try:
+        ctx = _load_context()
+    except Exception:
+        ctx = {}
+
+    hf_model = ctx.get("hf_model") if isinstance(ctx, dict) else None
+    gh_repo = ctx.get("github_repo") if isinstance(ctx, dict) else None
+
+    if isinstance(hf_model, str) and hf_model.strip():
+        base["base_model"] = hf_model.strip()
+        overrides["base_model"] = hf_model.strip()
+    if isinstance(gh_repo, str) and gh_repo.strip():
+        # The scaffold's dataset_repo field is a free-form identifier —
+        # HF dataset id or a user-supplied label. The GitHub repo is a
+        # reasonable default when the user has not explicitly picked a
+        # dataset, because it ties the scaffold to the user's real work.
+        base["dataset_repo"] = gh_repo.strip()
+        overrides["dataset_repo"] = gh_repo.strip()
+
+    body = _yaml.safe_dump(base, sort_keys=False)
+    return body, overrides
+
+
 def _offer_sample_project(chain: InteractionChain) -> bool:
     """Scaffold a minimal ``carl.yaml`` + ``data/`` + ``outputs/`` structure.
 
@@ -560,7 +603,7 @@ def _offer_sample_project(chain: InteractionChain) -> bool:
         return False
 
     c.print("  [camp.primary]Sample project[/]")
-    c.info("A tiny TinyLlama + wikitext quickstart to try `carl train` immediately.")
+    c.info("A tiny quickstart to try `carl train` immediately.")
     try:
         wanted = typer.confirm("  Create a sample training project? (quickstart)", default=False)
     except (typer.Abort, EOFError, OSError):
@@ -573,8 +616,9 @@ def _offer_sample_project(chain: InteractionChain) -> bool:
         return False
 
     try:
+        body, overrides = _render_sample_project_yaml()
         target = cwd / "carl.yaml"
-        target.write_text(_SAMPLE_PROJECT_YAML)
+        target.write_text(body)
         (cwd / "data").mkdir(exist_ok=True)
         (cwd / "outputs").mkdir(exist_ok=True)
     except OSError as exc:
@@ -586,10 +630,15 @@ def _offer_sample_project(chain: InteractionChain) -> bool:
         return False
 
     c.ok(f"Sample project scaffolded in {cwd}")
+    if overrides:
+        if "base_model" in overrides:
+            c.info(f"  base_model pinned from context: {overrides['base_model']}")
+        if "dataset_repo" in overrides:
+            c.info(f"  dataset_repo pinned from context: {overrides['dataset_repo']}")
     c.info("  Try: carl train --config carl.yaml")
     chain.record(
         ActionType.CLI_CMD, "sample_project",
-        input={"answer": "yes"},
+        input={"answer": "yes", "overrides": overrides or None},
         output={"path": str(target)},
         success=True,
     )
@@ -597,7 +646,7 @@ def _offer_sample_project(chain: InteractionChain) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Step: context gathering (JRN-010)
+# Step: context gathering
 # ---------------------------------------------------------------------------
 
 def _load_context() -> dict[str, Any]:
@@ -627,7 +676,7 @@ def _save_context(data: dict[str, Any]) -> Path:
 
 
 def _offer_context_gathering(chain: InteractionChain) -> bool:
-    """JRN-010 — ask the user to link a GitHub repo and/or HF model.
+    """Ask the user to link a GitHub repo and/or HF model.
 
     Idempotent: when ``~/.carl/context.json`` already has values, we prompt
     "keep current context? (Y/n)" and bail unless the user says no. Empty
@@ -722,7 +771,7 @@ def _offer_context_gathering(chain: InteractionChain) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Step: celebration + guidance (JRN-008)
+# Step: celebration + guidance
 # ---------------------------------------------------------------------------
 
 def _celebrate_and_guide(c: Any) -> None:
@@ -786,6 +835,7 @@ __all__ = [
     "_persist_default_chat_model",
     "_offer_sample_project",
     "_offer_context_gathering",
+    "_render_sample_project_yaml",
     "_celebrate_and_guide",
     "_load_context",
     "_save_context",

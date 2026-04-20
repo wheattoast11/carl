@@ -226,8 +226,8 @@ def main(argv: list[str] | None = None) -> int:
 def _print_help() -> None:
     """Emit a short help screen. Kept stdlib-only; no Typer.
 
-    Defaults are interpolated from the hoisted constants so the CLI help
-    and the actual runtime can never disagree (R2-005).
+    Defaults are interpolated from the hoisted constants so CLI help and
+    runtime cannot disagree.
     """
     sys.stdout.write(
         "carl-heartbeat — background worker daemon\n"

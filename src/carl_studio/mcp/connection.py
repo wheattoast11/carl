@@ -7,12 +7,11 @@ channel (training backends, A2A peers, x402 merchants, ...).
 
 Consent gate
 ------------
-``_authenticate`` is gated by
-:attr:`~carl_studio.consent.ConsentFlagKey.TELEMETRY`. Any MCP operation
-that talks to carl.camp (auth, tool dispatch carrying a JWT, streaming
-events back to a remote client) is telemetry-adjacent and must respect
-the opt-in flag. When consent is not granted, the connection fails fast
-with a :class:`~carl_studio.consent.ConsentError` during the
+``_authenticate`` is gated by the ``"telemetry"`` consent flag. Any MCP
+operation that talks to carl.camp (auth, tool dispatch carrying a JWT,
+streaming events back to a remote client) is telemetry-adjacent and must
+respect the opt-in flag. When consent is not granted, the connection
+fails fast with a :class:`~carl_studio.consent.ConsentError` during the
 ``AUTHENTICATING`` phase — the FSM transitions through ``DEGRADED`` and
 the server loop never starts.
 
@@ -52,7 +51,7 @@ from carl_core.connection import (
 )
 from carl_core.interaction import InteractionChain
 
-from carl_studio.consent import ConsentFlagKey, consent_gate
+from carl_studio.consent import consent_gate
 from carl_studio.mcp.session import MCPSession, session_from_dict
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
@@ -251,7 +250,7 @@ class MCPServerConnection(AsyncBaseConnection):
         operators see the block at FSM entry instead of deep inside a
         tool call with half the state already captured.
         """
-        consent_gate(ConsentFlagKey.TELEMETRY)
+        consent_gate("telemetry")
         return None
 
     async def _close(self) -> None:

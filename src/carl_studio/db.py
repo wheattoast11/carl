@@ -52,13 +52,10 @@ CARL_DIR = Path.home() / ".carl"
 DB_PATH = CARL_DIR / "carl.db"
 _RUN_JSON_COLUMNS: frozenset[str] = frozenset({"config", "result"})
 
-#: Default number of days to retain ``archived`` sticky-note rows before the
-#: maintenance sweep prunes them. Hoisted here (rather than in
-#: ``carl_studio.sticky``) because this module does not import ``sticky`` —
-#: the reverse *is* true, so ``sticky`` can (and does) re-export this
-#: symbol as ``DEFAULT_RETENTION_DAYS``. Every call site — the CLI, the
-#: heartbeat daemon, and ``StickyQueue.maintenance`` — pulls from the same
-#: constant so drift between surfaces is impossible (R2-005).
+#: Default retention (days) for ``archived`` sticky-note rows. Owned here
+#: rather than in ``carl_studio.sticky`` because ``sticky`` imports ``db``
+#: (not the reverse); ``sticky`` re-exports the symbol. Single source of
+#: truth so CLI, daemon, and ``StickyQueue.maintenance`` cannot drift.
 DEFAULT_RETENTION_DAYS: int = 30
 
 # SQLite schema — executed on first connect
@@ -351,11 +348,8 @@ class LocalDB:
             if retention_days > 0:
                 cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
                 cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
-                # ``completed_at`` is the honest bounce-date for archived
-                # rows; when it's missing (edge case: archived before
-                # completion, or legacy inserts that pre-date the field
-                # being populated), fall back to ``created_at`` so old rows
-                # still age out rather than surviving forever.
+                # Prefer ``completed_at``; fall back to ``created_at`` for
+                # legacy rows missing the field so they still age out.
                 cursor = conn.execute(
                     "DELETE FROM sticky_notes WHERE status = 'archived' "
                     "AND COALESCE(completed_at, created_at) < ?",

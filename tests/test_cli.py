@@ -203,6 +203,8 @@ def test_hf_commands_missing_extra_show_install_hint(monkeypatch, command, expec
 
 
 def test_push_forwards_arguments(monkeypatch, tmp_path: Path):
+    """Legacy push path (base_model/dataset given) still round-trips through
+    ``push_with_metadata`` so the rich model-card upload remains available."""
     artifact_dir = tmp_path / "adapter"
     artifact_dir.mkdir()
     (artifact_dir / "adapter_model.safetensors").write_text("weights")
@@ -211,12 +213,14 @@ def test_push_forwards_arguments(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("carl_studio.hub.models.push_with_metadata", mock_push)
     monkeypatch.setattr("anyio.run", lambda func, *args: func(*args))
 
+    # New verb: positional ``run_id_or_path`` + positional ``repo``.
+    # Legacy flags stay supported; providing ``--base-model`` / ``--dataset``
+    # opts into the model-card upload path.
     result = runner.invoke(
         app,
         [
             "push",
             str(artifact_dir),
-            "--repo",
             "org/model",
             "--base-model",
             "Tesslate/OmniCoder-9B",
@@ -228,7 +232,7 @@ def test_push_forwards_arguments(monkeypatch, tmp_path: Path):
         ],
     )
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.output
     mock_push.assert_called_once_with(
         str(artifact_dir),
         "org/model",
@@ -238,13 +242,13 @@ def test_push_forwards_arguments(monkeypatch, tmp_path: Path):
         None,
         True,
     )
-    assert "Published: https://huggingface.co/org/model" in result.output
+    assert "pushed org/model" in result.output
 
 
 def test_push_missing_path_errors():
-    result = runner.invoke(app, ["push", "/tmp/does-not-exist", "--repo", "org/model"])
-    assert result.exit_code == 1
-    assert "Model path not found" in result.output
+    result = runner.invoke(app, ["push", "/tmp/does-not-exist", "org/model"])
+    assert result.exit_code == 2
+    assert "no checkpoint found" in result.output
 
 
 def test_start_inventory_lists_curated_command_map(monkeypatch, tmp_path: Path):
@@ -308,10 +312,94 @@ def test_doctor_reports_queue_count(monkeypatch, tmp_path: Path):
     assert payload["queue"]["pending"] == 1
     assert payload["queue"]["error"] is None
 
-    # Human-readable surface contains "Queue" row with "1 pending".
-    human_result = runner.invoke(app, ["doctor"])
-    assert "Queue" in human_result.output
-    assert "1 pending" in human_result.output
+    # F2 — the readiness table is now behind --verbose. A healthy queue of
+    # 1 pending row stays quiet in compact mode; the Queue row only
+    # appears in -v output.
+    verbose_result = runner.invoke(app, ["doctor", "-v"])
+    assert "Queue" in verbose_result.output
+    assert "1 pending" in verbose_result.output
+
+
+# ---------------------------------------------------------------------------
+# F2 — doctor plain-English verdict
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_verdict_not_yet_when_blocked(monkeypatch, tmp_path: Path):
+    """Missing project -> NOT YET verdict line at the top of doctor output."""
+    monkeypatch.setattr(settings_mod, "GLOBAL_CONFIG", tmp_path / "config.yaml")
+    monkeypatch.setattr(settings_mod, "_find_local_config", lambda: None)
+    monkeypatch.setattr(theme_mod, "THEME_FILE", tmp_path / "theme.yaml")
+    monkeypatch.setattr(db_mod, "CARL_DIR", tmp_path)
+    monkeypatch.setattr(db_mod, "DB_PATH", tmp_path / "carl.db")
+
+    result = runner.invoke(app, ["doctor"])
+    assert "NOT YET" in result.output
+    assert "CARL Doctor" in result.output
+
+
+def test_doctor_compact_mode_suppresses_full_table(monkeypatch, tmp_path: Path):
+    """Default (non-verbose) doctor hides the full readiness table."""
+    monkeypatch.setattr(settings_mod, "GLOBAL_CONFIG", tmp_path / "config.yaml")
+    monkeypatch.setattr(settings_mod, "_find_local_config", lambda: None)
+    monkeypatch.setattr(theme_mod, "THEME_FILE", tmp_path / "theme.yaml")
+    monkeypatch.setattr(db_mod, "CARL_DIR", tmp_path)
+    monkeypatch.setattr(db_mod, "DB_PATH", tmp_path / "carl.db")
+
+    result = runner.invoke(app, ["doctor"])
+    assert "Training deps" not in result.output
+    assert "HF jobs" not in result.output
+
+
+def test_doctor_verbose_mode_shows_full_table(monkeypatch, tmp_path: Path):
+    """``carl doctor -v`` restores the full readiness table."""
+    monkeypatch.setattr(settings_mod, "GLOBAL_CONFIG", tmp_path / "config.yaml")
+    monkeypatch.setattr(settings_mod, "_find_local_config", lambda: None)
+    monkeypatch.setattr(theme_mod, "THEME_FILE", tmp_path / "theme.yaml")
+    monkeypatch.setattr(db_mod, "CARL_DIR", tmp_path)
+    monkeypatch.setattr(db_mod, "DB_PATH", tmp_path / "carl.db")
+
+    result = runner.invoke(app, ["doctor", "-v"])
+    assert "Training deps" in result.output
+    assert "Guided workbench" in result.output
+
+
+def test_doctor_verdict_pure_helper():
+    """Unit-level check for the verdict collapse helper."""
+    from carl_studio.cli.startup import _compute_doctor_verdict
+
+    # Any blocker -> NOT YET
+    assert (
+        _compute_doctor_verdict(
+            {"blocking_issues": ["project missing"], "remote_jobs": True, "diagnose": True},
+            {"training": True},
+        )
+        == "not_yet"
+    )
+    # No blockers + all core green -> READY
+    assert (
+        _compute_doctor_verdict(
+            {"blocking_issues": [], "remote_jobs": True, "diagnose": True},
+            {"training": True},
+        )
+        == "ready"
+    )
+    # No blockers, missing training -> PARTIAL
+    assert (
+        _compute_doctor_verdict(
+            {"blocking_issues": [], "remote_jobs": True, "diagnose": True},
+            {"training": False},
+        )
+        == "partial"
+    )
+    # No blockers, missing diagnose -> PARTIAL
+    assert (
+        _compute_doctor_verdict(
+            {"blocking_issues": [], "remote_jobs": True, "diagnose": False},
+            {"training": True},
+        )
+        == "partial"
+    )
 
 
 def test_camp_and_lab_help_expose_grouped_aliases():

@@ -336,22 +336,15 @@ class HeartbeatLoop:
 
         result: dict[str, Any] = {"phases": [], "note_id": note.id}
         success = True
-        error_repr: str | None = None
-        # ``cancelled`` signals the note should flip back to ``queued`` on
-        # exit rather than ``done``. Set by the exception branch below.
         requeue_on_exit = False
         try:
             for phase in ORDERED_PHASES:
-                # NOTE: intentionally no ``stop_event.is_set()`` check here.
-                # Graceful shutdown is handled **between** cycles in
-                # :meth:`_aloop`; once a cycle has begun we run it to
-                # completion. Interrupting mid-phase left the note wedged
-                # under the previous design.
+                # Graceful shutdown is handled between cycles (see _aloop);
+                # mid-phase interruption would leave the note wedged.
                 await self._run_phase(phase, note, result)
         except BaseException as exc:
             success = False
-            error_repr = repr(exc)
-            result["error"] = error_repr
+            result["error"] = repr(exc)
             requeue_on_exit = True
         finally:
             elapsed_ms = (time.monotonic() - t_start) * 1000.0
@@ -364,11 +357,6 @@ class HeartbeatLoop:
                 duration_ms=elapsed_ms,
             )
             if requeue_on_exit:
-                # Exception path — flip back to ``queued`` for retry. We
-                # deliberately do **not** call :meth:`complete` here; the
-                # note is not done. :meth:`StickyQueue.requeue` is a no-op
-                # if the row has already moved (e.g. an operator archived
-                # it out of band), which is the safe default.
                 try:
                     queue.requeue(note.id)
                 except BaseException as exc:  # pragma: no cover - defensive
@@ -380,7 +368,6 @@ class HeartbeatLoop:
                         },
                     )
             else:
-                # Happy path — record the result and transition to ``done``.
                 try:
                     queue.complete(note.id, result)
                 except BaseException as exc:  # pragma: no cover - defensive
@@ -392,11 +379,6 @@ class HeartbeatLoop:
                         },
                     )
             self._on_status(f"[heartbeat] cycle:end {note.id}")
-            # The ``error_repr`` local is preserved for log correlation even
-            # when the caller doesn't subscribe to status — no-op assignment
-            # keeps the symbol referenced so static analysis does not flag
-            # it as unused on the happy path.
-            _ = error_repr
 
     async def _run_phase(
         self,

@@ -5,10 +5,9 @@ Opt-in: user controls when data goes to cloud.
 
 Consent gate
 ------------
-Both :func:`push` and :func:`pull` are gated by
-:attr:`~carl_studio.consent.ConsentFlagKey.TELEMETRY`. When telemetry
-consent is off (the privacy-first default), callers receive a
-:class:`~carl_studio.consent.ConsentError` with code
+Both :func:`push` and :func:`pull` are gated by the ``"telemetry"``
+consent flag. When telemetry consent is off (the privacy-first default),
+callers receive a :class:`~carl_studio.consent.ConsentError` with code
 ``carl.consent.denied`` instead of contacting the remote. The retry-queue
 entry point :func:`process_sync_queue` is gated at the same point so
 queued traffic cannot leak on a later drain either.
@@ -32,7 +31,7 @@ from typing import Any
 
 from carl_core.errors import CARLError
 
-from carl_studio.consent import ConsentFlagKey, consent_gate
+from carl_studio.consent import consent_gate
 from carl_studio.db import LocalDB
 
 
@@ -113,7 +112,7 @@ def push(
     Raises :class:`~carl_studio.consent.ConsentError` when the ``TELEMETRY``
     consent flag is not granted — nothing is queued, nothing is sent.
     """
-    consent_gate(ConsentFlagKey.TELEMETRY)
+    consent_gate("telemetry")
     db = db or LocalDB()
     jwt_ov = getattr(session, "jwt", None) if session else None
     url_ov = getattr(session, "supabase_url", None) if session else None
@@ -187,7 +186,7 @@ def pull(
     Raises :class:`~carl_studio.consent.ConsentError` when the ``TELEMETRY``
     consent flag is not granted.
     """
-    consent_gate(ConsentFlagKey.TELEMETRY)
+    consent_gate("telemetry")
     db = db or LocalDB()
     jwt_ov = getattr(session, "jwt", None) if session else None
     url_ov = getattr(session, "supabase_url", None) if session else None
@@ -251,7 +250,7 @@ def process_sync_queue(
     consent flag is not granted — queued traffic stays local until
     consent is granted.
     """
-    consent_gate(ConsentFlagKey.TELEMETRY)
+    consent_gate("telemetry")
     db = db or LocalDB()
     pending = db.get_pending_sync()
     synced = 0

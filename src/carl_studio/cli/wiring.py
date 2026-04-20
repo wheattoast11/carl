@@ -17,12 +17,12 @@ from .lab import (
     admin_app,
     align_cmd,
     bench_cmd,
-    chat_repl,
     dev,
     golf_app,
     learn_cmd,
     mcp_serve,
     paper_app,
+    repl_removed,
 )
 from .flow import flow_cmd
 from .init import init_cmd
@@ -74,7 +74,9 @@ app.command(name="logout", hidden=True)(logout)
 camp_app.add_typer(sync_app, name="sync")
 
 lab_app.command(name="dev")(dev)
-lab_app.command(name="repl")(chat_repl)
+# F1 — `carl lab repl` is removed. Kept as a hidden stub that tells the user
+# where the canonical surface lives so existing muscle memory does not dead-end.
+lab_app.command(name="repl", hidden=True)(repl_removed)
 lab_app.command(name="bench")(bench_cmd)
 lab_app.command(name="align")(align_cmd)
 lab_app.command(name="learn")(learn_cmd)
@@ -312,21 +314,26 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Wire carl chat (top-level agentic chat)
 # ---------------------------------------------------------------------------
+# F1 — Two canonical surfaces only: `carl chat` (interactive) and
+# `carl ask "<prompt>"` (one-shot). Bare `carl` no longer auto-routes to
+# chat; it prints help + a 1-line nudge so new users discover both entry
+# points explicitly. The legacy `carl lab repl` alias is removed.
 try:
-    from . import chat as _chat_module
     from .chat import ask_cmd, chat_cmd
 
     app.command(name="chat")(chat_cmd)
     app.command(name="ask")(ask_cmd)
 
-    # Bare `carl` (no subcommand) → open the chat interface. Carl is the
-    # default surface; every other subcommand is a shortcut underneath.
-    # Look chat_cmd up dynamically so tests can patch carl_studio.cli.chat.chat_cmd.
     @app.callback(invoke_without_command=True)
-    def _default_to_chat(ctx: typer.Context) -> None:
-        """CARL — chat by default, any subcommand below routes normally."""
-        if ctx.invoked_subcommand is None:
-            _chat_module.chat_cmd()
+    def _show_help_when_bare(ctx: typer.Context) -> None:
+        """Print help + a routing nudge when the user runs bare ``carl``."""
+        if ctx.invoked_subcommand is not None:
+            return
+        typer.echo(ctx.get_help())
+        typer.echo(
+            "\nUse `carl chat` for an interactive session or "
+            "`carl ask \"<prompt>\"` for one-shot."
+        )
 
 except ImportError:
     _make_stub(app, "chat", doc="Chat requires the full carl-studio package.")

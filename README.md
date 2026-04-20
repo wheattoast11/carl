@@ -40,22 +40,45 @@ This is alignment you can measure, not just evaluate.
 
 ---
 
-## Install
+## Quick start
+
+Measure coherence on any logits distribution — no training, no GPU, no API key.
+Pure `numpy`:
+
+```python
+from carl_core import CoherenceProbe, KAPPA, SIGMA
+import numpy as np
+
+vocab_size = 32_000
+probe = CoherenceProbe(vocab_size=vocab_size)
+
+# Any [T, V] logits + [T] chosen tokens. Here: 16 tokens from a 32k vocab.
+logits = np.random.randn(16, vocab_size)
+token_ids = np.argmax(logits, axis=-1)
+
+snap = probe.measure(logits, token_ids)
+print(f"phi_mean = {snap.phi_mean:.3f}   (crystallization target: ≥ {SIGMA})")
+print(f"horizon  = KAPPA·d ≈ {int(KAPPA * vocab_size):,} tokens")
+```
+
+Install (just the observables layer):
+
+```bash
+pip install carl-studio
+```
+
+That gives you `carl-core` + the base CLI + one-shot observe. For training + HF + Claude observability:
 
 ```bash
 pip install 'carl-studio[quickstart]'
 ```
 
-That bundles the three things ~95% of users need: `training`, `hf`, and `observe`.
-Bare `pip install carl-studio` also works (core CLI + one-shot observe only).
-
 Full extras matrix, reproducible installs via `uv.lock`, and conflict rules (e.g.
 `wallet` vs `x402`) live in [`docs/INSTALL.md`](docs/INSTALL.md).
 
-## Quickstart
+## CLI quickstart
 
 ```bash
-pip install carl-studio
 carl init                  # one-shot setup: account, provider, extras, project, consent
 carl "train a small model on gsm8k"   # agent — one-shot prompt
 carl chat                  # agent — interactive loop
