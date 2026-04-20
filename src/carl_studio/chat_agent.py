@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -858,6 +859,40 @@ class CARLAgent:
             self._chain = None
         return self._chain
 
+    def _record_tool_call(
+        self,
+        *,
+        name: str,
+        tool_input: dict[str, Any],
+        output: Any,
+        success: bool,
+        duration_ms: float,
+        outcome: str,
+    ) -> None:
+        """Emit an ``ActionType.TOOL_CALL`` step on the active InteractionChain.
+
+        v0.10 witness-completeness fix. Covers allowed, denied, schema-error,
+        and error outcomes so every tool-use turn is represented in the chain.
+        Fire-and-forget: any failure to record is swallowed (the loop must
+        never die because of an observability path).
+        """
+        chain = self._get_chain()
+        if chain is None:
+            return
+        try:
+            from carl_core.interaction import ActionType
+
+            chain.record(
+                ActionType.TOOL_CALL,
+                f"agent.chat:tool:{name}",
+                input={"tool_name": name, "args": tool_input},
+                output={"outcome": outcome, "result": output},
+                success=success,
+                duration_ms=duration_ms,
+            )
+        except Exception as exc:  # pragma: no cover — observability-only
+            logger.debug("chain.record TOOL_CALL failed: %s", exc)
+
     def _resolve_tier(self) -> Any:
         """Resolve effective tier once, cached on the instance."""
         if self._tier_resolved:
@@ -1286,6 +1321,7 @@ class CARLAgent:
             for block in tool_use_blocks:
                 tool_input = block.input if isinstance(block.input, dict) else {}
                 turn_attempted += 1
+                tool_started_at = time.perf_counter()
 
                 # Pre-tool hook — never let an exception kill the loop.
                 permission: ToolPermission = ToolPermission.ALLOW
@@ -1312,6 +1348,14 @@ class CARLAgent:
                         "content": result,
                         "is_error": True,
                     })
+                    self._record_tool_call(
+                        name=block.name,
+                        tool_input=tool_input,
+                        output=result,
+                        success=False,
+                        duration_ms=(time.perf_counter() - tool_started_at) * 1000.0,
+                        outcome="denied",
+                    )
                     turn_denied += 1
                     continue
 
@@ -1330,6 +1374,14 @@ class CARLAgent:
                         "content": schema_err,
                         "is_error": True,
                     })
+                    self._record_tool_call(
+                        name=block.name,
+                        tool_input=tool_input,
+                        output=schema_err,
+                        success=False,
+                        duration_ms=(time.perf_counter() - tool_started_at) * 1000.0,
+                        outcome="schema_error",
+                    )
                     continue
 
                 # Dispatch — dispatch_tool already contains the timeout wrapper
@@ -1344,6 +1396,14 @@ class CARLAgent:
                 if is_error:
                     tool_result_entry["is_error"] = True
                 tool_results.append(tool_result_entry)
+                self._record_tool_call(
+                    name=block.name,
+                    tool_input=tool_input,
+                    output=result,
+                    success=(not is_error),
+                    duration_ms=(time.perf_counter() - tool_started_at) * 1000.0,
+                    outcome="error" if is_error else "ok",
+                )
 
                 # Post-tool hook — isolated from loop lifetime.
                 if self._post_tool_use is not None:
