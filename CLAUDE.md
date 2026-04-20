@@ -204,20 +204,26 @@ behavior, not narration on every file.
 When a doc falls more than one minor version behind current, treat it
 as a review candidate: either update and re-stamp, or delete.
 
-## v0.9 roadmap (docs landed 2026-04-20, implementation pending Tej sign-off)
+## v0.9 + v0.10 roadmap (docs landed 2026-04-20, implementation pending Tej sign-off)
 
-Three design docs under `docs/v09_*.md` define the next release:
+Four design docs under `docs/v09_*.md` + `docs/v10_*.md`:
 
 - `v09_carl_update_design.md` — self-updating meta-pipeline (`carl update`)
   with 3-day staleness nudge, PyPI/CVE/git-delta scan, positive-framed
   blast-radius reporting. Zero new deps.
 - `v09_carl_env_design.md` — 7-question progressive-disclosure env
   wizard (`carl env`) with functor composition + resume-capable state.
-  v0.10+ verifier hook reserved for prime-rl integration.
+  Verifier hook reserved for prime-rl integration.
 - `v09_terminals_runtime_integration_matrix.md` — IP-respecting lazy-import
   matrix for 10 terminals-runtime primitives. Three v0.9-A picks:
   Kuramoto-R order parameter, conservation-law token budget, upgraded
-  OBSERVER_SYSTEM_PROMPT. Seven v0.9-B / v0.10+ items documented.
+  OBSERVER_SYSTEM_PROMPT.
+- `v10_terminals_tech_deep_dive.md` — grounded review of 5 terminals-tech
+  paths + 4 research papers. **Two corrections to the v0.9 matrix:**
+  (1) `agent-sdk` is MIT (not BUSL), unblocking agent-card Supabase work
+  to v0.10-A; (2) `semantic-mesh/convergence` is NOT Kuramoto — carl-core
+  is already ahead. Three v0.10-A picks: TerminalAgent mirror + Supabase,
+  py2bend reward compilation (admin-gated BUSL), Substrate presence probe.
 
 ## ⚠ Open: κ-constant discrepancy
 
