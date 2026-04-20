@@ -204,6 +204,31 @@ behavior, not narration on every file.
 When a doc falls more than one minor version behind current, treat it
 as a review candidate: either update and re-stamp, or delete.
 
+## v0.9 roadmap (docs landed 2026-04-20, implementation pending Tej sign-off)
+
+Three design docs under `docs/v09_*.md` define the next release:
+
+- `v09_carl_update_design.md` — self-updating meta-pipeline (`carl update`)
+  with 3-day staleness nudge, PyPI/CVE/git-delta scan, positive-framed
+  blast-radius reporting. Zero new deps.
+- `v09_carl_env_design.md` — 7-question progressive-disclosure env
+  wizard (`carl env`) with functor composition + resume-capable state.
+  v0.10+ verifier hook reserved for prime-rl integration.
+- `v09_terminals_runtime_integration_matrix.md` — IP-respecting lazy-import
+  matrix for 10 terminals-runtime primitives. Three v0.9-A picks:
+  Kuramoto-R order parameter, conservation-law token budget, upgraded
+  OBSERVER_SYSTEM_PROMPT. Seven v0.9-B / v0.10+ items documented.
+
+## ⚠ Open: κ-constant discrepancy
+
+`packages/carl-core/src/carl_core/constants.py:14` declares `KAPPA = 64/3`
+(≈21.333, exact ratio from Bounded Informational Time Crystals DOI).
+terminals.tech handoff plan cites `κ = 21.37` in
+`lib/terminals-tech/core/L0/conservation.ts`. Delta is ~0.17%. Unclear
+whether this is calibration-vs-exact, η-normalization difference, or
+drift. **Do not harmonize either side without Tej's ruling.** Details +
+options in `docs/v09_terminals_runtime_integration_matrix.md`.
+
 ## Keep an eye on
 
 - Preserve optional dependency boundaries.
@@ -211,3 +236,6 @@ as a review candidate: either update and re-stamp, or delete.
 - Keep docs current and minimal.
 - If docs disagree with code, fix the docs or explicitly note the mismatch.
 - Apply the YAML frontmatter stamp to every doc you create or substantially edit.
+- Do NOT copy BSL-licensed terminals-runtime methodology into MIT carl-studio.
+  The admin-gate + lazy-import pattern (`admin.py`, `coherence_observer.py`)
+  is the canonical integration seam — extend it, don't bypass it.
