@@ -18,10 +18,10 @@ Subscription check priority:
 
 from __future__ import annotations
 
-import functools
 import os
 from typing import TYPE_CHECKING
 
+from carl_core.errors import CARLError
 from carl_core.tier import (
     FEATURE_TIERS,
     Tier,
@@ -32,12 +32,10 @@ from carl_core.tier import (
 from carl_core.tier import _TIER_RANK as _TIER_RANK  # pyright: ignore[reportPrivateUsage]
 from carl_core.tier import _UPGRADE_URLS  # pyright: ignore[reportPrivateUsage]
 
-from carl_studio.gating import GATE_TIER_INSUFFICIENT, emit_gate_event
+from carl_studio.gating import GATE_TIER_INSUFFICIENT, BaseGate
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from carl_core.interaction import InteractionChain
 
 
 __all__ = [
@@ -53,7 +51,47 @@ __all__ = [
     "tier_gate",
     "check_tier",
     "tier_message",
+    # Private-runtime plug-point (v0.8 · S3)
+    "register_tier_resolver",
+    "clear_tier_resolver",
+    "get_tier_resolver",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Pluggable tier resolver (v0.8 · S3)
+# ---------------------------------------------------------------------------
+#
+# Private runtimes sometimes need an alternate tier-source semantics
+# (wallet-balance-based, JWT-embedded-claim, org-plan lookup). Rather than
+# force a monkey-patch on ``detect_effective_tier``, we expose a single
+# module-level resolver slot. When registered, the resolver is called
+# from :meth:`TierPredicate._effective` with the predicate's feature name
+# (or ``None`` when no feature was bound), and its return value is used as
+# the effective tier.
+#
+# The registry is a process-local plug-point — intentionally not persisted
+# to ``LocalDB``. Callers install it at process start (e.g., during
+# private-runtime bootstrap) and never ship it across processes.
+
+_TIER_RESOLVER: Callable[[str | None], Tier] | None = None
+
+
+def register_tier_resolver(fn: Callable[[str | None], Tier]) -> None:
+    """Register a custom tier resolver. Replaces the default detect_effective_tier() path."""
+    global _TIER_RESOLVER  # noqa: PLW0603
+    _TIER_RESOLVER = fn  # pyright: ignore[reportConstantRedefinition]
+
+
+def clear_tier_resolver() -> None:
+    """Restore the default tier resolver (detect_effective_tier)."""
+    global _TIER_RESOLVER  # noqa: PLW0603
+    _TIER_RESOLVER = None  # pyright: ignore[reportConstantRedefinition]
+
+
+def get_tier_resolver() -> Callable[[str | None], Tier] | None:
+    """Return the currently registered custom resolver, or None if default is active."""
+    return _TIER_RESOLVER
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +180,22 @@ class TierPredicate:
     def _effective(self) -> Tier:
         if self._effective_override is not None:
             return self._effective_override
+        # Pluggable tier resolver (v0.8 · S3). When a private-runtime has
+        # registered an alternate tier source (wallet-balance, JWT claim,
+        # etc.), it takes precedence over the default settings round-trip.
+        # Resolver errors are wrapped in a CARLError with a stable code so
+        # operators can filter on ``carl.tier.resolver_error``.
+        resolver = _TIER_RESOLVER
+        if resolver is not None:
+            try:
+                return resolver(self._feature)
+            except Exception as exc:
+                raise CARLError(
+                    "tier resolver raised",
+                    code="carl.tier.resolver_error",
+                    context={"inner": str(exc)},
+                    cause=exc,
+                ) from exc
         # Lazy import: CARLSettings is heavy and we don't want to pull it
         # into ``import carl_studio.tier`` at module load time.
         from carl_studio.settings import CARLSettings
@@ -170,11 +224,11 @@ def tier_gate(required_tier: Tier, feature: str | None = None) -> Callable:
 
     Usage::
 
-        @tier_gate(Tier.PRO)
+        @tier_gate(Tier.PAID)
         def observe_live():
             ...
 
-        @tier_gate(Tier.ENTERPRISE, feature="mcp.serve")
+        @tier_gate(Tier.PAID, feature="mcp.serve")
         def mcp_serve():
             ...
 
@@ -187,45 +241,36 @@ def tier_gate(required_tier: Tier, feature: str | None = None) -> Callable:
     """
 
     def decorator(func: Callable) -> Callable:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
+        feat_name = feature or func.__name__
+
+        # Bind a per-call predicate factory that resolves the effective
+        # tier lazily each invocation (matching pre-v0.8 semantics —
+        # upgrades take effect without re-importing). When a custom
+        # resolver is registered (v0.8 · S3) we defer to it by leaving
+        # ``effective`` unset — ``TierPredicate._effective`` will consult
+        # the resolver each check. Otherwise we pre-resolve via the
+        # legacy settings path so the predicate object stays pure.
+        def _make_predicate() -> TierPredicate:
+            if _TIER_RESOLVER is not None:
+                return TierPredicate(required_tier, feat_name)
             from carl_studio.settings import CARLSettings
 
             settings = CARLSettings.load()
             effective = detect_effective_tier(settings.tier)
-            feat_name = feature or func.__name__
-
-            predicate = TierPredicate(
+            return TierPredicate(
                 required_tier, feat_name, effective=effective
             )
-            # ``_gate_chain`` can be threaded in via kwargs for structured
-            # logging without changing the wrapped function's signature.
-            # Pop so we don't leak it into ``func`` (which would TypeError
-            # on an unexpected kwarg).
-            chain: InteractionChain | None = kwargs.pop("_gate_chain", None)
-            allowed, reason = predicate.check()
-            emit_gate_event(
-                predicate_name=predicate.name,
-                allowed=allowed,
-                reason=reason,
-                chain=chain,
-            )
 
-            if not allowed:
-                err = TierGateError(feat_name, required_tier, effective)
-                _attach_gate_context(
-                    err,
-                    feature=feat_name,
-                    required=required_tier,
-                    current=effective,
-                )
-                raise err
-
-            return func(*args, **kwargs)
+        tier_engine = BaseGate[TierPredicate].for_predicate(
+            predicate_factory=_make_predicate,
+            error_type=TierGateError,
+            gate_code=GATE_TIER_INSUFFICIENT,
+        )
+        wrapper = tier_engine()(func)
 
         # Preserve metadata for Typer introspection
-        wrapper.__tier_required__ = required_tier
-        wrapper.__tier_feature__ = feature
+        wrapper.__tier_required__ = required_tier  # type: ignore[attr-defined]
+        wrapper.__tier_feature__ = feature  # type: ignore[attr-defined]
         return wrapper
 
     return decorator
@@ -249,28 +294,6 @@ def check_tier(feature: str) -> tuple[bool, Tier, Tier]:
     predicate = TierPredicate(required, feature, effective=effective)
     allowed, _reason = predicate.check()
     return allowed, effective, required
-
-
-def _attach_gate_context(
-    err: TierGateError,
-    *,
-    feature: str,
-    required: Tier,
-    current: Tier,
-) -> None:
-    """Attach a ``context`` dict (with ``gate_code``) to a TierGateError.
-
-    :class:`TierGateError` lives in ``carl_core.tier`` as a plain
-    ``Exception`` for primitive-layer portability; we layer the shared
-    ``carl.gate.*`` attribution at the carl-studio boundary instead of
-    mutating the primitive.
-    """
-    err.context = {  # pyright: ignore[reportAttributeAccessIssue]
-        "feature": feature,
-        "required": required.value,
-        "current": current.value,
-        "gate_code": GATE_TIER_INSUFFICIENT,
-    }
 
 
 def tier_message(feature: str) -> str | None:

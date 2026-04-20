@@ -28,12 +28,15 @@ import stat
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from pydantic import BaseModel, Field
+
 from carl_core.errors import CARLError, CredentialError, ValidationError
 
 from carl_studio.settings import carl_home
 
 if TYPE_CHECKING:  # pragma: no cover - type-only import
-    pass
+    from carl_studio.config_registry import ConfigRegistry
+    from carl_studio.db import LocalDB
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +81,46 @@ class WalletCorrupted(CARLError):
     """Raised when the on-disk envelope fails integrity checks."""
 
     code = "carl.wallet.corrupted"
+
+
+# ---------------------------------------------------------------------------
+# Non-secret metadata — persisted via ConfigRegistry
+# ---------------------------------------------------------------------------
+
+
+class WalletMetadata(BaseModel):
+    """Non-secret, durable metadata about the on-disk wallet envelope.
+
+    This model is intentionally *narrow*: it covers only the
+    parameters needed to describe where and how the encrypted payload
+    is stored. No passphrase, derived-key, or ciphertext material ever
+    flows through here — those stay on the filesystem encryption path.
+
+    Stored under ``carl.wallet.walletmetadata`` in
+    :class:`~carl_studio.db.LocalDB` via :class:`ConfigRegistry`.
+    """
+
+    #: Filename (not full path) of the encrypted envelope on disk.
+    encrypted_filename: str = Field(default=ENCRYPTED_FILENAME)
+    #: PBKDF2 iteration count used to derive the Fernet key. Mirrors
+    #: :data:`PBKDF2_ITERATIONS`; persisted so a future rotation can
+    #: detect the originally-used value.
+    kdf_iterations: int = Field(default=PBKDF2_ITERATIONS, ge=1)
+    #: Envelope schema version — matches :data:`ENVELOPE_VERSION`.
+    envelope_version: int = Field(default=ENVELOPE_VERSION, ge=1)
+    #: Which backend the wallet is currently recorded as using. One of
+    #: ``"fernet"``, ``"keyring"``, ``"plaintext"``, or ``"locked"``.
+    backend: str = Field(default="locked")
+
+
+def wallet_metadata_registry(db: LocalDB) -> ConfigRegistry[WalletMetadata]:
+    """Return a typed :class:`ConfigRegistry` for :class:`WalletMetadata`.
+
+    Thin helper so callers don't repeat the namespace literal. Reads
+    and writes route through the shared ``LocalDB`` — never through
+    the filesystem encryption path.
+    """
+    return db.config_registry(WalletMetadata, namespace="carl.wallet")
 
 
 # ---------------------------------------------------------------------------
@@ -533,7 +576,9 @@ __all__ = [
     "SALT_LENGTH",
     "WalletCorrupted",
     "WalletLocked",
+    "WalletMetadata",
     "WalletStore",
     "keyring_available",
     "set_keyring_master_key",
+    "wallet_metadata_registry",
 ]

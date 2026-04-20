@@ -8,12 +8,17 @@ The entire paradigm in one import::
 See also: carl.py (300-line seed crystal at the repo root)
 """
 
-__version__ = "0.7.1"
+__version__ = "0.8.0"
+
+from typing import TYPE_CHECKING
 
 from carl_core.constants import KAPPA, SIGMA, DEFECT_THRESHOLD
 from carl_core import CoherenceProbe
 from carl_studio.types.config import TrainingConfig
 from . import observe
+
+if TYPE_CHECKING:  # Type-only import — runtime resolution goes through __getattr__.
+    from carl_studio.training.gates import PhaseTransitionGate
 
 __all__ = [
     "__version__",
@@ -30,107 +35,28 @@ __all__ = [
 ]
 
 
-# PhaseTransitionGate is lightweight (no torch dep) — import eagerly
-# This is the core abstraction: the windowed gate that detects crystallization
-def _get_gate():
-    """Import from carl.py seed if available, otherwise inline."""
-    import importlib.util
-    import pathlib
-
-    seed = pathlib.Path(__file__).parent.parent.parent / "carl.py"
-    if seed.exists():
-        try:
-            spec = importlib.util.spec_from_file_location("carl_seed", seed)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            gate_cls = mod.PhaseTransitionGate
-            required_methods = (
-                "on_init_end",
-                "on_train_begin",
-                "on_train_end",
-                "on_step_begin",
-                "on_step_end",
-                "on_log",
-                "on_epoch_begin",
-                "on_epoch_end",
-                "on_save",
-                "on_evaluate",
-                "on_predict",
-            )
-            if all(hasattr(gate_cls, method) for method in required_methods):
-                return gate_cls
-        except Exception:
-            pass
-    # Fallback: inline minimal gate (inherits TrainerCallback if available)
-    try:
-        from transformers import TrainerCallback as _Base
-    except Exception:
-        _Base = object
-
-    class _Gate(_Base):
-        def __init__(self, threshold=0.99, window=5, min_above=3):
-            if _Base is not object:
-                super().__init__()
-            self.threshold, self.window, self.min_above = threshold, window, min_above
-            self._recent, self.triggered, self.trigger_step = [], False, -1
-            self.peak_entropy, self.peak_entropy_step = 0.0, -1
-
-        def check(self, value, entropy=0.0, step=0):
-            if entropy > self.peak_entropy:
-                self.peak_entropy, self.peak_entropy_step = entropy, step
-            self._recent.append(value)
-            if len(self._recent) > self.window:
-                self._recent.pop(0)
-            if len(self._recent) >= self.min_above and not self.triggered:
-                if sum(1 for v in self._recent if v >= self.threshold) >= self.min_above:
-                    self.triggered, self.trigger_step = True, step
-                    return True
-            return False
-
-        def on_log(self, args, state, control, logs=None, **kwargs):
-            if logs and self.check(
-                logs.get("mean_token_accuracy", 0), logs.get("entropy", 0), state.global_step
-            ):
-                control.should_training_stop = True
-
-        def on_init_end(self, *args, **kwargs):
-            pass
-
-        def on_train_begin(self, *args, **kwargs):
-            pass
-
-        def on_train_end(self, *args, **kwargs):
-            pass
-
-        def on_step_begin(self, *args, **kwargs):
-            pass
-
-        def on_step_end(self, *args, **kwargs):
-            pass
-
-        def on_epoch_begin(self, *args, **kwargs):
-            pass
-
-        def on_epoch_end(self, *args, **kwargs):
-            pass
-
-        def on_save(self, *args, **kwargs):
-            pass
-
-        def on_evaluate(self, *args, **kwargs):
-            pass
-
-        def on_predict(self, *args, **kwargs):
-            pass
-
-    return _Gate
-
-
-PhaseTransitionGate = _get_gate()
-
-
+# PhaseTransitionGate lives in carl_studio.training.gates. We lazy-load it
+# on first attribute access so ``import carl_studio`` does NOT trigger
+# ``carl_studio.training.__init__`` (which pulls cascade/trainer and their
+# torch/transformers deps). The gates module itself is dep-light.
 def __getattr__(name: str):
-    """Lazy imports for objects that pull heavy deps (torch, transformers)."""
+    """Lazy imports for objects that pull heavy deps (torch, transformers).
+
+    PhaseTransitionGate is resolved lazily for the same reason — the
+    ``carl_studio.training`` package ``__init__`` eagerly imports cascade
+    and trainer modules that depend on torch/trl. Accessing
+    ``carl_studio.PhaseTransitionGate`` triggers import of the
+    ``carl_studio.training.gates`` submodule only on first use.
+    """
+    if name == "PhaseTransitionGate":
+        import importlib
+
+        mod = importlib.import_module("carl_studio.training.gates")
+        gate = mod.PhaseTransitionGate
+        # Cache on the package so subsequent accesses skip the __getattr__ hop.
+        globals()["PhaseTransitionGate"] = gate
+        return gate
+
     _lazy = {
         "CascadeRewardManager": "carl_studio.training.cascade",
         "ComputeTarget": "carl_studio.types.config",

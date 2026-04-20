@@ -40,6 +40,7 @@ from carl_core.retry import (
     poll,
     retry,
 )
+from carl_core.resilience import BreakAndRetryStrategy, CircuitOpenError
 from carl_core.safepath import PathEscape, SandboxedPath, safe_resolve, within
 from carl_core.tier import (
     FEATURE_TIERS,
@@ -116,6 +117,8 @@ __all__ = [
     "async_retry",
     "poll",
     "retry",
+    "BreakAndRetryStrategy",
+    "CircuitOpenError",
     "PathEscape",
     "SandboxedPath",
     "safe_resolve",

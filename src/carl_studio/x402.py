@@ -16,28 +16,92 @@ contract-witnessing consent has not been granted.
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, TypeAlias
 
 from pydantic import BaseModel, Field
 
 from carl_core.errors import BudgetError, CARLError, NetworkError
 from carl_core.interaction import ActionType, InteractionChain
-from carl_core.retry import CircuitBreaker
+from carl_core.resilience import BreakAndRetryStrategy
+from carl_core.retry import CircuitBreaker, RetryPolicy
 
 from carl_studio.consent import consent_gate
 
 if TYPE_CHECKING:
+    from carl_studio.config_registry import ConfigRegistry
     from carl_studio.db import LocalDB
+
+
+#: Signature for an x402 payment-confirmation callback. Called with
+#: keyword arguments ``url`` and ``amount``; returns ``True`` to approve,
+#: ``False`` to deny. A denial is surfaced as
+#: ``BudgetError(code="carl.budget.confirm_denied")`` — other exceptions
+#: propagate unchanged so UI-layer aborts are never swallowed.
+ConfirmPaymentCallback: TypeAlias = Callable[..., bool]
+
+# Module-level plug-point registry for named ``confirm_payment_cb``
+# hooks. Private-runtime integrations persist only a string name in
+# ``carl.yaml`` (or `~/.carl/config.yaml`) and resolve the live callable
+# at execute time through this registry. Intentionally not persisted —
+# the registry is a per-process wiring surface, not durable state.
+_CALLBACK_REGISTRY: dict[str, ConfirmPaymentCallback] = {}
+
+
+def register_confirm_callback(name: str, cb: ConfirmPaymentCallback) -> None:
+    """Register a named ``confirm_payment_cb`` for string-based resolution.
+
+    Parameters
+    ----------
+    name:
+        The identifier that appears in ``X402Config.confirm_payment_cb``
+        when stored as a string (non-empty, stripped). Re-registering the
+        same name overwrites the prior entry — callers wanting a
+        one-shot install should call :func:`get_confirm_callback` first.
+    cb:
+        A callable matching :data:`ConfirmPaymentCallback` —
+        ``(*, url: str, amount: float) -> bool``.
+
+    Raises
+    ------
+    ValueError
+        If ``name`` is empty / whitespace-only or ``cb`` is not callable.
+    """
+    if not name or not name.strip():
+        raise ValueError("confirm_payment_cb name must be a non-empty string")
+    if not callable(cb):
+        raise ValueError("confirm_payment_cb must be callable")
+    _CALLBACK_REGISTRY[name] = cb
+
+
+def get_confirm_callback(name: str) -> ConfirmPaymentCallback | None:
+    """Return the registered callback for ``name`` or ``None`` if absent."""
+    return _CALLBACK_REGISTRY.get(name)
+
+
+def unregister_confirm_callback(name: str) -> None:
+    """Remove ``name`` from the registry. No-op when the name is absent.
+
+    Primarily for test teardown and for private-runtime code that needs
+    to swap implementations at runtime without a process restart.
+    """
+    _CALLBACK_REGISTRY.pop(name, None)
 
 _X402_CONFIG_KEY = "x402_config"
 
-# SpendTracker persistence keys — stored in LocalDB.config
-_SPEND_DAILY_KEY = "carl.x402.spend_today"
-_SPEND_DAILY_RESET_KEY = "carl.x402.daily_reset_at"
+# Legacy SpendTracker persistence keys — kept as module-level constants
+# so the one-shot migration path can find and delete them. New state is
+# stored as a single JSON blob under ``ConfigRegistry[SpendState]``.
+_LEGACY_SPEND_DAILY_KEY = "carl.x402.spend_today"
+_LEGACY_SPEND_DAILY_RESET_KEY = "carl.x402.daily_reset_at"
+
+# Env-var escape hatch for the zero-touch rollback — when set to
+# ``"skip"`` the migration is a no-op and legacy keys are ignored.
+_MIGRATE_ENV = "CARL_CONFIG_MIGRATE"
 
 # Module-level breaker for facilitator calls. Only infrastructure failures
 # count against the threshold — programming bugs in our own code (attribute
@@ -47,6 +111,31 @@ _FACILITATOR_BREAKER = CircuitBreaker(
     failure_threshold=5,
     reset_s=60.0,
     tracked_exceptions=(NetworkError, ConnectionError, TimeoutError, IOError),
+)
+
+# Conservative retry policy for facilitator HTTP calls. Payments are not
+# idempotent — we retry only on transport faults (network / timeout /
+# connection errors), never on application-level HTTP errors which would
+# risk double-charging. ``urllib.error.HTTPError`` is a subclass of
+# ``URLError`` / ``OSError``, so it is intentionally omitted from the
+# retryable tuple to keep HTTP 4xx / 5xx responses from being silently
+# re-driven by the strategy.
+_FACILITATOR_RETRY_POLICY = RetryPolicy(
+    max_attempts=2,
+    backoff_base=0.5,
+    max_delay=2.0,
+    jitter=True,
+    retryable=(NetworkError, ConnectionError, TimeoutError),
+)
+
+# Composed strategy: consult the breaker first (fail fast if OPEN), then
+# retry transient faults under the conservative policy above. Existing
+# call sites that still use ``_FACILITATOR_BREAKER`` directly are
+# unchanged — the strategy is additive so new code paths can opt in
+# without forcing a migration.
+_FACILITATOR_STRATEGY = BreakAndRetryStrategy(
+    retry_policy=_FACILITATOR_RETRY_POLICY,
+    breaker=_FACILITATOR_BREAKER,
 )
 
 
@@ -68,7 +157,21 @@ class X402Config(BaseModel):
     # H1: spend caps + confirmation hook
     daily_spend_cap: float | None = None  # USD; None = unlimited (legacy behavior)
     session_spend_cap: float | None = None  # USD; None = unlimited
-    confirm_payment_cb: str | None = None  # registered hook name; None = auto-approve within caps
+    # Either a registered hook name (string; resolved via
+    # :func:`get_confirm_callback` at ``X402Client.execute`` time) or a
+    # direct :data:`ConfirmPaymentCallback`. ``None`` auto-approves
+    # within spend caps. Strings allow persistence through
+    # ``carl.yaml``/``~/.carl/config.yaml`` where only JSON-serializable
+    # values survive a write/read cycle; callables must be wired
+    # in-process via :func:`register_confirm_callback`.
+    confirm_payment_cb: str | ConfirmPaymentCallback | None = Field(
+        default=None,
+    )
+
+    # Pydantic v2 model config — allow the non-JSON-serializable
+    # Callable variant without forcing ``arbitrary_types_allowed`` on
+    # every other field. Pydantic already accepts ``str``/``None``.
+    model_config = {"arbitrary_types_allowed": True}
 
 
 class PaymentRequirement(BaseModel):
@@ -104,14 +207,38 @@ def _parse_x_payment_header(header: str) -> PaymentRequirement:
         )
 
 
+class SpendState(BaseModel):
+    """Persisted daily-rolling spend state for :class:`SpendTracker`.
+
+    Stored as a single JSON blob under
+    ``carl.x402.spendstate`` via :class:`ConfigRegistry`. Only the
+    daily rolling window persists; session totals are intentionally
+    in-memory so every new shell starts fresh.
+    """
+
+    #: Running total for the current UTC day (USD).
+    spend_today: float = 0.0
+    #: Timestamp of the last midnight reset (UTC ISO-8601 string).
+    daily_reset_at: str = ""
+
+
 class SpendTracker:
     """Rolling-window spend accounting for x402 payments.
 
-    Persists the daily total and a daily-reset timestamp to
-    :class:`~carl_studio.db.LocalDB` config storage. Session total is
-    held in-process only (no cross-process leakage between shells).
-    Cap enforcement is synchronous and happens before any network call
-    so a breach raises immediately without partial state.
+    Persists the daily total and a daily-reset timestamp through a
+    typed :class:`ConfigRegistry[SpendState]` over the shared
+    :class:`~carl_studio.db.LocalDB`. Session total is held in-process
+    only (no cross-process leakage between shells). Cap enforcement is
+    synchronous and happens before any network call so a breach raises
+    immediately without partial state.
+
+    Back-compat
+    -----------
+    On first use against a DB that still has the pre-v0.8 flat keys
+    (``carl.x402.spend_today`` + ``carl.x402.daily_reset_at``) the
+    tracker migrates them into the new :class:`SpendState` blob and
+    deletes the legacy rows. Set ``CARL_CONFIG_MIGRATE=skip`` in the
+    environment to disable the migration (zero-touch rollback).
 
     Parameters
     ----------
@@ -143,6 +270,13 @@ class SpendTracker:
         self._db = db
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._session_total = 0.0
+        self._registry: ConfigRegistry[SpendState] | None = None
+        self._migrated = False
+        if db is not None:
+            self._registry = db.config_registry(
+                SpendState, namespace="carl.x402"
+            )
+            self._maybe_migrate_legacy()
 
     def check_and_record(self, amount: float) -> None:
         """Gate a payment of ``amount`` USD.
@@ -188,15 +322,71 @@ class SpendTracker:
         self._session_total = projected_session
         self._write_daily_total(projected_daily)
 
+    def _maybe_migrate_legacy(self) -> None:
+        """One-shot migration from flat legacy keys to :class:`SpendState`.
+
+        Idempotent by construction — once a blob exists under the new
+        key or the legacy keys are absent, subsequent calls short-circuit.
+        The ``CARL_CONFIG_MIGRATE=skip`` env var is an explicit opt-out
+        for users rolling back to pre-v0.8 behavior.
+        """
+        if self._migrated or self._db is None or self._registry is None:
+            return
+        self._migrated = True
+        if os.environ.get(_MIGRATE_ENV, "").strip().lower() == "skip":
+            return
+        # If new state already exists, leave it alone — a prior run
+        # already migrated (or the user started fresh on v0.8).
+        try:
+            existing = self._registry.get()
+        except CARLError:
+            # Schema mismatch — leave legacy keys for a human to inspect.
+            return
+        if existing is not None:
+            return
+        legacy_total = self._db.get_config(_LEGACY_SPEND_DAILY_KEY)
+        legacy_reset = self._db.get_config(_LEGACY_SPEND_DAILY_RESET_KEY)
+        if legacy_total is None and legacy_reset is None:
+            return
+        try:
+            total = float(legacy_total) if legacy_total is not None else 0.0
+        except ValueError:
+            total = 0.0
+        reset_at = legacy_reset or ""
+        self._registry.set(
+            SpendState(spend_today=total, daily_reset_at=reset_at)
+        )
+        # Remove legacy rows so the migration is observable and doesn't
+        # fire again — this is safe because the new blob is the single
+        # source of truth from here on.
+        self._db.delete_config(_LEGACY_SPEND_DAILY_KEY)
+        self._db.delete_config(_LEGACY_SPEND_DAILY_RESET_KEY)
+
+    def _load_state(self) -> SpendState:
+        if self._registry is None:
+            return SpendState()
+        try:
+            stored = self._registry.get()
+        except CARLError:
+            # Corrupt/mismatched blob — fall back to an empty state so
+            # the tracker keeps working. Next write will overwrite.
+            return SpendState()
+        return stored if stored is not None else SpendState()
+
+    def _save_state(self, state: SpendState) -> None:
+        if self._registry is None:
+            return
+        self._registry.set(state)
+
     def _read_daily_total_or_reset(self) -> float:
-        if self._db is None:
+        if self._registry is None:
             return 0.0
         now = self._now()
-        raw_reset = self._db.get_config(_SPEND_DAILY_RESET_KEY)
+        state = self._load_state()
         reset_at: datetime | None = None
-        if raw_reset:
+        if state.daily_reset_at:
             try:
-                parsed = datetime.fromisoformat(raw_reset)
+                parsed = datetime.fromisoformat(state.daily_reset_at)
                 # Ensure tz-aware for cross-DST safety.
                 if parsed.tzinfo is None:
                     parsed = parsed.replace(tzinfo=timezone.utc)
@@ -204,22 +394,27 @@ class SpendTracker:
             except ValueError:
                 reset_at = None
         if reset_at is None or self._past_midnight(reset_at, now):
-            self._db.set_config(_SPEND_DAILY_KEY, "0.0")
-            midnight = now.replace(
-                hour=0, minute=0, second=0, microsecond=0
+            midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            self._save_state(
+                SpendState(
+                    spend_today=0.0,
+                    daily_reset_at=midnight.isoformat(),
+                )
             )
-            self._db.set_config(_SPEND_DAILY_RESET_KEY, midnight.isoformat())
             return 0.0
-        raw = self._db.get_config(_SPEND_DAILY_KEY) or "0.0"
-        try:
-            return float(raw)
-        except ValueError:
-            return 0.0
+        return state.spend_today
 
     def _write_daily_total(self, total: float) -> None:
-        if self._db is None:
+        if self._registry is None:
             return
-        self._db.set_config(_SPEND_DAILY_KEY, str(total))
+        state = self._load_state()
+        state.spend_today = total
+        if not state.daily_reset_at:
+            # Populate the reset marker lazily if something cleared it.
+            now = self._now()
+            midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            state.daily_reset_at = midnight.isoformat()
+        self._save_state(state)
 
     @staticmethod
     def _past_midnight(reset_at: datetime, now: datetime) -> bool:
@@ -255,12 +450,55 @@ class X402Client:
         *,
         chain: InteractionChain | None = None,
         spend_tracker: SpendTracker | None = None,
-        confirm_payment_cb: Callable[..., bool] | None = None,
+        confirm_payment_cb: ConfirmPaymentCallback | None = None,
     ) -> None:
         self._config = config
         self._chain = chain
         self._spend_tracker = spend_tracker
+        # Constructor-provided callable wins over any config-level value;
+        # the config-level value (string name or inline callable) is the
+        # fallback resolution path used by private-runtime integrations
+        # that only see a persisted config.
         self._confirm_payment_cb = confirm_payment_cb
+
+    def _resolve_confirm_callback(self) -> ConfirmPaymentCallback | None:
+        """Resolve the active confirm-payment callback or ``None``.
+
+        Resolution order:
+
+        1. The Callable passed directly to :class:`X402Client`'s
+           constructor. Back-compat for call sites that wire hooks in
+           code.
+        2. ``X402Config.confirm_payment_cb`` — either a string name
+           looked up via :func:`get_confirm_callback`, or a callable
+           assigned directly on the config.
+
+        A string name that has no registered callback raises
+        :class:`~carl_core.errors.CARLError` with
+        ``code="carl.x402.callback_unregistered"`` so misconfiguration
+        fails loudly at payment time rather than silently auto-approving.
+        """
+        if self._confirm_payment_cb is not None:
+            return self._confirm_payment_cb
+        configured = self._config.confirm_payment_cb
+        if configured is None:
+            return None
+        if callable(configured):
+            return configured
+        # ``configured`` is a string name — resolve through the registry.
+        name = configured.strip()
+        if not name:
+            return None
+        resolved = get_confirm_callback(name)
+        if resolved is None:
+            raise CARLError(
+                f"confirm_payment_cb '{name}' is not registered; "
+                f"call register_confirm_callback({name!r}, ...) before "
+                f"executing payments",
+                code="carl.x402.callback_unregistered",
+                context={"name": name},
+            )
+        return resolved
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -474,8 +712,13 @@ class X402Client:
                 raise
         # Optional interactive confirmation — after budget check, still
         # before the consent gate. A hook that raises propagates as-is.
-        if self._confirm_payment_cb is not None and amount > 0:
-            approved = self._confirm_payment_cb(url=url, amount=amount)
+        # Resolution considers both the constructor-provided callable
+        # and the config-level ``confirm_payment_cb`` (string name or
+        # inline callable) so private runtimes that persist only a name
+        # get the same user-gate as in-process wiring.
+        confirm_cb = self._resolve_confirm_callback() if amount > 0 else None
+        if confirm_cb is not None:
+            approved = confirm_cb(url=url, amount=amount)
             if not approved:
                 self._record(
                     "x402.confirm_denied",

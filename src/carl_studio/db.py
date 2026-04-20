@@ -21,12 +21,17 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Generator, TypedDict
+from typing import Generator, TypeVar, TypedDict
 from uuid import uuid4
+
+from pydantic import BaseModel
 
 from carl_core import now_iso
 
+from carl_studio.config_registry import ConfigRegistry
 from carl_studio.settings import carl_home
+
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 class WalCheckpointResult(TypedDict):
@@ -414,6 +419,27 @@ class LocalDB:
                 (key, value, now_iso(), value, now_iso()),
             )
             conn.commit()
+
+    def delete_config(self, key: str) -> bool:
+        """Delete a config row. Returns True when a row was actually removed."""
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM config WHERE key = ?", (key,))
+            conn.commit()
+            return int(cursor.rowcount) > 0
+
+    def config_registry(
+        self,
+        model_cls: type[_ModelT],
+        *,
+        namespace: str,
+        key: str | None = None,
+    ) -> ConfigRegistry[_ModelT]:
+        """Return a typed :class:`ConfigRegistry` bound to this DB.
+
+        Convenience factory — equivalent to
+        ``ConfigRegistry(model_cls, db=self, namespace=namespace, key=key)``.
+        """
+        return ConfigRegistry(model_cls, db=self, namespace=namespace, key=key)
 
     # ─── Auth ────────────────────────────────────────────────
 

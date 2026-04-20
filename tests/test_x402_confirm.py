@@ -13,10 +13,17 @@ from unittest.mock import patch
 
 import pytest
 
-from carl_core.errors import BudgetError
+from carl_core.errors import BudgetError, CARLError
 from carl_core.interaction import InteractionChain
 from carl_studio.db import LocalDB
-from carl_studio.x402 import SpendTracker, X402Client, X402Config
+from carl_studio.x402 import (
+    SpendTracker,
+    X402Client,
+    X402Config,
+    get_confirm_callback,
+    register_confirm_callback,
+    unregister_confirm_callback,
+)
 
 
 @pytest.fixture
@@ -158,3 +165,162 @@ class TestConfirmHook:
         with patch("urllib.request.urlopen", return_value=_mock_urlopen_200()):
             client.execute("https://example.com/x", "tok-1")  # default 0.0
         assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# S1 — module-level callback registry (string-name resolution)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def registry_sandbox():
+    """Snapshot/restore the module-level callback registry.
+
+    Private-runtime integrations register callbacks at process start;
+    tests must not leak entries across the suite. The sandbox snapshots
+    the registry dict and restores it on teardown so individual tests
+    can freely call ``register_confirm_callback`` / ``unregister_*``.
+    """
+    from carl_studio import x402 as _x402_mod
+
+    snapshot = dict(_x402_mod._CALLBACK_REGISTRY)
+    try:
+        _x402_mod._CALLBACK_REGISTRY.clear()
+        yield _x402_mod._CALLBACK_REGISTRY
+    finally:
+        _x402_mod._CALLBACK_REGISTRY.clear()
+        _x402_mod._CALLBACK_REGISTRY.update(snapshot)
+
+
+class TestConfirmCallbackRegistry:
+    def test_register_callback_by_name_resolved_at_execute(
+        self, registry_sandbox
+    ) -> None:
+        calls: list[dict] = []
+
+        def hook(*, url: str, amount: float) -> bool:
+            calls.append({"url": url, "amount": amount})
+            return True
+
+        register_confirm_callback("runtime-approver", hook)
+        config = X402Config(confirm_payment_cb="runtime-approver")
+        client = X402Client(config)
+
+        with patch("urllib.request.urlopen", return_value=_mock_urlopen_200()):
+            client.execute("https://example.com/x", "tok-1", amount=0.25)
+
+        assert len(calls) == 1
+        assert calls[0] == {"url": "https://example.com/x", "amount": 0.25}
+
+    def test_unregistered_callback_name_raises(
+        self, registry_sandbox
+    ) -> None:
+        config = X402Config(confirm_payment_cb="missing-hook")
+        client = X402Client(config)
+
+        with patch("urllib.request.urlopen") as urlopen:
+            with pytest.raises(CARLError) as exc_info:
+                client.execute("https://example.com/x", "tok-1", amount=0.1)
+            assert urlopen.call_count == 0
+        assert exc_info.value.code == "carl.x402.callback_unregistered"
+        ctx = getattr(exc_info.value, "context", {}) or {}
+        assert ctx.get("name") == "missing-hook"
+
+    def test_direct_callable_still_works(self, registry_sandbox) -> None:
+        """Back-compat: constructor-provided Callable bypasses the registry."""
+        calls: list[float] = []
+
+        def hook(*, url: str, amount: float) -> bool:
+            calls.append(amount)
+            return True
+
+        # Leave the registry empty — resolution must not consult it.
+        client = X402Client(X402Config(), confirm_payment_cb=hook)
+        with patch("urllib.request.urlopen", return_value=_mock_urlopen_200()):
+            client.execute("https://example.com/x", "tok-1", amount=0.9)
+
+        assert calls == [0.9]
+
+    def test_unregister_removes_callback(self, registry_sandbox) -> None:
+        def hook(*, url: str, amount: float) -> bool:
+            return True
+
+        register_confirm_callback("temp", hook)
+        assert get_confirm_callback("temp") is hook
+
+        unregister_confirm_callback("temp")
+        assert get_confirm_callback("temp") is None
+
+        # Idempotent — second unregister is a no-op, never raises.
+        unregister_confirm_callback("temp")
+        assert get_confirm_callback("temp") is None
+
+    def test_registry_isolation_between_tests(self, registry_sandbox) -> None:
+        """The sandbox fixture clears prior registrations at entry."""
+        # registry_sandbox has already cleared entries from the suite,
+        # so asking for a name another test registered must miss.
+        assert get_confirm_callback("runtime-approver") is None
+        assert get_confirm_callback("temp") is None
+
+        # Register one, confirm isolation boundaries — fixture teardown
+        # will remove this before the next test sees the registry.
+        def hook(*, url: str, amount: float) -> bool:
+            return True
+
+        register_confirm_callback("isolated", hook)
+        assert get_confirm_callback("isolated") is hook
+
+    def test_register_rejects_empty_name(self, registry_sandbox) -> None:
+        def hook(*, url: str, amount: float) -> bool:
+            return True
+
+        with pytest.raises(ValueError):
+            register_confirm_callback("", hook)
+        with pytest.raises(ValueError):
+            register_confirm_callback("   ", hook)
+
+    def test_register_rejects_non_callable(self, registry_sandbox) -> None:
+        with pytest.raises(ValueError):
+            register_confirm_callback("bad", "not-callable")  # type: ignore[arg-type]
+
+    def test_config_callable_variant_resolves_without_registry(
+        self, registry_sandbox
+    ) -> None:
+        """Widened type: config may carry a direct Callable too."""
+        calls: list[float] = []
+
+        def hook(*, url: str, amount: float) -> bool:
+            calls.append(amount)
+            return True
+
+        config = X402Config(confirm_payment_cb=hook)
+        client = X402Client(config)
+        with patch("urllib.request.urlopen", return_value=_mock_urlopen_200()):
+            client.execute("https://example.com/x", "tok-1", amount=0.4)
+        assert calls == [0.4]
+
+    def test_constructor_cb_overrides_config_cb(
+        self, registry_sandbox
+    ) -> None:
+        """Constructor-supplied callable wins over any config-level value."""
+        ctor_calls: list[float] = []
+        cfg_calls: list[float] = []
+
+        def ctor_hook(*, url: str, amount: float) -> bool:
+            ctor_calls.append(amount)
+            return True
+
+        def cfg_hook(*, url: str, amount: float) -> bool:
+            cfg_calls.append(amount)
+            return True
+
+        register_confirm_callback("cfg", cfg_hook)
+        client = X402Client(
+            X402Config(confirm_payment_cb="cfg"),
+            confirm_payment_cb=ctor_hook,
+        )
+        with patch("urllib.request.urlopen", return_value=_mock_urlopen_200()):
+            client.execute("https://example.com/x", "tok-1", amount=0.3)
+
+        assert ctor_calls == [0.3]
+        assert cfg_calls == []

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 from carl_studio.agent.loop import AgentLog, AutonomyAgent, Hypothesis, Observation
 from carl_studio.agent.scheduler import Schedule, Scheduler
 from carl_studio.agent.states import TRANSITIONS, AgentState, valid_transition
-from carl_studio.agent.tier_gate import TierError, get_tier, requires_paid
+from carl_studio.agent.tier_gate import get_tier, requires_paid
 
 if TYPE_CHECKING:
     # Re-export under the deprecated name for static type checkers. At runtime
@@ -37,7 +37,6 @@ __all__ = [
     "Schedule",
     "Scheduler",
     "TRANSITIONS",
-    "TierError",
     "get_tier",
     "requires_paid",
     "valid_transition",

@@ -2,6 +2,88 @@
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-04-20
+
+Consolidation release. No new product surfaces — four crystallization tracks
+collapse duplicated patterns from the v0.5→v0.7.1 arc into typed primitives,
+expose named plug-points for private-runtime extension, and publish the
+follow-up paper series justified by shipped work. Grounded in a four-agent
+review (isomorphism map · IP boundary · paper series · integration seams).
+
+### Added
+
+- **`BaseGate[P: GatingPredicate]`** in `carl_studio.gating` — shared
+  generic owning the predicate → emit → raise loop. `consent_gate` and
+  `tier_gate` delegate to it internally; public signatures, error codes,
+  and decorator shapes are unchanged.
+- **`ConfigRegistry[T: BaseModel]`** in `carl_studio.config_registry` —
+  typed wrapper over `LocalDB.get_config/set_config` with Pydantic v2
+  validation. Auto-derived `namespace.modelname` keys; schema mismatch
+  raises `CARLError(code="carl.config.schema_mismatch")`. `LocalDB`
+  gained `.config_registry(cls, *, namespace, key=None)` factory.
+  `SpendTracker` migrated to persist `SpendState` under
+  `carl.x402.spendstate` — legacy two-key format is auto-migrated on
+  first read (opt-out via `CARL_CONFIG_MIGRATE=skip`).
+- **`BreakAndRetryStrategy`** in `carl_core.resilience` — composes
+  `RetryPolicy` and `CircuitBreaker` behind one `.run()` / `.run_async()`
+  call. Raises `CircuitOpenError(code="carl.resilience.circuit_open")`
+  when the breaker is open. x402 facilitator calls gained a strategy
+  binding alongside the existing breaker (additive).
+- **`carl_studio.x402.register_confirm_callback(name, cb)`** — named
+  registry so `X402Config.confirm_payment_cb: str | Callable | None`
+  can be resolved at execute time. Private runtimes persist a callback
+  name via carl.camp settings; direct `Callable` path unchanged.
+- **`carl_studio.metrics.public_registry()`** +
+  `register_external_collector(collector)` — shared `CollectorRegistry`
+  accessible to private dashboards; external collectors surface on
+  `carl metrics serve` automatically (same registry).
+- **`carl_studio.tier.register_tier_resolver(fn)`** — pluggable tier
+  source. `TierPredicate._effective()` checks the resolver before
+  falling back to `detect_effective_tier()`. Errors wrap as
+  `CARLError(code="carl.tier.resolver_error")`.
+- **Paper series.** `paper/carl-paper.md` → `paper/01-main-carl.md`.
+  Added `02-phase-adaptive-methods.md`, `03-coherence-trap-technical-note.md`,
+  `04-interaction-chains-witness-logs.md`, plus `docs/paper_series.md`
+  index. All cross-references verified against v0.7.1 symbols.
+- **`docs/private_integration.md`** — examples for the three plug-points.
+
+### Changed
+
+- **`consent_gate` / `tier_gate` internal shape.** Both now thin
+  delegates over `BaseGate`. External contract (signatures, error
+  classes, error codes, decorator metadata) unchanged. 18 new
+  `tests/test_gating_base.py` tests pin the shared primitive.
+- **`SpendTracker` persistence format.** Legacy `carl.x402.spend_today` /
+  `carl.x402.daily_reset_at` keys are replaced by `SpendState` JSON at
+  `carl.x402.spendstate`. Idempotent migration on first read.
+- **`X402Config.confirm_payment_cb` type.** Widened to
+  `str | ConfirmPaymentCallback | None`. Existing Callable users see no
+  behavior change.
+- **`PhaseTransitionGate`** moved from inline in `carl_studio/__init__.py`
+  to `carl_studio/training/gates.py`. Re-exported via lazy
+  `__getattr__` — import time stays under 200ms. Seed-first
+  resolution preserved.
+
+### Removed
+
+- `_ConsentFlagKeyShim` and module `__getattr__` deprecation trampoline
+  in `consent.py` (marked for v0.8 removal since v0.6.3). Call sites
+  must use the `ConsentKey` Literal directly.
+- `TierError = TierGateError` alias in `carl_studio/agent/tier_gate.py`.
+  Import `TierGateError` from the canonical location.
+- Stale filesystem artifacts: `src/carl_studio/cli.py` (pre-CLI-collapse
+  monolith), `src/carl_studio/x402_sdk.py` (moved to `x402_connection.py`
+  in v0.5.0), `src/carl_studio/primitives/` (removed in v0.5.0 but
+  Finder-restored as cruft). `tests/test_x402_sdk.py::test_x402_sdk_module_gone`
+  now passes.
+
+### Papers
+
+See `docs/paper_series.md` for the full index and cross-reference table
+(paper ↔ shipped code path). Four-paper series covering main framework,
+phase-adaptive methods, the coherence trap, and interaction-chain
+witness logs.
+
 ## [0.7.1] — 2026-04-19
 
 Phase-2b close-out. Hardens v0.7.0's surfaces with multi-tenant MCP

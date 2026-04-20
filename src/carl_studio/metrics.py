@@ -6,14 +6,35 @@ fails — only actual instrumentation methods raise ``ImportError`` when the
 extra is absent (``record_*`` guards at the call site should still gate
 with :func:`is_available`, but double-gating is safe).
 
-All counters/gauges are registered on a private :class:`CollectorRegistry`
-so we never pollute the global default registry. This keeps tests isolated
-and allows multiple processes (CLI + daemon) to coexist without label
-collisions.
+All counters/gauges are registered on a shared :class:`CollectorRegistry`
+owned by the process singleton. The registry is deliberately not the
+``prometheus_client`` default so tests stay isolated and multiple processes
+(CLI + daemon) can coexist without label collisions.
 
 Metric naming follows Prometheus convention: ``carl_<subsystem>_<name>``
 with the ``_total`` suffix for counters per the
 ``https://prometheus.io/docs/practices/naming/`` style guide.
+
+Public API
+----------
+
+- :func:`get_registry` — internal ``_LazyPrometheus`` wrapper with
+  ``record_*`` helpers. Stable but CARL-internal.
+- :func:`public_registry` — the shared :class:`CollectorRegistry` itself.
+  Private dashboards and deployment infrastructure can register additional
+  collectors via :func:`register_external_collector` or attach scrapers
+  that read from this registry directly.
+- :func:`register_external_collector` /
+  :func:`unregister_external_collector` — mount or remove external
+  :class:`prometheus_client.registry.Collector` subclasses on the shared
+  registry without monkey-patching. Inverse pair is suitable for test
+  teardown.
+- :func:`is_available` — probe for the optional ``[metrics]`` extra.
+
+When ``prometheus_client`` is not installed, :func:`public_registry` and
+:func:`register_external_collector` raise
+:class:`carl_core.errors.CARLError` with code ``carl.metrics.unavailable``
+and a hint to install the ``metrics`` extra.
 """
 
 from __future__ import annotations
@@ -21,8 +42,11 @@ from __future__ import annotations
 from threading import Lock
 from typing import TYPE_CHECKING, Any
 
+from carl_core.errors import CARLError
+
 if TYPE_CHECKING:
     from prometheus_client import CollectorRegistry
+    from prometheus_client.registry import Collector
 
 
 class _LazyPrometheus:
@@ -193,4 +217,75 @@ def is_available() -> bool:
         return False
 
 
-__all__ = ["get_registry", "is_available"]
+_METRICS_UNAVAILABLE_MSG = (
+    "prometheus_client not installed. Install the metrics extra: "
+    "pip install 'carl-studio[metrics]'"
+)
+
+
+def public_registry() -> CollectorRegistry:
+    """Return the shared Prometheus :class:`CollectorRegistry`.
+
+    Private dashboards and deployment infrastructure can register
+    additional collectors via :func:`register_external_collector` or attach
+    scrapers that read from this registry directly. Calls
+    :meth:`_LazyPrometheus._ensure` to materialize the registry on first
+    touch; subsequent calls return the same instance (singleton).
+
+    Raises
+    ------
+    CARLError
+        With ``code="carl.metrics.unavailable"`` when the ``[metrics]``
+        extra is not installed.
+    """
+    wrapper = get_registry()
+    try:
+        return wrapper.registry
+    except ImportError as exc:
+        raise CARLError(
+            _METRICS_UNAVAILABLE_MSG,
+            code="carl.metrics.unavailable",
+            cause=exc,
+        ) from exc
+
+
+def register_external_collector(collector: Collector) -> None:
+    """Register an external :class:`prometheus_client.registry.Collector`.
+
+    The collector is attached to the shared registry returned by
+    :func:`public_registry`. Values produced by ``collector.collect()``
+    appear in every subsequent scrape of that registry — including the
+    endpoint served by ``carl metrics serve``.
+
+    Raises
+    ------
+    CARLError
+        With ``code="carl.metrics.unavailable"`` when the ``[metrics]``
+        extra is not installed.
+    """
+    registry = public_registry()
+    registry.register(collector)
+
+
+def unregister_external_collector(collector: Collector) -> None:
+    """Inverse of :func:`register_external_collector`.
+
+    Intended for test teardown and dynamic reconfiguration flows.
+
+    Raises
+    ------
+    CARLError
+        With ``code="carl.metrics.unavailable"`` when the ``[metrics]``
+        extra is not installed.
+    """
+    registry = public_registry()
+    registry.unregister(collector)
+
+
+__all__ = [
+    "get_registry",
+    "is_available",
+    "public_registry",
+    "register_external_collector",
+    "unregister_external_collector",
+]

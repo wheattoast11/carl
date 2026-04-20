@@ -253,7 +253,20 @@ Trained with CARL on [OmniCoder-9B](https://huggingface.co/Tesslate/OmniCoder-9B
 
 ## Papers
 
-The math is published and independently reproducible:
+The math is published and independently reproducible. CARL ships a
+four-paper in-repo series under [`paper/`](paper/) and cites the
+upstream Zenodo work for the conservation law and identity proof.
+
+**CARL Methods Series (in-repo, drafts):**
+
+- [`paper/01-main-carl.md`](paper/01-main-carl.md) — *Coherence-Aware Reinforcement Learning* (main paper)
+- [`paper/02-phase-adaptive-methods.md`](paper/02-phase-adaptive-methods.md) — *Phase-Adaptive Coherence Rewards*
+- [`paper/03-coherence-trap-technical-note.md`](paper/03-coherence-trap-technical-note.md) — *The Coherence Trap* (technical note)
+- [`paper/04-interaction-chains-witness-logs.md`](paper/04-interaction-chains-witness-logs.md) — *Interaction Chains as Witness Logs*
+
+Index and cross-reference table: [`docs/paper_series.md`](docs/paper_series.md).
+
+**Upstream foundations (Zenodo):**
 
 - [Bounded Informational Time Crystals](https://doi.org/10.5281/zenodo.18906944) — derives the conservation law
 - [Material Reality](https://doi.org/10.5281/zenodo.18992029) — validates across 6,244 trials

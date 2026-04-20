@@ -152,3 +152,169 @@ def test_is_available_true_when_prometheus_installed() -> None:
     from carl_studio.metrics import is_available
 
     assert is_available() is True
+
+
+# --- S2: public_registry + external-collector merge hook --------------------
+
+
+def test_public_registry_returns_collector_registry() -> None:
+    """:func:`public_registry` returns the shared ``CollectorRegistry``."""
+    pytest.importorskip("prometheus_client")
+    from prometheus_client import CollectorRegistry
+
+    from carl_studio.metrics import public_registry
+
+    reg = public_registry()
+    assert isinstance(reg, CollectorRegistry)
+
+
+def test_public_registry_identity() -> None:
+    """Two calls must return the same shared :class:`CollectorRegistry`."""
+    pytest.importorskip("prometheus_client")
+    from carl_studio.metrics import public_registry
+
+    assert public_registry() is public_registry()
+
+
+def test_public_registry_is_wrapper_registry() -> None:
+    """The public registry and the ``_LazyPrometheus.registry`` are one."""
+    pytest.importorskip("prometheus_client")
+    from carl_studio.metrics import get_registry, public_registry
+
+    assert public_registry() is get_registry().registry
+
+
+def test_register_external_collector_appears_in_scrape() -> None:
+    """A registered external collector shows up in ``generate_latest``."""
+    pytest.importorskip("prometheus_client")
+    from prometheus_client import generate_latest
+    from prometheus_client.core import GaugeMetricFamily
+
+    from carl_studio.metrics import (
+        public_registry,
+        register_external_collector,
+        unregister_external_collector,
+    )
+
+    class _CustomCollector:
+        """Minimal collector emitting a single gauge family."""
+
+        def collect(self) -> list[GaugeMetricFamily]:
+            family = GaugeMetricFamily(
+                "carl_external_test_gauge",
+                "External collector test gauge.",
+                value=42.0,
+            )
+            return [family]
+
+    collector = _CustomCollector()
+    register_external_collector(collector)
+    try:
+        output = generate_latest(public_registry()).decode("utf-8")
+        assert "carl_external_test_gauge" in output
+        assert "42.0" in output
+    finally:
+        unregister_external_collector(collector)
+
+
+def test_unregister_external_collector_removes_from_scrape() -> None:
+    """After unregister, the custom metric is no longer in the scrape."""
+    pytest.importorskip("prometheus_client")
+    from prometheus_client import generate_latest
+    from prometheus_client.core import GaugeMetricFamily
+
+    from carl_studio.metrics import (
+        public_registry,
+        register_external_collector,
+        unregister_external_collector,
+    )
+
+    class _CustomCollector:
+        def collect(self) -> list[GaugeMetricFamily]:
+            return [
+                GaugeMetricFamily(
+                    "carl_external_unregister_gauge",
+                    "Will be removed.",
+                    value=7.0,
+                ),
+            ]
+
+    collector = _CustomCollector()
+    register_external_collector(collector)
+    output_before = generate_latest(public_registry()).decode("utf-8")
+    assert "carl_external_unregister_gauge" in output_before
+
+    unregister_external_collector(collector)
+    output_after = generate_latest(public_registry()).decode("utf-8")
+    assert "carl_external_unregister_gauge" not in output_after
+
+
+def test_public_registry_without_prometheus_installed_raises_carl_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing extra surfaces ``CARLError(code="carl.metrics.unavailable")``."""
+    from carl_core.errors import CARLError
+
+    from carl_studio import metrics as metrics_mod
+
+    real_import = (
+        __builtins__["__import__"]
+        if isinstance(__builtins__, dict)
+        else __builtins__.__import__
+    )
+
+    def _fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "prometheus_client" or name.startswith("prometheus_client."):
+            raise ImportError("simulated missing dependency")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    for mod_name in list(sys.modules):
+        if mod_name == "prometheus_client" or mod_name.startswith("prometheus_client."):
+            monkeypatch.delitem(sys.modules, mod_name, raising=False)
+
+    if isinstance(__builtins__, dict):
+        monkeypatch.setitem(__builtins__, "__import__", _fake_import)
+    else:
+        monkeypatch.setattr(__builtins__, "__import__", _fake_import)
+
+    with pytest.raises(CARLError) as exc_info:
+        metrics_mod.public_registry()
+    assert exc_info.value.code == "carl.metrics.unavailable"
+    assert "carl-studio[metrics]" in str(exc_info.value)
+
+
+def test_register_external_collector_without_prometheus_raises_carl_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``register_external_collector`` mirrors the CARLError guard."""
+    from carl_core.errors import CARLError
+
+    from carl_studio import metrics as metrics_mod
+
+    real_import = (
+        __builtins__["__import__"]
+        if isinstance(__builtins__, dict)
+        else __builtins__.__import__
+    )
+
+    def _fake_import(name: str, *args: object, **kwargs: object) -> object:
+        if name == "prometheus_client" or name.startswith("prometheus_client."):
+            raise ImportError("simulated missing dependency")
+        return real_import(name, *args, **kwargs)  # type: ignore[arg-type]
+
+    for mod_name in list(sys.modules):
+        if mod_name == "prometheus_client" or mod_name.startswith("prometheus_client."):
+            monkeypatch.delitem(sys.modules, mod_name, raising=False)
+
+    if isinstance(__builtins__, dict):
+        monkeypatch.setitem(__builtins__, "__import__", _fake_import)
+    else:
+        monkeypatch.setattr(__builtins__, "__import__", _fake_import)
+
+    class _Dummy:
+        def collect(self) -> list[object]:
+            return []
+
+    with pytest.raises(CARLError) as exc_info:
+        metrics_mod.register_external_collector(_Dummy())  # type: ignore[arg-type]
+    assert exc_info.value.code == "carl.metrics.unavailable"

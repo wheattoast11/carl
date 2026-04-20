@@ -14,10 +14,6 @@ from carl_studio.tier import (
 
 logger = logging.getLogger(__name__)
 
-# Backwards-compat alias so existing ``from carl_studio.agent import TierError``
-# continues to work without changes at call sites.
-TierError = TierGateError
-
 
 def _effective_tier() -> Tier:
     """Resolve the current effective tier via the canonical system."""
@@ -39,8 +35,8 @@ def get_tier() -> str:
 def requires_paid(func: Callable[..., Any]) -> Callable[..., Any]:
     """Decorator that gates a function behind PAID tier.
 
-    Raises :class:`TierGateError` (aliased as ``TierError``) when the
-    effective tier does not satisfy the ``experiment`` feature gate.
+    Raises :class:`TierGateError` when the effective tier does not
+    satisfy the ``experiment`` feature gate.
     """
 
     @functools.wraps(func)

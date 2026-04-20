@@ -92,6 +92,7 @@ generates. Set them in the job environment, not locally.
 |-----|---------|---------|
 | `CARL_X402_DAILY_CAP_USD` | unset | Optional float; daily spend cap for x402 payments in USD. `SpendTracker.check_and_record` raises `BudgetError(code="carl.budget.daily_cap_exceeded")` when a payment would breach the cap. Unset → unlimited (legacy). (`x402.py`) |
 | `CARL_X402_SESSION_CAP_USD` | unset | Optional float; session-scoped (in-process) spend cap for x402 payments in USD. Raises `BudgetError(code="carl.budget.session_cap_exceeded")` on breach. Unset → unlimited. (`x402.py`) |
+| `CARL_CONFIG_MIGRATE` | unset | v0.8.0 introduced `ConfigRegistry` and migrated `SpendTracker` state. On first read after upgrade, legacy two-key format is auto-upgraded to a single Pydantic JSON blob. Set to `skip` to disable the migration (legacy keys remain, new state starts empty). (`x402.py`, `config_registry.py`) |
 
 ### Settings-backed env vars
 

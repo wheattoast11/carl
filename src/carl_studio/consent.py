@@ -19,7 +19,6 @@ boundary with the relevant consent flag. Gates currently wired:
 from __future__ import annotations
 
 import sys
-import warnings
 from typing import TYPE_CHECKING, Any, Literal
 
 from carl_core import now_iso
@@ -28,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from carl_studio.gating import (
     GATE_CONSENT_DENIED,
+    BaseGate,
     emit_gate_event,
 )
 
@@ -326,46 +326,17 @@ def consent_gate(
             context={"flag": flag_str, "gate_code": GATE_CONSENT_DENIED},
         )
 
-    allowed, reason = predicate.check()
-    emit_gate_event(
-        predicate_name=predicate.name,
-        allowed=allowed,
-        reason=reason,
+    BaseGate.enforce(
+        predicate,
         chain=chain,
-    )
-    if not allowed:
-        raise ConsentError(
-            reason,
+        error_factory=lambda detail: ConsentError(
+            detail,
             code="carl.consent.denied",
             context={"flag": flag_str, "gate_code": GATE_CONSENT_DENIED},
-        )
-
-
-class _ConsentFlagKeyShim:
-    """Namespace matching the retired ``ConsentFlagKey`` enum values.
-
-    Each attribute exposes the underlying string so ``.value`` / equality
-    checks against strings continue to work. Emits a ``DeprecationWarning``
-    on first access (the module-level ``__getattr__`` does the warn, this
-    class only carries the constants).
-    """
-
-    OBSERVABILITY = "observability"
-    TELEMETRY = "telemetry"
-    USAGE_ANALYTICS = "usage_analytics"
-    CONTRACT_WITNESSING = "contract_witnessing"
-
-
-def __getattr__(name: str) -> Any:
-    if name == "ConsentFlagKey":
-        warnings.warn(
-            "ConsentFlagKey is deprecated; use the ConsentKey Literal alias "
-            "or CONSENT_KEYS strings directly. Removal in v0.8.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return _ConsentFlagKeyShim
-    raise AttributeError(f"module 'carl_studio.consent' has no attribute {name!r}")
+        ),
+        gate_code=GATE_CONSENT_DENIED,
+        extra_context={"flag": flag_str},
+    )
 
 
 __all__ = [

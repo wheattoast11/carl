@@ -125,11 +125,15 @@ class TestSpendTracker:
     def test_spend_tracker_daily_reset_at_stored_at_utc_midnight(
         self, tmp_db: LocalDB, frozen_clock
     ) -> None:
+        from carl_studio.x402 import SpendState
+
         tracker = SpendTracker(daily_cap=5.0, db=tmp_db, now=frozen_clock)
         tracker.check_and_record(1.0)
-        stored = tmp_db.get_config("carl.x402.daily_reset_at")
-        assert stored is not None
-        parsed = datetime.fromisoformat(stored)
+        # v0.8: state is wrapped in ConfigRegistry[SpendState].
+        reg = tmp_db.config_registry(SpendState, namespace="carl.x402")
+        state = reg.get()
+        assert state is not None
+        parsed = datetime.fromisoformat(state.daily_reset_at)
         assert parsed.hour == 0
         assert parsed.minute == 0
         assert parsed.second == 0
@@ -229,9 +233,113 @@ class TestExecuteIntegration:
     def test_execute_success_path_records_to_tracker(
         self, tmp_db: LocalDB, frozen_clock
     ) -> None:
+        from carl_studio.x402 import SpendState
+
         tracker = SpendTracker(daily_cap=10.0, db=tmp_db, now=frozen_clock)
         client = X402Client(X402Config(), spend_tracker=tracker)
         with patch("urllib.request.urlopen", return_value=_mock_urlopen_200()):
             client.execute("https://example.com/r", "tok-1", amount=1.25)
         assert tracker.session_total == pytest.approx(1.25)
-        assert tmp_db.get_config("carl.x402.spend_today") == "1.25"
+        # v0.8: persisted state is a SpendState blob, not a bare float.
+        reg = tmp_db.config_registry(SpendState, namespace="carl.x402")
+        state = reg.get()
+        assert state is not None
+        assert state.spend_today == pytest.approx(1.25)
+
+
+# ---------------------------------------------------------------------------
+# v0.8 migration — legacy flat keys → SpendState blob
+# ---------------------------------------------------------------------------
+
+
+class TestSpendStateMigration:
+    def test_migration_from_legacy_spend_keys(
+        self,
+        tmp_db: LocalDB,
+        frozen_clock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Legacy keys present → SpendTracker rehydrates, rewrites, deletes."""
+        from carl_studio.x402 import SpendState
+
+        monkeypatch.delenv("CARL_CONFIG_MIGRATE", raising=False)
+        # Seed the DB with the pre-v0.8 flat keys.
+        legacy_reset = datetime(
+            2026, 4, 19, 0, 0, tzinfo=timezone.utc
+        ).isoformat()
+        tmp_db.set_config("carl.x402.spend_today", "4.25")
+        tmp_db.set_config("carl.x402.daily_reset_at", legacy_reset)
+
+        # Instantiating the tracker triggers migration.
+        tracker = SpendTracker(daily_cap=10.0, db=tmp_db, now=frozen_clock)
+
+        # The legacy keys must be gone.
+        assert tmp_db.get_config("carl.x402.spend_today") is None
+        assert tmp_db.get_config("carl.x402.daily_reset_at") is None
+
+        # And the new SpendState blob must carry the old values.
+        reg = tmp_db.config_registry(SpendState, namespace="carl.x402")
+        state = reg.get()
+        assert state is not None
+        assert state.spend_today == pytest.approx(4.25)
+        assert state.daily_reset_at == legacy_reset
+
+        # The tracker should *see* the migrated total — adding 5.0 succeeds
+        # (4.25 + 5.0 = 9.25 ≤ cap of 10) but adding 6.0 must fail.
+        tracker.check_and_record(5.0)
+        with pytest.raises(BudgetError):
+            tracker.check_and_record(1.0)  # projected 10.25 > 10.0
+
+    def test_migration_skipped_when_env_says_skip(
+        self,
+        tmp_db: LocalDB,
+        frozen_clock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """CARL_CONFIG_MIGRATE=skip leaves legacy keys alone and starts empty."""
+        from carl_studio.x402 import SpendState
+
+        monkeypatch.setenv("CARL_CONFIG_MIGRATE", "skip")
+        tmp_db.set_config("carl.x402.spend_today", "9.99")
+        tmp_db.set_config(
+            "carl.x402.daily_reset_at",
+            datetime(2026, 4, 19, 0, 0, tzinfo=timezone.utc).isoformat(),
+        )
+
+        SpendTracker(daily_cap=10.0, db=tmp_db, now=frozen_clock)
+
+        # Legacy keys must still be there — we didn't touch them.
+        assert tmp_db.get_config("carl.x402.spend_today") == "9.99"
+        # And no new blob was written.
+        reg = tmp_db.config_registry(SpendState, namespace="carl.x402")
+        assert reg.get() is None
+
+    def test_migration_is_idempotent(
+        self,
+        tmp_db: LocalDB,
+        frozen_clock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Re-instantiating SpendTracker after migration is a no-op."""
+        from carl_studio.x402 import SpendState
+
+        monkeypatch.delenv("CARL_CONFIG_MIGRATE", raising=False)
+        tmp_db.set_config("carl.x402.spend_today", "2.50")
+        tmp_db.set_config(
+            "carl.x402.daily_reset_at",
+            datetime(2026, 4, 19, 0, 0, tzinfo=timezone.utc).isoformat(),
+        )
+
+        SpendTracker(db=tmp_db, now=frozen_clock)
+        reg = tmp_db.config_registry(SpendState, namespace="carl.x402")
+        state_after_first = reg.get()
+        assert state_after_first is not None
+
+        # A second tracker should not overwrite or re-migrate.
+        SpendTracker(db=tmp_db, now=frozen_clock)
+        state_after_second = reg.get()
+        assert state_after_second is not None
+        assert state_after_second.spend_today == state_after_first.spend_today
+        assert (
+            state_after_second.daily_reset_at == state_after_first.daily_reset_at
+        )
