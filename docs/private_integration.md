@@ -127,6 +127,59 @@ All follow the `carl.<namespace>.<specific>` convention and inherit
 from `carl_core.errors.CARLError` — `.to_dict()` auto-redacts
 secret-shaped keys.
 
+## `load_private()` — the canonical BUSL↔MIT seam (v0.8+)
+
+`src/carl_studio/admin.py::load_private(module_name)` is the authoritative
+pattern for lazy-importing terminals-runtime primitives into MIT
+carl-studio code.
+
+### Fallback contract
+
+Every consumer of `load_private()` MUST preserve behavior when the
+private module is unavailable. The pattern:
+
+```python
+# packages/carl-core/src/carl_core/coherence_observer.py  (reference)
+def _load_prompt() -> str:
+    try:
+        from terminals_runtime.observe import OBSERVER_SYSTEM_PROMPT  # type: ignore
+        return OBSERVER_SYSTEM_PROMPT
+    except ImportError:
+        # MIT-safe fallback: minimal prompt that preserves contract,
+        # not the proprietary watchpoint methodology.
+        return _MINIMAL_FALLBACK_PROMPT
+```
+
+### Three layers of the gate
+
+`load_private()` consults three gates in order:
+
+1. **Hardware-HMAC** — `hmac(IOPlatformSerialNumber + processor +
+   hostname, CARL_ADMIN_SECRET)` matches the stored key in
+   `~/.carl/admin.key`. Fails fast if any of the three inputs don't
+   match; no retry.
+2. **terminals-runtime package present** — `pip show
+   terminals-runtime` succeeds. When it does, direct import wins
+   (no HF download needed).
+3. **HF private dataset** — falls back to downloading the matching
+   module from `wheattoast11/carl-private` via `huggingface_hub`.
+
+If all three fail, `ImportError` is raised with a user-facing message
+(`"Install terminals-runtime or contact tej@terminals.tech for admin
+access"`). The caller's job is to catch this and degrade to the
+MIT-safe fallback — **never** to propagate the ImportError to the end
+user as if the feature is broken.
+
+### Non-obligations
+
+- Callers are NOT required to check `admin.is_admin()` before trying
+  `load_private()`. The gate is internal to the loader.
+- Callers are NOT required to cache the loaded module; consult the
+  private-runtime seam each call. The loader itself caches sys.modules
+  after first import.
+- Callers MUST preserve public contract under the fallback path.
+  Never expose "this feature is private" as a user-visible error.
+
 ## Testing isolation
 
 Each plug-point uses an in-process registry. Tests that mutate any of

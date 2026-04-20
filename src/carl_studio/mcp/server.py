@@ -940,6 +940,43 @@ async def submit_async_training(config_yaml: str) -> dict[str, object]:
     return await _start_training_body(config_yaml)
 
 
+@mcp.tool(name="carl.presence.self")
+async def carl_presence_self(window: int = 8) -> dict[str, object]:
+    """Query the agent's own coherence presence state.
+
+    Returns a structured ``PresenceReport`` dict: recent-window Kuramoto
+    R, crystallization score, Deutsch-Marletto ``constructive`` flag,
+    recent action types, and a human-readable note. Safe to call
+    anywhere; cold-start chains return a "no data" default.
+
+    This is the v0.10 composition-helper form of the IRE
+    ``explain_self`` tool — it introspects the current chain rather
+    than constructing a new witness.
+    """
+    from carl_core.presence import compose_presence_report
+    from carl_core.interaction import InteractionChain
+
+    conn = get_bound_connection()
+    chain: Any = None
+    if conn is not None and hasattr(conn, "session"):
+        chain = getattr(conn.session, "chain", None)
+    if chain is None:
+        chain = InteractionChain()
+
+    report = compose_presence_report(chain, window=window)
+    return {
+        "R": report.R,
+        "psi": report.psi,
+        "has_phase": report.has_phase,
+        "window_size": report.window_size,
+        "crystallization": report.crystallization,
+        "constructive": report.constructive,
+        "recent_action_types": report.recent_action_types,
+        "step_count": report.step_count,
+        "note": report.note,
+    }
+
+
 # Register the MCP 2025-11-25 task polling/cancellation tools on this
 # FastMCP instance. Legacy synchronous tools keep their original
 # decorators; the new tools live alongside them in the same registry.

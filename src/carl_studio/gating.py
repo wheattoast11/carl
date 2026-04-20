@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -69,6 +70,7 @@ class GatingPredicate(Protocol):
 # can filter on ``context["gate_code"]`` without collapsing the taxonomy.
 GATE_CONSENT_DENIED = "carl.gate.consent_denied"
 GATE_TIER_INSUFFICIENT = "carl.gate.tier_insufficient"
+GATE_COHERENCE_INSUFFICIENT = "carl.gate.coherence_insufficient"
 
 
 def emit_gate_event(
@@ -76,33 +78,36 @@ def emit_gate_event(
     predicate_name: str,
     allowed: bool,
     reason: str,
+    gate_code: str | None = None,
     chain: InteractionChain | None = None,
 ) -> None:
     """Record a structured gate event on the provided chain.
 
-    No-op when *chain* is ``None``. The shape is intentionally minimal so
-    callers on both sides (consent, tier) produce identical event
-    payloads when inspected downstream:
+    No-op when *chain* is ``None``. Shape:
 
     * ``action`` → :attr:`~carl_core.interaction.ActionType.GATE_CHECK`
-    * ``name`` → predicate name (``"consent:telemetry"``, ``"tier:mcp.serve"``)
+    * ``name`` → predicate name (``"consent:telemetry"``, ``"tier:mcp.serve"``,
+      ``"coherence:min_R=0.5"``)
     * ``input`` → ``{"predicate": <name>, "allowed": <bool>}``
-    * ``output`` → ``{"reason": <human-readable>}``
+    * ``output`` → ``{"reason": <human-readable>, "gate_code": <code | None>}``
     * ``success`` → whether the gate allowed the call
+
+    ``gate_code`` is optional for back-compat with pre-v0.10 callers; when
+    present it lands in the output dict for downstream filtering.
     """
     if chain is None:
         return
-    # Local import: carl_core.interaction is a light primitive, but we
-    # keep the import inside the function so ``import carl_studio.gating``
-    # stays cheap at module load time.
     from carl_core.interaction import ActionType, Step
 
+    output: dict[str, Any] = {"reason": reason}
+    if gate_code is not None:
+        output["gate_code"] = gate_code
     chain.append(
         Step(
             action=ActionType.GATE_CHECK,
             name=predicate_name,
             input={"predicate": predicate_name, "allowed": allowed},
-            output={"reason": reason},
+            output=output,
             success=allowed,
         )
     )
@@ -435,10 +440,184 @@ def _build_gate_error(
         return error_type()
 
 
+# ---------------------------------------------------------------------------
+# CoherenceGate — predicate that consults Kuramoto R on the active chain.
+# ---------------------------------------------------------------------------
+#
+# The IRE paper's "G" (coherence-gated routing) is the fourth tuple element.
+# v0.8 shipped BaseGate for consent + tier, both of which gate on discrete
+# predicates. Neither consults the coherence field. v0.10 closes that loop:
+# CoherenceGate is a GatingPredicate that reads the recent window's Kuramoto
+# order parameter R and denies when R is below threshold.
+#
+# This is opt-in — existing call sites gated only on consent/tier continue to
+# work unchanged. Wrap a function with ``@coherence_gate(min_R=0.5)`` to add
+# coherence-based admission on top of any other gates already in place.
+
+
+class CoherenceError(Exception):
+    """Raised when coherence is below the configured threshold.
+
+    Carries ``code = "carl.gate.coherence_insufficient"`` in a ``context``
+    dict and the same ``gate_code`` key the other gate errors use, so
+    operators can filter on ``carl.gate.*`` uniformly.
+    """
+
+    def __init__(self, message: str, *, current_R: float, required_R: float) -> None:
+        super().__init__(message)
+        self.code = GATE_COHERENCE_INSUFFICIENT
+        self.current_R = current_R
+        self.required_R = required_R
+        self.context = {
+            "gate_code": GATE_COHERENCE_INSUFFICIENT,
+            "gate_name": "coherence",
+            "current_R": current_R,
+            "required_R": required_R,
+        }
+
+
+@dataclass(frozen=True)
+class CoherenceSnapshot:
+    """The minimal read from the active chain that CoherenceGate needs."""
+
+    R: float
+    window_size: int
+
+    @property
+    def has_data(self) -> bool:
+        return self.window_size > 0
+
+
+def read_chain_coherence(chain: Any, window: int = 16) -> CoherenceSnapshot:
+    """Sample the tail of a chain's kuramoto_r fields.
+
+    Returns ``CoherenceSnapshot(R=1.0, window_size=0)`` when the chain is
+    None, has no steps, or none of its steps carry ``kuramoto_r`` — a
+    "no data, allow" default that prevents false-denies during cold-start
+    or when coherence auto-attach is disabled.
+    """
+
+    if chain is None or not hasattr(chain, "steps"):
+        return CoherenceSnapshot(R=1.0, window_size=0)
+    steps = list(chain.steps)[-window:]
+    samples = [
+        s.kuramoto_r for s in steps if getattr(s, "kuramoto_r", None) is not None
+    ]
+    if not samples:
+        return CoherenceSnapshot(R=1.0, window_size=0)
+    return CoherenceSnapshot(
+        R=sum(samples) / len(samples), window_size=len(samples)
+    )
+
+
+class CoherenceGatePredicate:
+    """A :class:`GatingPredicate` that denies when recent Kuramoto R < threshold."""
+
+    def __init__(
+        self,
+        *,
+        min_R: float,
+        chain: Any = None,
+        window: int = 16,
+    ) -> None:
+        if not 0.0 <= min_R <= 1.0:
+            raise ValueError(f"min_R must be in [0, 1]; got {min_R}")
+        self._min_R = min_R
+        self._chain = chain
+        self._window = window
+        self._last_snapshot: CoherenceSnapshot | None = None
+
+    @property
+    def name(self) -> str:
+        return f"coherence:min_R={self._min_R}"
+
+    @property
+    def min_R(self) -> float:
+        return self._min_R
+
+    @property
+    def last_snapshot(self) -> CoherenceSnapshot | None:
+        return self._last_snapshot
+
+    def check(self) -> tuple[bool, str]:
+        snap = read_chain_coherence(self._chain, self._window)
+        self._last_snapshot = snap
+        if not snap.has_data:
+            return True, "no coherence data"
+        if snap.R < self._min_R:
+            return (
+                False,
+                f"coherence R={snap.R:.3f} below required {self._min_R:.3f} "
+                f"(window={snap.window_size})",
+            )
+        return True, f"coherence R={snap.R:.3f} >= {self._min_R:.3f}"
+
+
+def coherence_gate(
+    *,
+    min_R: float,
+    window: int = 16,
+    feature: str | None = None,
+) -> "Callable[[Callable[..., Any]], Callable[..., Any]]":
+    """Decorator form. Usage::
+
+        @coherence_gate(min_R=0.5, feature="training.update")
+        def step_policy_update(*args, _gate_chain=my_chain, **kwargs): ...
+
+    The chain is threaded via the ``_gate_chain`` kwarg (same convention
+    as ``consent_gate`` and ``tier_gate``). On deny, raises
+    :class:`CoherenceError` with full context. Safe to stack with other
+    gates — each raises its own domain-specific error with a
+    ``carl.gate.*`` code.
+    """
+
+    def _decorate(func: "Callable[..., Any]") -> "Callable[..., Any]":
+        @functools.wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            chain = kwargs.pop("_gate_chain", None)
+            predicate = CoherenceGatePredicate(
+                min_R=min_R, chain=chain, window=window
+            )
+            allowed, reason = predicate.check()
+            snap = predicate.last_snapshot or CoherenceSnapshot(R=1.0, window_size=0)
+            if allowed:
+                emit_gate_event(
+                    predicate_name=predicate.name,
+                    allowed=True,
+                    reason=reason,
+                    gate_code=None,
+                    chain=chain,
+                )
+                return func(*args, **kwargs)
+            emit_gate_event(
+                predicate_name=predicate.name,
+                allowed=False,
+                reason=reason,
+                gate_code=GATE_COHERENCE_INSUFFICIENT,
+                chain=chain,
+            )
+            feat = feature or func.__name__
+            raise CoherenceError(
+                f"{feat}: {reason}",
+                current_R=snap.R,
+                required_R=min_R,
+            )
+
+        return wrapper
+
+    return _decorate
+
+
 __all__ = [
     "GATE_CONSENT_DENIED",
     "GATE_TIER_INSUFFICIENT",
+    "GATE_COHERENCE_INSUFFICIENT",
     "BaseGate",
     "GatingPredicate",
+    "CoherenceError",
+    "CoherenceSnapshot",
+    "CoherenceGatePredicate",
+    "coherence_gate",
+    "read_chain_coherence",
     "emit_gate_event",
 ]
