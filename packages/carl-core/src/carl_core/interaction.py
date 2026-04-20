@@ -61,6 +61,18 @@ class ActionType(str, Enum):
     STICKY_NOTE = "sticky_note"       # note append / dequeue / status transition
 
 
+# v0.10 W10: actions eligible for coherence auto-attach via a registered
+# probe. These are the "informational" boundaries where a coherence
+# snapshot carries the most training/eval value.
+_AUTO_ATTACH_ACTIONS = frozenset({
+    ActionType.LLM_REPLY,
+    ActionType.TOOL_CALL,
+    ActionType.TRAINING_STEP,
+    ActionType.EVAL_PHASE,
+    ActionType.REWARD,
+})
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -161,6 +173,27 @@ class InteractionChain:
     started_at: datetime = field(default_factory=_utcnow)
     steps: list[Step] = field(default_factory=list)
     context: dict[str, Any] = field(default_factory=dict)
+    # v0.10 W10: auto-attach coherence fields on LLM_REPLY / TOOL_CALL via a
+    # caller-registered probe. When the probe is set AND the action type is
+    # in ``_AUTO_ATTACH_ACTIONS`` AND the step was not passed explicit
+    # coherence values, the probe is invoked and the result populates
+    # phi / kuramoto_r / channel_coherence. Opt-in — default None = no probe.
+    _coherence_probe: Any = field(default=None, repr=False, compare=False)
+
+    # -- coherence auto-attach --------------------------------------------
+
+    def register_coherence_probe(self, probe: Any) -> None:
+        """Register a callable ``probe(action, name, input, output) -> dict`` that
+        returns a dict with optional ``phi`` / ``kuramoto_r`` / ``channel_coherence``
+        keys. Called at :meth:`record` time for action types in
+        ``_AUTO_ATTACH_ACTIONS`` when explicit values aren't passed.
+
+        Set ``probe=None`` to disable.
+        """
+        self._coherence_probe = probe
+
+    def clear_coherence_probe(self) -> None:
+        self._coherence_probe = None
 
     # -- core mutation -----------------------------------------------------
 
@@ -191,7 +224,31 @@ class InteractionChain:
 
         ``phi`` / ``kuramoto_r`` / ``channel_coherence`` are optional
         cross-channel coherence fields; see :class:`Step` for semantics.
+
+        v0.10: when a coherence probe has been registered via
+        :meth:`register_coherence_probe` and the action is in
+        ``_AUTO_ATTACH_ACTIONS`` (LLM_REPLY, TOOL_CALL), any coherence
+        fields not passed explicitly will be populated from the probe's
+        return dict. Probe failures are swallowed so observability
+        never kills the record path.
         """
+        if (
+            self._coherence_probe is not None
+            and action in _AUTO_ATTACH_ACTIONS
+            and (phi is None and kuramoto_r is None and channel_coherence is None)
+        ):
+            try:
+                snap = self._coherence_probe(action=action, name=name, input=input, output=output)
+            except Exception:
+                snap = None
+            if isinstance(snap, dict):
+                if phi is None:
+                    phi = snap.get("phi")
+                if kuramoto_r is None:
+                    kuramoto_r = snap.get("kuramoto_r")
+                if channel_coherence is None:
+                    channel_coherence = snap.get("channel_coherence")
+
         step = Step(
             action=action,
             name=name,
