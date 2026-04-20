@@ -2,6 +2,69 @@
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-04-20
+
+Tool-loop extraction release. `chat_agent.py`'s tool-use loop body
+collapses from 100 LOC of inlined pre-hook / DENY / validate /
+dispatch / post-hook / recording logic into a single
+`self._dispatcher.execute_block(...)` call plus a small event-fan-out
++ outcome-recording tail. Closes the longest-running god-class
+decomposition deferral (3 re-deferrals tracked; this is the landing).
+
+### Changed
+
+- **`chat_agent.py` tool-use loop body** — ~100 LOC → ~40 LOC.
+  The per-block lifecycle delegates to `ToolDispatcher.execute_block`
+  (landed in v0.14). Outcome semantics identical: `ok` / `denied` /
+  `schema_error` / `error` still produce the same AgentEvent stream
+  in the same order, InteractionChain `TOOL_CALL` steps still record
+  with matching outcome strings and duration_ms, `turn_denied`
+  counter still tracks DENY returns for the all-denied terminal
+  guard. Pre/post hook exceptions still surface as
+  `AgentEvent(kind="error", code="carl.hook_failed")`.
+- **`ToolPermission` canonicalized** — `chat_agent.py` now re-imports
+  the enum from `carl_studio.tool_dispatcher`, dropping its duplicate.
+  Back-compat preserved: `from carl_studio.chat_agent import
+  ToolPermission` continues to work.
+
+### Tests
+
+- `tests/test_chat_agent_witness.py` fixture updated: tool-dispatch
+  stubbing moved from `CARLAgent._dispatch_tool_safe` to
+  `ToolDispatcher.dispatch_safe` (class-level) to match the
+  post-extraction path. All 6 witness tests pass.
+- `tests/test_chat_agent_robustness.py` — unchanged. The 85-test
+  robustness suite validates that nothing observable changed from
+  the caller's perspective.
+- `tests/test_tool_dispatcher_execute_block.py` — unchanged; the 8
+  execute_block tests pin the contract the agent now depends on.
+
+### Verification
+
+- Tests: 3088 pass / 0 fail (same count as v0.14; the extraction
+  is purely a migration, no new features).
+- Build: 0.15.0 wheel clean.
+- Import time + cold-start behavior unchanged (measured via
+  `python -c "import time; t=time.perf_counter(); import carl_studio; ..."`).
+
+### Curve position
+
+v0.14.0 → 93% of V_max
+v0.15.0 → 94% — architectural debt continues to decline. chat_agent
+is still the largest single file (~2,280 LOC after the tool-loop
+shrink) but its remaining bulk is domain logic (knowledge store,
+memory, constitution, one-shot inference, prompt building) rather
+than inline orchestration. Future extractions would pay diminishing
+returns.
+
+### Remaining ledger (v0.16+)
+
+- carl.camp marketplace search / discovery endpoints (backend).
+- AXON signal emission via HTTP to carl.camp (Fano v0.10 V7 follow-up).
+- HVM/py2bend integration (major, separate effort — v1.x territory).
+- One-shot inference path (`_one_shot_text`, `_build_system_prompt`)
+  extraction from chat_agent — optional, lower-priority.
+
 ## [0.14.0] — 2026-04-20
 
 Tool-dispatch API extension + carl-env expansion. Clears the

@@ -189,11 +189,11 @@ def _estimate_turn_upper_bound_cost(model: str, max_output_tokens: int) -> float
 # ---------------------------------------------------------------------------
 
 
-class ToolPermission(str, Enum):
-    """Result from a pre-tool-use hook."""
-
-    ALLOW = "allow"
-    DENY = "deny"
+# v0.15: ToolPermission migrated to carl_studio.tool_dispatcher so the
+# dispatcher and the agent share one enum type. Re-exported here for
+# back-compat — existing callers that ``from carl_studio.chat_agent
+# import ToolPermission`` continue to work unchanged.
+from carl_studio.tool_dispatcher import ToolPermission
 
 
 # Callback types
@@ -1151,108 +1151,53 @@ class CARLAgent:
             # so a misbehaving model + restrictive policy cannot loop forever.
             turn_denied = 0
             turn_attempted = 0
+            # v0.15 — the per-block lifecycle (pre-hook → validate → dispatch
+            # → post-hook) now lives on ToolDispatcher.execute_block.
+            # This loop body shrinks to: delegate, yield events, record on
+            # chain, update counters. All outcome semantics unchanged;
+            # events still arrive in the same order as pre-v0.15 so any
+            # test inspecting the AgentEvent stream is unaffected.
             for block in tool_use_blocks:
                 tool_input = block.input if isinstance(block.input, dict) else {}
                 turn_attempted += 1
-                tool_started_at = time.perf_counter()
 
-                # Pre-tool hook — never let an exception kill the loop.
-                permission: ToolPermission = ToolPermission.ALLOW
-                if self._pre_tool_use is not None:
-                    try:
-                        permission = self._pre_tool_use(block.name, tool_input)
-                    except Exception as exc:
-                        logger.warning(
-                            "pre_tool_use hook failed for %s: %s", block.name, exc,
-                        )
-                        yield AgentEvent(
-                            kind="error",
-                            content=f"pre_tool_use hook failed for {block.name}: {exc}",
-                            code="carl.hook_failed",
-                        )
-                        permission = ToolPermission.ALLOW
+                outcome, events = self._dispatcher.execute_block(
+                    tool_name=block.name,
+                    tool_input=tool_input,
+                    tool_use_id=block.id,
+                    pre_hook=self._pre_tool_use,
+                    post_hook=self._post_tool_use,
+                    validator=_validate_tool_args,
+                )
 
-                if permission == ToolPermission.DENY:
-                    result = f"Blocked by permission policy: {block.name}"
-                    yield AgentEvent(kind="tool_blocked", tool_name=block.name, content=result)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                        "is_error": True,
-                    })
-                    self._record_tool_call(
-                        name=block.name,
-                        tool_input=tool_input,
-                        output=result,
-                        success=False,
-                        duration_ms=(time.perf_counter() - tool_started_at) * 1000.0,
-                        outcome="denied",
-                    )
-                    turn_denied += 1
-                    continue
-
-                # Validate args against the tool schema.
-                schema_err = _validate_tool_args(block.name, tool_input)
-                if schema_err is not None:
+                for ev in events:
                     yield AgentEvent(
-                        kind="tool_result",
-                        tool_name=block.name,
-                        content=schema_err,
-                        code="carl.tool_schema",
+                        kind=ev.kind,
+                        tool_name=ev.name,
+                        content=ev.content,
+                        code=ev.code or "",
                     )
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": schema_err,
-                        "is_error": True,
-                    })
-                    self._record_tool_call(
-                        name=block.name,
-                        tool_input=tool_input,
-                        output=schema_err,
-                        success=False,
-                        duration_ms=(time.perf_counter() - tool_started_at) * 1000.0,
-                        outcome="schema_error",
-                    )
-                    continue
 
-                # Dispatch — dispatch_tool already contains the timeout wrapper
-                # and its own failure -> is_error policy.
-                result, is_error = self._dispatch_tool_safe(block.name, tool_input)
-                yield AgentEvent(kind="tool_result", tool_name=block.name, content=result)
                 tool_result_entry: dict[str, Any] = {
                     "type": "tool_result",
                     "tool_use_id": block.id,
-                    "content": result,
+                    "content": outcome.result,
                 }
-                if is_error:
+                if outcome.is_error:
                     tool_result_entry["is_error"] = True
                 tool_results.append(tool_result_entry)
+
                 self._record_tool_call(
                     name=block.name,
                     tool_input=tool_input,
-                    output=result,
-                    success=(not is_error),
-                    duration_ms=(time.perf_counter() - tool_started_at) * 1000.0,
-                    outcome="error" if is_error else "ok",
+                    output=outcome.result,
+                    success=(not outcome.is_error),
+                    duration_ms=outcome.duration_ms,
+                    outcome=outcome.outcome,
                 )
 
-                # Post-tool hook — isolated from loop lifetime.
-                if self._post_tool_use is not None:
-                    try:
-                        self._post_tool_use(block.name, tool_input, result)
-                    except Exception as exc:
-                        logger.warning(
-                            "post_tool_use hook failed for %s: %s", block.name, exc,
-                        )
-                        yield AgentEvent(
-                            kind="error",
-                            content=(
-                                f"post_tool_use hook failed for {block.name}: {exc}"
-                            ),
-                            code="carl.hook_failed",
-                        )
+                if outcome.outcome == "denied":
+                    turn_denied += 1
 
             self._session.append_message({"role": "user", "content": tool_results})
 

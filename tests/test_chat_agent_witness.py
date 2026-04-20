@@ -118,26 +118,35 @@ def _tool_call_steps(agent: CARLAgent) -> list[Any]:
 
 @pytest.fixture
 def registered_echo_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Register a trivial ``echo`` tool and point the dispatcher at it."""
+    """Register a trivial ``echo`` tool and route every ToolDispatcher to it.
 
-    from carl_studio import tool_dispatcher
+    v0.15: after the tool-loop extraction the agent now delegates to
+    ``self._dispatcher.execute_block`` which in turn calls the dispatcher's
+    own ``dispatch_safe``. Patching the agent's legacy ``_dispatch_tool_safe``
+    shim no longer short-circuits the path — we have to patch the
+    dispatcher class itself so every agent-constructed dispatcher sees
+    the stub.
+    """
 
     def _echo(args: dict[str, Any]) -> str:
         return f"echo:{args.get('msg', '')}"
 
-    # _dispatch_tool_safe consults TOOLS + an internal registry. The
-    # simplest path: monkeypatch the dispatcher's runtime resolution so
-    # our echo function is called regardless of schema.
-    monkeypatch.setattr(
-        tool_dispatcher,
-        "_runtime_tool_registry",
-        {"echo": _echo},
-        raising=False,
-    )
     monkeypatch.setattr(
         "carl_studio.chat_agent._validate_tool_args",
         lambda name, args: None,  # bypass schema check by default
     )
+    # Patch at the class level so every agent instance's dispatcher
+    # routes through the stub.
+    monkeypatch.setattr(
+        "carl_studio.tool_dispatcher.ToolDispatcher.dispatch_safe",
+        lambda self, name, args: (
+            (_echo(args), False) if name == "echo" else (f"unknown tool: {name}", True)
+        ),
+    )
+    # Legacy shim on the agent kept for tests that still stub the agent
+    # method directly (pre-v0.15 pattern). Post-extraction, this is a
+    # no-op for the main loop but lingering tests may assert on its
+    # behavior.
     monkeypatch.setattr(
         CARLAgent,
         "_dispatch_tool_safe",
@@ -243,9 +252,10 @@ class TestToolCallWitness:
             "carl_studio.chat_agent._validate_tool_args",
             lambda name, args: None,
         )
+        # v0.15 — dispatch now routes through ToolDispatcher.dispatch_safe.
+        # Patch at the class level so the agent's dispatcher sees the stub.
         monkeypatch.setattr(
-            CARLAgent,
-            "_dispatch_tool_safe",
+            "carl_studio.tool_dispatcher.ToolDispatcher.dispatch_safe",
             lambda self, name, args: ("boom", True),
         )
         turn1 = _Response(
