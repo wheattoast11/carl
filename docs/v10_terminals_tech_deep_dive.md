@@ -104,13 +104,45 @@ implements a Fano-based witness for coherence, it should either:
 - LOC: ~180 (type + writer + CLI wire + tests).
 - **Unblocked from v0.10-B → v0.10-A** by the MIT-license correction.
 
-**2. py2bend reward-function compilation (admin-gated)**
+**2. py2bend rollout-loop compilation — CARL becomes a native IRE on HVM (admin-gated)**
 
 - Source: `observable-computation/packages/py2bend/` (**BUSL-1.1**).
-- CARL seam: `src/carl_studio/training/rewards/composite.py::compute_reward()` is fully py2bend-compatible (pure Python, no decorators / generators / async).
-- Admin gate: new `carl_studio.compilers.bend_bridge` module lazy-imports py2bend under `CARL_BEND_ENABLED=1` + admin unlock. Falls back to the pure-Python path when disabled.
-- Benefit: 5–10× throughput on multi-completion GRPO batches (claim from py2bend agent; verify with a bench).
-- LOC: ~250 (bridge + wrapper + tests). First v0.10 beta candidate.
+- **Framing correction (2026-04-20):** an earlier draft framed this as
+  "compile `compute_reward()` for 5–10× throughput." That's shallow
+  optimization thinking. The real isomorphism — stated explicitly in
+  the BITC, DMC, and IRE papers — is that **CARL's GRPO rollout loop
+  IS already an Interactive Research Environment**. The `(M, I, Φ, G)`
+  tuple maps directly onto carl-core: `InteractionChain` (M), `Step` +
+  `ActionType` (I), `compute_phi` / `kuramoto_R` (Φ), `BaseGate` (G).
+  What's missing is exposing that shape as the *native substrate*.
+- **The integration target is the rollout loop**, not a single reward
+  function. GRPO's K-sample completion generation → per-completion
+  reward evaluation → phi-field witness → amb-choice argmax/softmax is
+  isomorphic to HVM interaction-net reduction: parallel-by-construction
+  redexes, Church-Rosser confluent, amb-choice coupled to
+  `τ = 1 − crystallization` per the IRE paper.
+- CARL seam: a new `src/carl_studio/training/rollout_bend.py` writes the
+  rollout as a Bend program (via py2bend admission path), compiles once
+  at trainer startup, executes on HVM. Sequential pyodide fallback for
+  the rejected subset (DMC's two-branch partition).
+- Admin gate: new `carl_studio.compilers.bend_bridge` module lazy-imports
+  py2bend under `CARL_BEND_ENABLED=1` + admin unlock. When disabled,
+  the existing torch-based rollout runs unchanged.
+- What this unlocks, in order of importance:
+  1. **Deterministic reproducibility.** Same RNG + same net = identical
+     reduction trace. GRPO runs become bit-exact reproducible across
+     machines, which the torch path is not.
+  2. **Anticipatory variance minimization.** Branch points ("void
+     points" / amb choice points / cognitive-dissonance vectors)
+     parallelize by construction; the phi-field witness crystallizes
+     them without premature cutoff.
+  3. **Mesh-visible execution trace** (DMC paper §3.3). Every reduction
+     step is introspectable — training trace is a first-class object.
+  4. **Speed as a side effect** (possibly 5–10× on multi-completion
+     batches, unverified, not the point).
+- LOC: ~350 (bridge + rollout-Bend writer + witness wiring + tests).
+  Not "first v0.10 beta" — **this is the load-bearing v0.10 pick**
+  because it realizes the IRE substrate CARL already gestures at.
 
 **3. WASM Substrate as a presence probe (admin-gated)**
 

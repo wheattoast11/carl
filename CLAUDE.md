@@ -225,15 +225,50 @@ Four design docs under `docs/v09_*.md` + `docs/v10_*.md`:
   is already ahead. Three v0.10-A picks: TerminalAgent mirror + Supabase,
   py2bend reward compilation (admin-gated BUSL), Substrate presence probe.
 
-## ⚠ Open: κ-constant discrepancy
+## κ-constant ruling (resolved 2026-04-20)
 
-`packages/carl-core/src/carl_core/constants.py:14` declares `KAPPA = 64/3`
-(≈21.333, exact ratio from Bounded Informational Time Crystals DOI).
-terminals.tech handoff plan cites `κ = 21.37` in
-`lib/terminals-tech/core/L0/conservation.ts`. Delta is ~0.17%. Unclear
-whether this is calibration-vs-exact, η-normalization difference, or
-drift. **Do not harmonize either side without Tej's ruling.** Details +
-options in `docs/v09_terminals_runtime_integration_matrix.md`.
+Tej ruled: `KAPPA = 64/3 ≈ 21.333` is the canonical exact value,
+derived from the early Desai papers (Zenodo 10.5281/zenodo.18906944,
+18992031). terminals.tech's `κ = 21.37` is a downstream calibration
+approximation — CARL keeps the exact ratio. **Do not change
+`packages/carl-core/src/carl_core/constants.py:14`.**
+
+## Mental model: HVM / Bend / py2bend as CARL's native substrate
+
+Do NOT frame HVM integration as "a faster runtime for reward functions."
+That's optimization thinking and misses the point. The real isomorphism,
+stated explicitly in Tej's BITC / DMC / IRE papers:
+
+**CARL's GRPO rollout loop is already an Interactive Research
+Environment (IRE).** The tuple `(M, I, Φ, G)` exists in v0.8.0:
+- `M` — `carl_core.interaction.InteractionChain` (typed event manifold)
+- `I` — `Step` + `ActionType` (lifecycle-tracked interactions)
+- `Φ` — `compute_phi` / `kuramoto_R` (structural correspondences)
+- `G` — `BaseGate[P: GatingPredicate]` (coherence-gated routing)
+
+HVM (Higher-order Virtual Machine) evaluates interaction combinators
+with Church-Rosser confluence + Lévy-optimal sharing. Bend is the
+high-level language compiling to HVM, **parallel-by-default with
+automatic sequential fallback**. py2bend admits a restricted Python
+subset into that path; rejected programs fall through to sequential
+Python (DMC paper's two-branch partition).
+
+The isomorphism that matters:
+
+| CARL concept | HVM concept |
+|---|---|
+| K-sample completion rollout | Parallel reduction of independent redexes |
+| Per-completion reward eval | Local graph rewrite (pure, confluent) |
+| argmax/softmax over rewards | amb-choice coupled to `τ = 1 − crystallization` |
+| phi field over K completions | Kuramoto witness `R` over parallel branches |
+| Branch-point uncertainty | **Void point** = cognitive-dissonance vector |
+| `InteractionChain` | DMC "mesh-visible execution trace" |
+
+What this means concretely: the v0.10-A integration compiles the
+**rollout loop itself** to Bend/HVM, not just `compute_reward()`. The
+wins are (in order of importance): deterministic reproducibility,
+anticipatory variance minimization via parallel void-point exploration,
+mesh-visible training traces. Speed is a side effect.
 
 ## Keep an eye on
 
