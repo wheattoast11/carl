@@ -233,6 +233,41 @@ derived from the early Desai papers (Zenodo 10.5281/zenodo.18906944,
 approximation — CARL keeps the exact ratio. **Do not change
 `packages/carl-core/src/carl_core/constants.py:14`.**
 
+## Mental model: AXON signal vocabulary (emit isomorphic events)
+
+terminals-tech defines 67 AXON SignalTypes in `lib/terminals-tech/core/base/events.ts`.
+AXON is TypeScript-only (no Python bindings), so carl-studio **cannot directly
+subscribe** — but it SHOULD emit events with **isomorphic shapes** so that when
+terminals-tech web app observes carl-studio runs (via carl.camp HTTP forwarding),
+the shapes align natively.
+
+Top 5 signals carl-studio should emit during training:
+- `skill_training_started` — phase transition into learning
+- `skill_crystallized` — reward crystallized, artifact learnable
+- `coherence_update` — internal consistency observability
+- `interaction_created` — per-episode lifecycle marker
+- `action_dispatched` — fine-grained trajectory reconstruction
+
+See `docs/v10_terminals_tech_deep_dive.md` for the full 67-signal taxonomy.
+`packages/carl-core/src/carl_core/interaction.py::Step` is already shape-compatible
+with the AXON signal payload format — the mapping is direct.
+
+## Agent-card ↔ Supabase flow (v0.10-A #1, spec landed)
+
+`docs/v10_agent_card_supabase_spec.md` is implementation-ready. Flow:
+
+```
+FREE tier: carl agent register → LocalDB → FYI side-notice
+PAID tier: carl agent register → LocalDB → HTTP POST carl.camp → Supabase upsert
+```
+
+carl-studio (Python CLI) **never calls Supabase directly**. The carl.camp
+backend mediates via the `electric-bridge.ts::pushToSupabase` pattern (verified
+at `/Users/terminals/Documents/terminals-tech-landing/terminals-landing-new/lib/sync/`).
+
+Conflict strategy: `last-write-wins` (monotonic agent-card evolution).
+Embedding dimension if/when added: 384 (pgvector standard across terminals ecosystem).
+
 ## Mental model: HVM / Bend / py2bend as CARL's native substrate
 
 Do NOT frame HVM integration as "a faster runtime for reward functions."

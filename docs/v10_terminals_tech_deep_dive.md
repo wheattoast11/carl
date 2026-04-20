@@ -202,17 +202,126 @@ The admin-gate + lazy-import pattern (`src/carl_studio/admin.py`,
 canonical seam for BUSL-1.1 integrations. MIT-licensed pieces can be
 mirrored directly (agent-sdk, cli patterns) without the gate.
 
+## Deep-dive addendum (2026-04-20, second-pass grounding)
+
+After Tej pointed at `lib/terminals-tech/` + `lib/webcontainer/`, four
+more specialist agents reviewed the full substrate. Key additions:
+
+### L0 / L1 substrate verification (BUSL-1.1)
+
+- `conservation.ts:18` hardcodes `export const KAPPA = 21.37`. This is
+  the empirical calibration; CARL's `KAPPA = 64/3 ≈ 21.333` is the
+  exact ratio. **Ruling from Tej:** CARL keeps 64/3 from the early
+  papers. terminals.tech's 21.37 is the calibrated runtime value. The
+  0.17% delta is expected and documented.
+- `Sematon<T>` in `core/L0/sematon.ts` matches the handoff plan file
+  exactly. `constructive: boolean` is the Deutsch-Marletto invariant
+  (witness converged ∧ entropy finite ∧ payload non-empty). CARL's
+  `Step` does NOT currently carry this field — **v0.10-B candidate:**
+  augment `Step` with `constructive: bool` + `witness: {R, entropy}`.
+- `core/white-hole/neuron.ts` — `WhiteHoleNeuron` is a literal
+  contiguous memory region with four simultaneous projections:
+  phase (Kuramoto) + HVM combinator ports[2] + MicroLM weights[64] +
+  HNSW embedding[384]. Self-consistency = Kuramoto convergence ∧
+  Church-Rosser confluence → unique attractor. Direct substrate for
+  the "four-view atom" Tej described.
+- `isomorphisms.ts` at root exposes ~10 canonical correspondences
+  (L5↔L2 tool-node, L5↔L3 A2A-event, L5↔L3 MCP-task-state, L3↔L3
+  stream-mesh, L3↔L3 AXON-mesh, L4→L1 pattern-shape-hash, L1↔L3
+  SDKMsg-high-level, L1↔L3 SDKMsg-mesh, L1 address-string, L2→L5
+  skill-MCP-tool). Most are already realized in carl-core as
+  `InteractionChain` + `ActionType` + `Step`. **The map is the
+  canonical IRE vocabulary — carl-studio should emit events using
+  THESE names when feasible so terminals-tech web app can observe
+  CARL runs natively.**
+
+### L3 / L4 mesh + AXON + brains (BUSL-1.1)
+
+- **67 SignalTypes total** in `core/base/events.ts` SignalType union.
+  Categorized: Skill Lifecycle (17), Coherence & Health (7),
+  Interaction Lifecycle (2), Deploy Pipeline (7), Reactive Session
+  (4), Journey Canvas (8), Voice Substrate (5), Other (17).
+- **Top 5 signals carl-studio should emit during training** (ordered
+  by integration value):
+  1. `skill_training_started` — phase transition into learning
+  2. `skill_crystallized` — reward crystallized, learnable artifact
+  3. `coherence_update` — internal consistency observability
+  4. `interaction_created` — per-episode lifecycle marker
+  5. `action_dispatched` — fine-grained trajectory reconstruction
+- **AXON bus is TypeScript-only.** No Python bindings exist. carl-studio
+  cannot directly subscribe to the AXON bus. But it CAN emit
+  isomorphically-shaped events via HTTP POST to carl.camp, which
+  forwards to the bus. The shape is what matters, not the transport.
+- AXON protocol: binary ring-buffer, 16-byte header, 64KB max message,
+  60Hz tick rate. Pure-function agent contract:
+  `tick(inbox: AxonMessage[]) → Promise<AxonMessage[]>`.
+- `mesh-sink.ts::normalizeEmbedding()` — 384-dim pgvector standard
+  with NaN sanitization. Adopt this dimension if carl-studio later
+  adds agent-card or skill embeddings for semantic search.
+- **Federation layer uses AT Protocol (Bluesky DIDs), not JWT/OAuth.**
+  Decentralized agent discovery via PDS endpoints + feed generators.
+  This is a **v0.11+ research direction** — if carl.camp later wants
+  cross-user agent discovery, AT Protocol is the pattern terminals.tech
+  already uses.
+
+### Webcontainer runtime (BUSL-1.1, 8,193 LOC)
+
+- **Per-subagent isolation IS achievable** via `WebContainerManager`
+  factory (one instance per subagent). Each gets fresh filesystem, own
+  MCP server set, own package env. No cross-subagent pollution.
+- **pyodide-runner.ts** (109 LOC, read fully) — runs Python INSIDE
+  the browser sandbox via WASM. Scoped to simple workflows. **Cannot
+  run torch/transformers** due to WASM memory limits.
+- MCP integration: `webcontainer-mcp-manager.ts` runs MCP servers
+  INSIDE the container; `mcp-stdio-http-bridge.ts` wraps stdio over
+  HTTP for browser consumption.
+- **Integration decision:** Option A (carl-app, browser-side, ~800
+  LOC) is recommended for interactive subagent graphs. Option B
+  (Python→WebSocket→headless browser, ~2.5K LOC, +200ms latency) is
+  viable but over-complex for v0.10. Option C (backend-pooled
+  containers, ~3-5K LOC) is multi-tenant SaaS overkill for now.
+- **For carl-studio today:** webcontainer is NOT a carl-studio
+  dependency. It's a carl-app (future TypeScript frontend) concern.
+  carl-studio stays Python-native for training/eval. The webcontainer
+  is the right substrate for the carl-app side of Tej's vision.
+
+### Electric bridge + sync scopes (BUSL-1.1)
+
+- `pushToSupabase(scopeId)` is a **scope-dispatched router**, not a
+  monolithic writer. Each scope has its own sync implementation
+  (e.g., `syncDeploymentsToSupabase()`). Pattern is mirror-friendly.
+- **9 sync scopes with 3 conflict strategies:**
+  - last-write-wins (monotonic evolution): `user_stacks`,
+    `user_artifacts`, `chat_sessions`, `forge_scenes`,
+    `forge_iterations`, `interactions`
+  - server-wins (remote is source of truth): `deployments`
+  - client-wins (local is source of truth): `workspace_state`,
+    `forge_material_profiles`
+- **Agent cards → last-write-wins** (monotonic edit semantics).
+- PGLite schema v1.18 has `skill_runs` (v1.7 migration) but **no
+  `agent_cards` table**. Proposed v1.19 migration + Pydantic
+  `AgentCardRow` shape documented in
+  `docs/v10_agent_card_supabase_spec.md` (new).
+- Supabase auth: anon key in browser context; **carl.camp backend
+  mediates for CLI clients** (no direct Supabase from carl-studio).
+
+## Spec released alongside this review
+
+`docs/v10_agent_card_supabase_spec.md` (NEW) — implementation-ready spec
+for v0.10-A #1 (agent cards + Supabase). 340 LOC estimate, MIT-clean,
+no BUSL code copied. Includes `AgentCardRow` Pydantic model, PGLite
+v1.19 migration proposal, sync scope definition, CLI commands, tier-
+gated publish flow, 8-test verification strategy.
+
 ## Still-deferred until separate grounding sessions
 
-- **HVM3** (if different from HVM2). agent-logic.hvm appears to be
-  HVM2 syntax; need Tej's confirmation on whether HVM3 upgrade is
-  planned or already landed elsewhere.
-- **Webcontainer runtime** for sandboxed subagent-graph execution. No
-  webcontainer code was found in any of the 5 paths reviewed. May live
-  in a different repo.
+- **HVM3** (if different from HVM2). agent-logic.hvm is HVM2 syntax.
+  Tej ruled: the number doesn't matter, the concept does. No action.
 - **BITC / IRE as a training-reward term.** Worth a dedicated methods
   paper (see v0.8 `paper/` series) before implementation — the theory
   is published but the reward-shaping implications need design work.
+- **Federation via AT Protocol DIDs.** v0.11+ once carl.camp has a
+  concrete multi-user discovery use case.
 
 ## Reservations (still standing)
 
