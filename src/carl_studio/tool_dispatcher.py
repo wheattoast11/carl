@@ -59,6 +59,23 @@ class ToolPermission(str, enum.Enum):
     DENY = "deny"
 
 
+class ToolOutcomeType(str, enum.Enum):
+    """Terminal outcome of one tool-block execution (v0.16 simplify).
+
+    Previously a stringly-typed literal union; promoted to an enum so
+    callers compare via member values (e.g. ``outcome.outcome is
+    ToolOutcomeType.DENIED``) and typos get caught at lint time.
+    Inheriting ``str`` preserves JSON/dict serialization semantics —
+    existing callsites comparing ``outcome.outcome == "denied"`` still
+    work because ``str`` equality is preserved.
+    """
+
+    OK = "ok"
+    DENIED = "denied"
+    SCHEMA_ERROR = "schema_error"
+    ERROR = "error"
+
+
 @dataclass(frozen=True)
 class ToolOutcome:
     """Structured outcome of one tool-block execution.
@@ -72,7 +89,7 @@ class ToolOutcome:
     input: dict[str, Any]
     result: str
     is_error: bool
-    outcome: str  # "ok" | "denied" | "schema_error" | "error"
+    outcome: ToolOutcomeType
     duration_ms: float
 
 
@@ -87,7 +104,7 @@ class ToolEvent:
     kind: str  # "tool_blocked" | "tool_result" | "error"
     name: str
     content: str
-    code: str | None = None
+    code: str = ""
 
 
 PreToolHookT = Callable[[str, dict[str, Any]], ToolPermission]
@@ -353,7 +370,7 @@ class ToolDispatcher:
                     input=tool_input,
                     result=result,
                     is_error=True,
-                    outcome="denied",
+                    outcome=ToolOutcomeType.DENIED,
                     duration_ms=(time.perf_counter() - started_at) * 1000.0,
                 ),
                 events,
@@ -378,7 +395,7 @@ class ToolDispatcher:
                         input=tool_input,
                         result=schema_err,
                         is_error=True,
-                        outcome="schema_error",
+                        outcome=ToolOutcomeType.SCHEMA_ERROR,
                         duration_ms=(time.perf_counter() - started_at) * 1000.0,
                     ),
                     events,
@@ -416,7 +433,7 @@ class ToolDispatcher:
                 input=tool_input,
                 result=result,
                 is_error=is_error,
-                outcome="error" if is_error else "ok",
+                outcome=ToolOutcomeType.ERROR if is_error else ToolOutcomeType.OK,
                 duration_ms=(time.perf_counter() - started_at) * 1000.0,
             ),
             events,

@@ -8,10 +8,44 @@ exactly one field, leaving prior answers intact. Serialized at
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+
+class Mode(str, Enum):
+    """Top-level env-wizard routing decision."""
+
+    TRAIN = "train"
+    INFER = "infer"
+    BOTH = "both"
+
+
+class Method(str, Enum):
+    """Training objective when mode includes train."""
+
+    SFT = "sft"
+    GRPO = "grpo"
+    DPO = "dpo"
+    CASCADE = "cascade"
+
+
+class DatasetKind(str, Enum):
+    """How to resolve the dataset field."""
+
+    HF = "hf"
+    LOCAL = "local"
+    SYNTH = "synth"
+
+
+class EvalGate(str, Enum):
+    """Eval admission policy."""
+
+    NONE = "none"
+    METRIC = "metric"
+    CRYSTALLIZATION = "crystallization"
 
 
 class EnvState(BaseModel):
@@ -21,21 +55,21 @@ class EnvState(BaseModel):
     substituting defaults from ``CARLSettings`` or emitting TODO markers.
     """
 
-    mode: str | None = Field(
+    mode: Mode | None = Field(
         default=None,
-        description="'train' | 'infer' | 'both' — top-level routing decision",
+        description="Top-level routing decision",
     )
-    method: str | None = Field(
+    method: Method | None = Field(
         default=None,
-        description="'sft' | 'grpo' | 'dpo' | 'cascade' — when mode includes train",
+        description="Training objective when mode includes train",
     )
     dataset: str | None = Field(
         default=None,
         description="HuggingFace repo id OR path to local JSONL",
     )
-    dataset_kind: str | None = Field(
+    dataset_kind: DatasetKind | None = Field(
         default=None,
-        description="'hf' | 'local' | 'synth' — how to resolve the dataset field",
+        description="How to resolve the dataset field",
     )
     compute: str | None = Field(
         default=None,
@@ -54,9 +88,9 @@ class EnvState(BaseModel):
         default=None,
         description="Number of cascade stages (1-3) when method=cascade",
     )
-    eval_gate: str | None = Field(
+    eval_gate: EvalGate | None = Field(
         default=None,
-        description="'none' | 'metric' | 'crystallization' — eval admission policy",
+        description="Eval admission policy",
     )
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -96,7 +130,7 @@ class EnvState(BaseModel):
         """
         if self.mode in (None, ""):
             return False
-        if self.mode == "infer":
+        if self.mode == Mode.INFER:
             return True  # inference-only doesn't need method/dataset
         # Train or both: need method + dataset + compute
         return all([self.method, self.dataset, self.compute])

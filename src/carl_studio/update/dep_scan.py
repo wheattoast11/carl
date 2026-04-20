@@ -20,20 +20,49 @@ _PYPI_TIMEOUT_S = 5.0
 _PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
 
 
-def _fetch_latest_pypi(package: str) -> str | None:
-    """Return the latest version string from PyPI, or None on any failure."""
+def _fetch_latest_pypi_once(package: str) -> str | None:
+    """Single-attempt PyPI fetch. Returns None on non-retryable shape errors."""
     url = _PYPI_JSON_URL.format(package=package)
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=_PYPI_TIMEOUT_S) as resp:
-            data = json.load(resp)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
-        return None
+    with urllib.request.urlopen(req, timeout=_PYPI_TIMEOUT_S) as resp:
+        data = json.load(resp)
     info = data.get("info") if isinstance(data, dict) else None
     if not isinstance(info, dict):
         return None
     version = info.get("version")
     return version if isinstance(version, str) else None
+
+
+def _fetch_latest_pypi(package: str) -> str | None:
+    """Return the latest version string from PyPI, or None on any failure.
+
+    v0.16 simplify: wraps ``_fetch_latest_pypi_once`` in carl-core's
+    ``BreakAndRetryStrategy`` so transient URLErrors / timeouts retry
+    once with bounded backoff before giving up. Non-retryable shape
+    errors (malformed JSON, unexpected body shape) still return None
+    cleanly.
+    """
+    try:
+        from carl_core.resilience import BreakAndRetryStrategy
+        from carl_core.retry import RetryPolicy
+    except ImportError:
+        # carl-core missing — fall back to single-shot attempt.
+        try:
+            return _fetch_latest_pypi_once(package)
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
+            return None
+
+    policy = RetryPolicy(
+        max_attempts=2,
+        backoff_base=0.5,
+        max_delay=2.0,
+        retryable=(urllib.error.URLError, TimeoutError),
+    )
+    strategy = BreakAndRetryStrategy(retry_policy=policy)
+    try:
+        return strategy.run(_fetch_latest_pypi_once, package)
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
+        return None
 
 
 def _compare_versions(current: str, latest: str) -> str:

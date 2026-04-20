@@ -8,9 +8,27 @@ humans.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class BlastCategory(str, Enum):
+    """Source of a blast-radius entry (v0.16 simplify)."""
+
+    COMMIT = "commit"
+    DEPENDENCY = "dependency"
+    SECURITY = "security"
+    CONVENTION = "convention"
+
+
+class BlastDirection(str, Enum):
+    """Positive/neutral/breaking framing for a blast-radius entry."""
+
+    POSITIVE = "positive"
+    BREAKING = "breaking"
+    NEUTRAL = "neutral"
 
 
 class GitCommitDelta(BaseModel):
@@ -38,13 +56,11 @@ class DependencyDelta(BaseModel):
 class BlastRadiusEntry(BaseModel):
     """Positive-framed impact summary for one change item."""
 
-    category: str = Field(
-        description="'commit' | 'dependency' | 'security' | 'convention'"
-    )
+    category: BlastCategory = Field(description="Source of the entry")
     target: str = Field(description="What the change affects (file, pkg, etc.)")
-    direction: str = Field(
-        default="positive",
-        description="'positive' | 'breaking' | 'neutral' — framing for the user",
+    direction: BlastDirection = Field(
+        default=BlastDirection.POSITIVE,
+        description="Framing for the user",
     )
     impact: str = Field(description="One-line explanation of the unlock/improvement")
 
@@ -102,22 +118,25 @@ def _build_blast_radius(
             impact = f"Updates: {c.subject}"
         entries.append(
             BlastRadiusEntry(
-                category="commit", target=c.sha[:7], direction="positive", impact=impact
+                category=BlastCategory.COMMIT,
+                target=c.sha[:7],
+                direction=BlastDirection.POSITIVE,
+                impact=impact,
             )
         )
 
     for d in deps[:5]:
         if d.severity == "major":
-            direction = "breaking"
+            direction = BlastDirection.BREAKING
             impact = f"{d.package} {d.current} → {d.latest}: major — review changelog"
         else:
-            direction = "positive"
+            direction = BlastDirection.POSITIVE
             impact = (
                 f"{d.package} {d.current} → {d.latest}: {d.summary or d.severity}"
             )
         entries.append(
             BlastRadiusEntry(
-                category="dependency",
+                category=BlastCategory.DEPENDENCY,
                 target=d.package,
                 direction=direction,
                 impact=impact,

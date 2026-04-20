@@ -8,9 +8,23 @@ edit by hand rather than facing a cryptic validation error later.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import Enum
 from typing import Any
 
 from carl_studio.env_setup.state import EnvState
+
+
+def _enum_value(v: Any) -> Any:
+    """Unwrap an Enum to its underlying value for YAML/JSON output.
+
+    Carl's str-Enums compare equal to their string values, but f-string
+    interpolation renders as ``Mode.TRAIN`` rather than ``train``. This
+    helper keeps the output plain-string without forcing every call site
+    to call ``.value`` explicitly.
+    """
+    if isinstance(v, Enum):
+        return v.value
+    return v
 
 
 def render_training_config_yaml(state: EnvState) -> str:
@@ -30,12 +44,13 @@ def render_training_config_yaml(state: EnvState) -> str:
     ]
 
     def _emit(key: str, value: Any, comment: str | None = None) -> None:
-        if value is None:
+        unwrapped = _enum_value(value)
+        if unwrapped is None:
             lines.append(f"{key}: null  # TODO: set {comment or key}")
-        elif isinstance(value, str):
-            lines.append(f"{key}: {_quote_if_needed(value)}")
+        elif isinstance(unwrapped, str):
+            lines.append(f"{key}: {_quote_if_needed(unwrapped)}")
         else:
-            lines.append(f"{key}: {value}")
+            lines.append(f"{key}: {unwrapped}")
 
     # Top-level shape matches `carl_studio.types.config.TrainingConfig`.
     _emit("mode", state.mode)
@@ -67,7 +82,7 @@ def render_training_config_yaml(state: EnvState) -> str:
 
     if state.eval_gate and state.eval_gate != "none":
         lines.append("")
-        lines.append(f"eval_gate: {state.eval_gate}")
+        lines.append(f"eval_gate: {_enum_value(state.eval_gate)}")
 
     return "\n".join(lines) + "\n"
 

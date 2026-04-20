@@ -378,6 +378,64 @@ class CampSyncClient:
         self._transport = transport
         self._base_url = base_url
 
+    # ------------------------------------------------------------------
+    # Shared HTTP plumbing (v0.16 simplify)
+    # ------------------------------------------------------------------
+
+    def _require_transport(self) -> str | None:
+        """Return an error message when no transport is configured, else None."""
+        if self._transport is None:
+            return "no transport configured; provide one for live sync"
+        return None
+
+    @staticmethod
+    def _read_headers(response: Any) -> dict[str, str]:
+        headers = getattr(response, "headers", None)
+        if headers is None:
+            return {}
+        try:
+            return dict(headers)
+        except Exception:  # pragma: no cover — headers may be a custom mapping
+            return {}
+
+    @classmethod
+    def _envelope_error(cls, response: Any) -> str | None:
+        """Return a human-readable error string when the envelope is non-OK.
+
+        Handles the three carl.camp failure modes uniformly:
+        * 429 → rate-limited (surfaces Retry-After)
+        * 4xx/5xx → http <status>: <error-body>
+        * 200 + ``{"ok": false, ...}`` → <error-body> verbatim
+
+        Returns ``None`` when the response passed all checks and the
+        caller should parse the payload for success fields.
+        """
+        status = getattr(response, "status_code", None)
+        if status == 429:
+            retry_after = cls._read_headers(response).get("Retry-After")
+            return f"rate_limited (Retry-After={retry_after})"
+        if status is not None and status >= 400:
+            try:
+                detail = response.json() if hasattr(response, "json") else {}
+            except Exception:
+                detail = {}
+            return f"http {status}: {detail.get('error', 'unknown')}"
+        try:
+            payload = response.json() if hasattr(response, "json") else {}
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict) and not payload.get("ok", True):
+            return str(payload.get("error", "unknown"))
+        return None
+
+    @staticmethod
+    def _parse_payload(response: Any) -> dict[str, Any]:
+        try:
+            payload = response.json() if hasattr(response, "json") else {}
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
     def push(
         self,
         cards: list[MarketplaceAgentCard],
@@ -394,6 +452,9 @@ class CampSyncClient:
                 error=f"batch exceeds {self._BATCH_LIMIT} cards (got {len(cards)})"
             )
 
+        if (err := self._require_transport()) is not None:
+            return SyncResult(error=err)
+
         body: dict[str, Any] = {"cards": [c.to_sync_payload() for c in cards]}
         if org_id is not None:
             body["org_id"] = org_id
@@ -404,31 +465,15 @@ class CampSyncClient:
             "Content-Type": "application/json",
         }
 
-        if self._transport is None:
-            return SyncResult(error="no transport configured; provide one for live sync")
-
         try:
-            response = self._transport(url=url, headers=headers, json=body)
+            response = self._transport(url=url, headers=headers, json=body)  # type: ignore[misc]
         except Exception as exc:
             return SyncResult(error=f"transport error: {exc}")
 
-        status = getattr(response, "status_code", None)
-        if status == 429:
-            retry_after = response.headers.get("Retry-After") if hasattr(response, "headers") else None
-            return SyncResult(error=f"rate_limited (Retry-After={retry_after})")
-        if status and status >= 400:
-            try:
-                detail = response.json() if hasattr(response, "json") else {}
-            except Exception:
-                detail = {}
-            return SyncResult(error=f"http {status}: {detail.get('error', 'unknown')}")
+        if (env_err := self._envelope_error(response)) is not None:
+            return SyncResult(error=env_err)
 
-        payload: dict[str, Any]
-        try:
-            payload = response.json() if hasattr(response, "json") else {}
-        except Exception:
-            payload = {}
-
+        payload = self._parse_payload(response)
         return SyncResult(
             synced=int(payload.get("synced", 0)),
             skipped=int(payload.get("skipped", 0)),
@@ -451,8 +496,8 @@ class CampSyncClient:
         ``/api/sync/agent-cards`` calls reference as ``agent_id``.
         """
 
-        if self._transport is None:
-            return RegisterResult(error="no transport configured")
+        if (err := self._require_transport()) is not None:
+            return RegisterResult(error=err)
 
         url = f"{self._base_url}/api/agents/register"
         headers = {
@@ -466,35 +511,14 @@ class CampSyncClient:
             body["org_id"] = org_id
 
         try:
-            response = self._transport(url=url, headers=headers, json=body)
+            response = self._transport(url=url, headers=headers, json=body)  # type: ignore[misc]
         except Exception as exc:
             return RegisterResult(error=f"transport error: {exc}")
 
-        status = getattr(response, "status_code", None)
-        if status == 429:
-            retry_after = (
-                response.headers.get("Retry-After")
-                if hasattr(response, "headers")
-                else None
-            )
-            return RegisterResult(error=f"rate_limited (Retry-After={retry_after})")
-        if status and status >= 400:
-            try:
-                detail = response.json() if hasattr(response, "json") else {}
-            except Exception:
-                detail = {}
-            return RegisterResult(
-                error=f"http {status}: {detail.get('error', 'unknown')}"
-            )
+        if (env_err := self._envelope_error(response)) is not None:
+            return RegisterResult(error=env_err)
 
-        try:
-            payload = response.json() if hasattr(response, "json") else {}
-        except Exception:
-            return RegisterResult(error="could not parse response body")
-
-        if not payload.get("ok", True):
-            return RegisterResult(error=str(payload.get("error", "unknown")))
-
+        payload = self._parse_payload(response)
         aid = payload.get("agent_id")
         if not isinstance(aid, str):
             return RegisterResult(error="response missing agent_id")
