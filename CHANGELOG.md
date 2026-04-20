@@ -2,6 +2,62 @@
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-04-20
+
+Agent-marketplace activation. carl.camp backend endpoints are live
+(`POST /api/agents/register` + `POST /api/sync/agent-cards` with
+envelope + rate-limit + migration 021 on a2a_agents), so carl-studio
+cuts over to the real surface. Production `@coherence_gate` wiring
+lands on the publish path — the first concrete call-site adoption.
+
+### Added
+
+- **`carl agent register <name>`** — MIT-clean CLI command. Writes
+  locally always; pushes to carl.camp when a bearer token is present
+  (env var `CARL_CAMP_TOKEN` or `~/.carl/camp_token`). `--local-only`
+  skips the network path; `--org <id>` targets a specific org.
+  Flow: `POST /api/agents/register` mints the recipe-shell UUID →
+  carl-studio replaces the local placeholder agent_id → calls
+  `POST /api/sync/agent-cards` to publish.
+- **`carl agent publish`** — pushes all locally-stored cards (or one
+  specific via `--agent-id`) to carl.camp. **Coherence-gated via
+  `@coherence_gate(min_R=0.5, feature="agent.publish")`**: denies when
+  recent success rate is below threshold. Uses
+  `success_rate_probe` as the default endogenous probe. First
+  production call site for the v0.11 CoherenceGate primitive — Fano V7
+  realization now ~90%.
+- **`carl agent list [--limit N]`** — enumerate locally-stored cards.
+- **`CampSyncClient.register_recipe_shell()`** — Python method
+  mirroring the backend `POST /api/agents/register` contract. Returns
+  typed `RegisterResult` with `{agent_id, org_id, lifecycle_state,
+  created_at}` or structured error.
+- **`SyncResult.envelope_ok`** — captures the backend's
+  `{ok: true/false, ...}` envelope so call sites can distinguish
+  transport success from business-logic success.
+
+### Changed
+
+- `AgentCardStore._conn_ctx()` normalizes both LocalDB connection
+  shapes (context-manager + raw). Enables use from both carl-studio's
+  real LocalDB and test-helper wrappers.
+
+### Verification
+
+- Tests: 3070 pass / 0 fail (+10 marketplace-flow covering
+  register_recipe_shell happy/4xx/429/transport, envelope handling,
+  CLI local-only + missing-token paths, content_hash required).
+- Build: 0.13.0 wheel clean.
+- Backend integration verified against contract shape (envelope +
+  error codes + rate-limit headers) via mocked transport; live-
+  endpoint smoke requires `CARL_CAMP_TOKEN`.
+
+### Deferred (still on the v0.14 list)
+
+- Tool-dispatch extraction from `chat_agent.py` (blocked on
+  `tool_dispatcher.py` API extension; non-trivial).
+- `carl env` expanded to full 7-question design (reward · cascade ·
+  eval questions).
+
 ## [0.12.0] — 2026-04-20
 
 Decomposition + wizard release. First cut of the long-deferred

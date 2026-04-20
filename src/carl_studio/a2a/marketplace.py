@@ -157,28 +157,50 @@ CREATE INDEX IF NOT EXISTS idx_agent_cards_url ON agent_cards(agent_url);
 
 
 class AgentCardStore:
-    """LocalDB CRUD for agent cards. SQLite-backed; mirrors what carl.camp stores."""
+    """LocalDB CRUD for agent cards. SQLite-backed; mirrors what carl.camp stores.
+
+    Supports two LocalDB connection shapes:
+    1. ``db.connect()`` returns a context manager (carl-studio's LocalDB)
+    2. ``db.connect()`` returns a raw sqlite3.Connection (test helpers)
+    """
 
     def __init__(self, db: Any) -> None:
         self._db = db
         self._ensure_schema()
 
+    def _conn_ctx(self) -> Any:
+        """Return a context manager yielding a sqlite connection.
+
+        Normalizes both LocalDB shapes so the rest of the store can use
+        ``with self._conn_ctx() as conn:`` uniformly.
+        """
+
+        from contextlib import contextmanager
+
+        raw = self._db.connect()
+        # If it's already a context manager (has __enter__), use as-is.
+        if hasattr(raw, "__enter__") and hasattr(raw, "__exit__"):
+            return raw
+
+        @contextmanager
+        def _ctx() -> Any:
+            try:
+                yield raw
+            finally:
+                if hasattr(raw, "close"):
+                    raw.close()
+
+        return _ctx()
+
     def _ensure_schema(self) -> None:
-        conn = self._db.connect() if hasattr(self._db, "connect") else None
-        if conn is None:
-            return
-        try:
+        with self._conn_ctx() as conn:
             conn.executescript(_AGENT_CARD_TABLE_DDL)
             conn.commit()
-        finally:
-            if hasattr(conn, "close"):
-                conn.close()
 
     def save(self, card: MarketplaceAgentCard) -> None:
         """Upsert by agent_id (last-write-wins)."""
 
-        conn = self._db.connect()
-        try:
+        with self._conn_ctx() as conn:
             conn.execute(
                 """INSERT INTO agent_cards (
                     agent_id, agent_url, agent_name, description, capabilities,
@@ -213,20 +235,15 @@ class AgentCardStore:
                 ),
             )
             conn.commit()
-        finally:
-            conn.close()
 
     def get(self, agent_id: str) -> MarketplaceAgentCard | None:
-        conn = self._db.connect()
-        try:
+        with self._conn_ctx() as conn:
             row = conn.execute(
                 "SELECT * FROM agent_cards WHERE agent_id = ?", (agent_id,)
             ).fetchone()
             if row is None:
                 return None
             return self._row_to_card(row)
-        finally:
-            conn.close()
 
     def list_all(
         self,
@@ -242,35 +259,26 @@ class AgentCardStore:
         """
         if limit < 0 or offset < 0:
             raise ValueError(f"limit/offset must be non-negative (got limit={limit}, offset={offset})")
-        conn = self._db.connect()
-        try:
+        with self._conn_ctx() as conn:
             rows = conn.execute(
                 "SELECT * FROM agent_cards ORDER BY updated_at DESC LIMIT ? OFFSET ?",
                 (limit, offset),
             ).fetchall()
             return [self._row_to_card(r) for r in rows]
-        finally:
-            conn.close()
 
     def count(self) -> int:
         """Total stored cards — cheap counter for pagination planning."""
-        conn = self._db.connect()
-        try:
+        with self._conn_ctx() as conn:
             row = conn.execute("SELECT COUNT(*) FROM agent_cards").fetchone()
             return int(row[0]) if row is not None else 0
-        finally:
-            conn.close()
 
     def delete(self, agent_id: str) -> bool:
-        conn = self._db.connect()
-        try:
+        with self._conn_ctx() as conn:
             cur = conn.execute(
                 "DELETE FROM agent_cards WHERE agent_id = ?", (agent_id,)
             )
             conn.commit()
             return cur.rowcount > 0
-        finally:
-            conn.close()
 
     @staticmethod
     def _row_to_card(row: Any) -> MarketplaceAgentCard:
@@ -322,10 +330,32 @@ class SyncResult:
     ids: list[str] | None = None
     rejected: list[dict[str, Any]] | None = None
     error: str | None = None
+    # Server returns {ok: true, ...} envelope — captured so call sites
+    # can distinguish transport success from business-logic success.
+    envelope_ok: bool = True
 
     @property
     def ok(self) -> bool:
         return self.error is None
+
+
+@dataclass
+class RegisterResult:
+    """Outcome of a POST /api/agents/register call.
+
+    Shape of the real endpoint (2026-04-20):
+        201 → {ok: true, agent_id, org_id, lifecycle_state, created_at}
+    """
+
+    agent_id: str | None = None
+    org_id: str | None = None
+    lifecycle_state: str | None = None
+    created_at: str | None = None
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.error is None and self.agent_id is not None
 
 
 class CampSyncClient:
@@ -404,6 +434,76 @@ class CampSyncClient:
             skipped=int(payload.get("skipped", 0)),
             ids=list(payload.get("ids", [])),
             rejected=list(payload.get("rejected", [])),
+            envelope_ok=bool(payload.get("ok", True)),
+        )
+
+    def register_recipe_shell(
+        self,
+        *,
+        bearer_token: str,
+        name: str | None = None,
+        org_id: str | None = None,
+    ) -> RegisterResult:
+        """Call ``POST /api/agents/register`` to mint a recipe-shell.
+
+        The carl.camp endpoint creates an empty ``recipes`` row owned by
+        the caller's org and returns a UUID. That UUID is what subsequent
+        ``/api/sync/agent-cards`` calls reference as ``agent_id``.
+        """
+
+        if self._transport is None:
+            return RegisterResult(error="no transport configured")
+
+        url = f"{self._base_url}/api/agents/register"
+        headers = {
+            "Authorization": f"Bearer {bearer_token}",
+            "Content-Type": "application/json",
+        }
+        body: dict[str, Any] = {}
+        if name is not None:
+            body["name"] = name
+        if org_id is not None:
+            body["org_id"] = org_id
+
+        try:
+            response = self._transport(url=url, headers=headers, json=body)
+        except Exception as exc:
+            return RegisterResult(error=f"transport error: {exc}")
+
+        status = getattr(response, "status_code", None)
+        if status == 429:
+            retry_after = (
+                response.headers.get("Retry-After")
+                if hasattr(response, "headers")
+                else None
+            )
+            return RegisterResult(error=f"rate_limited (Retry-After={retry_after})")
+        if status and status >= 400:
+            try:
+                detail = response.json() if hasattr(response, "json") else {}
+            except Exception:
+                detail = {}
+            return RegisterResult(
+                error=f"http {status}: {detail.get('error', 'unknown')}"
+            )
+
+        try:
+            payload = response.json() if hasattr(response, "json") else {}
+        except Exception:
+            return RegisterResult(error="could not parse response body")
+
+        if not payload.get("ok", True):
+            return RegisterResult(error=str(payload.get("error", "unknown")))
+
+        aid = payload.get("agent_id")
+        if not isinstance(aid, str):
+            return RegisterResult(error="response missing agent_id")
+
+        return RegisterResult(
+            agent_id=aid,
+            org_id=payload.get("org_id"),
+            lifecycle_state=payload.get("lifecycle_state"),
+            created_at=payload.get("created_at"),
         )
 
 
@@ -419,5 +519,6 @@ __all__ = [
     "AgentCardStore",
     "CampSyncClient",
     "SyncResult",
+    "RegisterResult",
     "new_agent_id",
 ]
