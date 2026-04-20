@@ -215,6 +215,17 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Wire carl update (v0.11)
+# ---------------------------------------------------------------------------
+try:
+    from .update import update_cmd
+
+    app.command(name="update")(update_cmd)
+except ImportError:
+    _make_stub(app, "update", doc="Update requires the full carl-studio.")
+
+
+# ---------------------------------------------------------------------------
 # Wire marketplace sub-app + publish command
 # ---------------------------------------------------------------------------
 try:

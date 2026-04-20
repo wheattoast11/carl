@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-04-20
+
+Fano-followthrough release. Closes the two P1-P2 findings that v0.10.0
+left open + ships the first v0.9-designed feature (`carl update`).
+
+### Added
+
+- **Step.probe_call audit trail** (Fano V5 witnessability). When a
+  registered coherence probe populates phi/kuramoto_r/channel_coherence,
+  the Step records `{probe_name, inputs_sha256, output_sha256, populated}`
+  — 12-hex digests, not full payloads, to preserve BITC axiom 1 bounded
+  support. Serialized via `Step.to_dict()`.
+- **`success_rate_probe`** in `carl_core.presence`. A default endogenous
+  probe: reads the chain's own tail of same-action steps and returns
+  `{kuramoto_r: success_rate}`. Pairs with `@coherence_gate` to close
+  the IRE "G" realization end-to-end (Fano V7 45% → ~75%). Exported
+  from `carl_core.__init__`.
+- **`carl update` command** + `carl_studio.update` package. Surfaces
+  recent git commits, PyPI dep-version deltas, and positive-framed
+  blast-radius summary. `--dry-run` skips network; `--json` emits
+  machine-readable; `--summary-only` for one-liner; `--detailed` for
+  full lists. Consent-gated for network egress.
+
+### Changed
+
+- `Step` schema gained optional `probe_call` field (additive,
+  backward-compatible).
+- `carl_core.__init__` exports `success_rate_probe` alongside existing
+  presence helpers.
+
+### Verification
+
+- Tests: 3041 pass / 0 fail (3026 → 3041, +15 for `carl update`).
+- Zero feature regression. All v0.10 surfaces unchanged.
+- Build: 0.11.0 wheel + sdist clean.
+
 ## [0.10.0] — 2026-04-20
 
 Architecture-completion release. Closes the four gaps the four-agent
