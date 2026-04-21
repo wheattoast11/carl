@@ -1,5 +1,5 @@
 /**
- * @carl/emlt-codec — public API surface.
+ * @terminals-tech/emlt-codec — public API surface.
  *
  * TypeScript port of the EML wire format + software-tier HMAC signature
  * verification for the CARL / carl.camp platform. Spec:

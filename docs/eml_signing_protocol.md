@@ -9,7 +9,7 @@ applies_to: v0.9.0
 Canonical spec for how Resonants (and LedgerBlocks) are serialized,
 signed, and verified across language boundaries. This is the
 source-of-truth doc for platform integrators (carl.camp), third-party
-clients, and the TypeScript `@carl/emlt-codec` package.
+clients, and the TypeScript `@terminals-tech/emlt-codec` package.
 
 If this file disagrees with the Python source in
 `packages/carl-core/src/carl_core/eml.py` or
@@ -48,7 +48,7 @@ Depth is computed during decode by tracking stack height; enforce
 ### 1.2 Envelope format (wire-level container)
 
 Produced by `terminals_runtime.eml.codec_impl.encode()` (signed) or
-equivalently by the TS codec `@carl/emlt-codec` (unsigned or signed).
+equivalently by the TS codec `@terminals-tech/emlt-codec` (unsigned or signed).
 
 ```
 byte offset   | content
@@ -101,7 +101,7 @@ Constant-time HMAC compare. Reject on False with error code
 
 **Python API:** `carl_core.signing.sign_tree_software()`, `verify_software_signature()` — both MIT, stdlib only.
 
-**TS API:** `@carl/emlt-codec`'s `signSoftware()` / `verifySoftware()`
+**TS API:** `@terminals-tech/emlt-codec`'s `signSoftware()` / `verifySoftware()`
 mirror the Python signatures exactly.
 
 ### 2.2 Hardware tier (machine-bound, platform cannot verify)
@@ -192,7 +192,7 @@ Platform-side chain-integrity check:
 4. Verify ed25519 signature with `incoming.verify()`.
 5. Insert row; update chain head pointer.
 
-Use `canonical_json` (same library, port to TS via `@carl/emlt-codec`)
+Use `canonical_json` (same library, port to TS via `@terminals-tech/emlt-codec`)
 on the platform — do NOT roll your own JSON canonicalization. Any
 drift breaks chains.
 
@@ -237,7 +237,7 @@ countersig = HMAC-SHA256(
 ### 4.4 Buyer-side verify (reference impl in TS codec)
 
 ```typescript
-import { verifyCountersig } from "@carl/emlt-codec";
+import { verifyCountersig } from "@terminals-tech/emlt-codec";
 const ok = await verifyCountersig(
   resonantContentHash, txId, userId, timestampNs, sigBase64,
 );
@@ -268,7 +268,7 @@ const ok = await verifyCountersig(
 ## 7. Reference implementations
 
 - **Python:** `packages/carl-core/src/carl_core/signing.py`
-- **TypeScript:** `@carl/emlt-codec` npm package (authored in
+- **TypeScript:** `@terminals-tech/emlt-codec` npm package (authored in
   `packages/emlt-codec-ts/`, published on npm by the carl-studio
   team)
 - **Rust:** not exposed across the platform boundary; lives privately

@@ -1,5 +1,5 @@
 {
-  "name": "@carl/emlt-codec",
+  "name": "@terminals-tech/emlt-codec",
   "version": "0.1.0",
   "description": "TypeScript port of the EML wire format + software-tier HMAC signature verification for CARL/carl.camp platform.",
   "license": "MIT",

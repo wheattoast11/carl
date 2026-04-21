@@ -1,5 +1,5 @@
 /**
- * Core types for the @carl/emlt-codec package.
+ * Core types for the @terminals-tech/emlt-codec package.
  *
  * These types mirror the Python reference types in
  * packages/carl-core/src/carl_core/eml.py (EMLOp, EMLNode, EMLTree).

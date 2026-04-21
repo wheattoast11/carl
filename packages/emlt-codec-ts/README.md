@@ -1,4 +1,4 @@
-# `@carl/emlt-codec`
+# `@terminals-tech/emlt-codec`
 
 TypeScript port of the **EML wire format** and **software-tier HMAC-SHA256
 signature verification** used by the CARL / `carl.camp` platform. Byte- and
@@ -11,9 +11,9 @@ and Vercel Edge (via the built-in `node:crypto` shim).
 ## Install
 
 ```bash
-npm install @carl/emlt-codec
+npm install @terminals-tech/emlt-codec
 # or
-bun add @carl/emlt-codec
+bun add @terminals-tech/emlt-codec
 ```
 
 ## Quick start
@@ -26,7 +26,7 @@ import {
   encodeInner,
   decodeInner,
   type EMLTree,
-} from "@carl/emlt-codec";
+} from "@terminals-tech/emlt-codec";
 
 const tree: EMLTree = {
   root: {
@@ -49,7 +49,7 @@ import {
   decodeEnvelope,
   signSoftware,
   verifySoftware,
-} from "@carl/emlt-codec";
+} from "@terminals-tech/emlt-codec";
 
 const userSecret = new Uint8Array(32); // per-user 32-byte secret, platform-held
 const inner = encodeInner(tree);
@@ -69,7 +69,7 @@ const ok = verifySoftware(encodeInner(decodedTree), signature, userSecret);
 import {
   signPlatformCountersig,
   verifyPlatformCountersig,
-} from "@carl/emlt-codec";
+} from "@terminals-tech/emlt-codec";
 
 const platformSecret = Buffer.from(process.env.CARL_PLATFORM_COUNTERSIG_SECRET_V1!, "hex");
 
