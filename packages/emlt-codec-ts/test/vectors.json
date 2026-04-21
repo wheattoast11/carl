@@ -1,0 +1,149 @@
+{
+  "version": 1,
+  "user_secret_hex": "78787878787878787878787878787878",
+  "cases": [
+    {
+      "name": "identity_var",
+      "depth": 0,
+      "input_dim": 1,
+      "inner_bytes_hex": "454d4c010100020000",
+      "envelope_unsigned_hex": "454d4c5401454d4c010100020000",
+      "envelope_signed_hex": "454d4c5401454d4c010100020000a6d892dbe48881811216a9c223cd5de20217f060df17b51504a36c8b16cfbd8a",
+      "sig_hex": "a6d892dbe48881811216a9c223cd5de20217f060df17b51504a36c8b16cfbd8a",
+      "inputs": [
+        1.5
+      ],
+      "expected_output": 1.5
+    },
+    {
+      "name": "const_e",
+      "depth": 0,
+      "input_dim": 1,
+      "inner_bytes_hex": "454d4c010100016957148b0abf0540",
+      "envelope_unsigned_hex": "454d4c5401454d4c010100016957148b0abf0540",
+      "envelope_signed_hex": "454d4c5401454d4c010100016957148b0abf0540af9ed6a78ef3f68fe335ec09e6c70019acc0f73cc960327a3da92c1f1b3bf0b4",
+      "sig_hex": "af9ed6a78ef3f68fe335ec09e6c70019acc0f73cc960327a3da92c1f1b3bf0b4",
+      "inputs": [
+        0.0
+      ],
+      "expected_output": 2.718281828459045
+    },
+    {
+      "name": "simple_eml_exp",
+      "depth": 1,
+      "input_dim": 1,
+      "inner_bytes_hex": "454d4c01010002000001000000000000f03f03",
+      "envelope_unsigned_hex": "454d4c5401454d4c01010002000001000000000000f03f03",
+      "envelope_signed_hex": "454d4c5401454d4c01010002000001000000000000f03f0381e3e096e540a379c712c206454718b15f0e3cfc9d4390ee1fb8f7f09d3413d9",
+      "sig_hex": "81e3e096e540a379c712c206454718b15f0e3cfc9d4390ee1fb8f7f09d3413d9",
+      "inputs": [
+        0.5
+      ],
+      "expected_output": 1.6487212707001282
+    },
+    {
+      "name": "depth2_eml",
+      "depth": 2,
+      "input_dim": 2,
+      "inner_bytes_hex": "454d4c01020002000001000000000000f03f0302010003",
+      "envelope_unsigned_hex": "454d4c5401454d4c01020002000001000000000000f03f0302010003",
+      "envelope_signed_hex": "454d4c5401454d4c01020002000001000000000000f03f03020100032557dcd506d836f089deb905f17f75c7d7bad73c8d41b81f880793d49d585469",
+      "sig_hex": "2557dcd506d836f089deb905f17f75c7d7bad73c8d41b81f880793d49d585469",
+      "inputs": [
+        0.25,
+        0.75
+      ],
+      "expected_output": 3.8988289506698828
+    },
+    {
+      "name": "depth4_identity_deep",
+      "depth": 4,
+      "input_dim": 1,
+      "inner_bytes_hex": "454d4c01010001000000000000f03f01000000000000f03f0200000301000000000000f03f030301000000000000f03f03",
+      "envelope_unsigned_hex": "454d4c5401454d4c01010001000000000000f03f01000000000000f03f0200000301000000000000f03f030301000000000000f03f03",
+      "envelope_signed_hex": "454d4c5401454d4c01010001000000000000f03f01000000000000f03f0200000301000000000000f03f030301000000000000f03f03bf64b77e9a2124768f92ff8ccdcfbe35ae082a0039d854c132e90ace18cd1b1b",
+      "sig_hex": "bf64b77e9a2124768f92ff8ccdcfbe35ae082a0039d854c132e90ace18cd1b1b",
+      "inputs": [
+        1.4
+      ],
+      "expected_output": 1.4000000000000001
+    },
+    {
+      "name": "zero_tree",
+      "depth": 3,
+      "input_dim": 1,
+      "inner_bytes_hex": "454d4c01010001000000000000f03f01000000000000f03f01000000000000f03f0301000000000000f03f0303",
+      "envelope_unsigned_hex": "454d4c5401454d4c01010001000000000000f03f01000000000000f03f01000000000000f03f0301000000000000f03f0303",
+      "envelope_signed_hex": "454d4c5401454d4c01010001000000000000f03f01000000000000f03f01000000000000f03f0301000000000000f03f0303b39ea5bd5b4ee9553c6e0a2895faa28fae7fa169768ae96ae2ce564972a2a906",
+      "sig_hex": "b39ea5bd5b4ee9553c6e0a2895faa28fae7fa169768ae96ae2ce564972a2a906",
+      "inputs": [
+        0.0
+      ],
+      "expected_output": 0.0
+    },
+    {
+      "name": "ln_single",
+      "depth": 3,
+      "input_dim": 1,
+      "inner_bytes_hex": "454d4c01010001000000000000f03f01000000000000f03f0200000301000000000000f03f0303",
+      "envelope_unsigned_hex": "454d4c5401454d4c01010001000000000000f03f01000000000000f03f0200000301000000000000f03f0303",
+      "envelope_signed_hex": "454d4c5401454d4c01010001000000000000f03f01000000000000f03f0200000301000000000000f03f0303a7bd53e8c9045c36e2e5a4a89fd56a3955f9842c60f77f87aa4f3a31567b8df3",
+      "sig_hex": "a7bd53e8c9045c36e2e5a4a89fd56a3955f9842c60f77f87aa4f3a31567b8df3",
+      "inputs": [
+        2.0
+      ],
+      "expected_output": 0.6931471805599454
+    },
+    {
+      "name": "mixed_consts",
+      "depth": 2,
+      "input_dim": 1,
+      "inner_bytes_hex": "454d4c01010001000000000000e03f01000000000000f4bf0200000303",
+      "envelope_unsigned_hex": "454d4c5401454d4c01010001000000000000e03f01000000000000f4bf0200000303",
+      "envelope_signed_hex": "454d4c5401454d4c01010001000000000000e03f01000000000000f4bf0200000303af227710b0a22b38b3faf31dcabec96a2ab881fbc212d860f3533c6f839cb63b",
+      "sig_hex": "af227710b0a22b38b3faf31dcabec96a2ab881fbc212d860f3533c6f839cb63b",
+      "inputs": [
+        0.3
+      ],
+      "expected_output": 1.2496246643951872
+    },
+    {
+      "name": "multi_var",
+      "depth": 1,
+      "input_dim": 3,
+      "inner_bytes_hex": "454d4c01030002000002020003",
+      "envelope_unsigned_hex": "454d4c5401454d4c01030002000002020003",
+      "envelope_signed_hex": "454d4c5401454d4c0103000200000202000351081535069b043c6e08ecb93802bc5182a915fefe39eb0e3e53b91b8b6f6dd1",
+      "sig_hex": "51081535069b043c6e08ecb93802bc5182a915fefe39eb0e3e53b91b8b6f6dd1",
+      "inputs": [
+        0.1,
+        99.0,
+        0.8
+      ],
+      "expected_output": 1.3283144693898574
+    },
+    {
+      "name": "neg_const",
+      "depth": 1,
+      "input_dim": 1,
+      "inner_bytes_hex": "454d4c01010001000000000000e8bf02000003",
+      "envelope_unsigned_hex": "454d4c5401454d4c01010001000000000000e8bf02000003",
+      "envelope_signed_hex": "454d4c5401454d4c01010001000000000000e8bf02000003d92437f769b301c00cb70156ef278835f6ff69b14d9dd27ad4d5ffee632c04a2",
+      "sig_hex": "d92437f769b301c00cb70156ef278835f6ff69b14d9dd27ad4d5ffee632c04a2",
+      "inputs": [
+        1.1
+      ],
+      "expected_output": 0.37705637293668975
+    }
+  ],
+  "countersig_cases": [
+    {
+      "content_hash_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "purchase_tx_id": "tx_12345",
+      "buyer_user_id": "user_alice",
+      "timestamp_ns": "1700000000000000000",
+      "platform_secret_hex": "70707070707070707070707070707070",
+      "sig_hex": "37ef6439f96527c58846db0b7f570bb5e055983fc620fb9b1534398dbbd713b7"
+    }
+  ]
+}

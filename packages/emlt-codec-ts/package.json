@@ -1,0 +1,55 @@
+{
+  "name": "@carl/emlt-codec",
+  "version": "0.1.0",
+  "description": "TypeScript port of the EML wire format + software-tier HMAC signature verification for CARL/carl.camp platform.",
+  "license": "MIT",
+  "author": "CARL Studio (carl-studio)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/terminals-tech/carl-studio.git",
+    "directory": "packages/emlt-codec-ts"
+  },
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "sideEffects": false,
+  "scripts": {
+    "build": "npm run build:esm && npm run build:cjs && npm run build:types",
+    "build:esm": "tsc -p tsconfig.esm.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json && node scripts/fixup-cjs.mjs",
+    "build:types": "tsc -p tsconfig.types.json",
+    "clean": "rm -rf dist",
+    "test": "node --test --import tsx test/*.test.ts",
+    "gen-vectors": "python3 scripts/gen_vectors.py"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "tsx": "^4.19.2",
+    "typescript": "^5.4.5"
+  },
+  "keywords": [
+    "carl",
+    "eml",
+    "emlt",
+    "coherence",
+    "hmac",
+    "codec",
+    "carl.camp"
+  ]
+}

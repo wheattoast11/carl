@@ -63,6 +63,14 @@ from carl_core.eml import (
     eml_scalar_reward,
 )
 from carl_core.resonant import Resonant, compose_resonants, make_resonant
+from carl_core.signing import (
+    MIN_SECRET_LEN,
+    SIG_LEN,
+    sign_platform_countersig,
+    sign_tree_software,
+    verify_platform_countersig,
+    verify_software_signature,
+)
 from carl_core.heartbeat import (
     ChainAppender,
     GradientFn,
