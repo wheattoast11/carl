@@ -1,7 +1,7 @@
 {
   "name": "@terminals-tech/emlt-codec",
-  "version": "0.1.0",
-  "description": "TypeScript port of the EML wire format + software-tier HMAC signature verification for CARL/carl.camp platform.",
+  "version": "0.2.0",
+  "description": "TypeScript port of the EML wire format, software-tier HMAC signature verification, and constitutional ledger canonicalization + signing bytes for the CARL/carl.camp platform.",
   "license": "MIT",
   "author": "CARL Studio (carl-studio)",
   "repository": {
@@ -36,7 +36,8 @@
     "build:types": "tsc -p tsconfig.types.json",
     "clean": "rm -rf dist",
     "test": "node --test --import tsx test/*.test.ts",
-    "gen-vectors": "python3 scripts/gen_vectors.py"
+    "gen-vectors": "python3 scripts/gen_vectors.py",
+    "gen-ledger-vectors": "python3 scripts/gen_ledger_vectors.py"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
@@ -50,6 +51,9 @@
     "coherence",
     "hmac",
     "codec",
-    "carl.camp"
+    "carl.camp",
+    "ledger",
+    "canonical-json",
+    "ed25519"
   ]
 }

@@ -37,3 +37,12 @@ export {
   verifyPlatformCountersig,
   type PlatformCountersigParams,
 } from "./signing.js";
+
+export {
+  CanonicalizationError,
+  canonicalJson,
+  ledgerBlockSigningBytes,
+  ledgerBlockHash,
+  type LedgerBlock,
+  type CanonicalJsonOptions,
+} from "./ledger.js";

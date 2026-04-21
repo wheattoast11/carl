@@ -88,6 +88,51 @@ const ok = verifyPlatformCountersig({
 });
 ```
 
+### Constitutional ledger canonicalization + signing bytes (0.2.0+)
+
+```ts
+import {
+  canonicalJson,
+  ledgerBlockSigningBytes,
+  ledgerBlockHash,
+  type LedgerBlock,
+} from "@terminals-tech/emlt-codec";
+
+const block: LedgerBlock = {
+  block_id: 1,
+  prev_block_hash: "00".repeat(32),
+  policy_id: "policy.gate",
+  action_digest: "ab".repeat(32),
+  verdict: 0.42,                               // float; canonicalized as "0.42"
+  timestamp_ns: BigInt(Date.now()) * 1_000_000n,
+  signer_pubkey: pubkeyBytes,                  // 32 bytes (or hex string)
+  signature: sigBytes,                         // 64 bytes (or hex string)
+};
+
+// Binary bytes ed25519 signs over (§3.1 of the signing protocol).
+const toSign = ledgerBlockSigningBytes(block);
+
+// Hex sha256 for chain integrity (§3.2). Next block's prev_block_hash.
+const hash = ledgerBlockHash(block);
+
+// Low-level canonical JSON for custom shapes. Defaults to the ledger
+// float-key set (`{"verdict"}`); override via options for other schemas.
+const json = canonicalJson(someObject, { floatKeys: ["score", "reward"] });
+```
+
+**Parity lock:** every assertion in `test/ledger.test.ts` is mirrored
+in `tests/test_ledger_parity_vectors.py` on the Python side. Both
+sides load the same `test/ledger_vectors.json` (5 fixtures generated
+from `carl_core.constitutional.LedgerBlock`). If Python and TS ever
+drift, one side's tests fail before the other's ship. Regenerate with
+`npm run gen-ledger-vectors`.
+
+**Scope note:** `canonicalJson` here targets the LedgerBlock schema
+(str / int / float / bool / null / array / object). It does NOT try
+to mirror `carl_core.hashing.canonical_json`'s full breadth (Decimal
+/ datetime / Path / bytes coercion). That would belong in a separate
+package.
+
 ## API surface
 
 ```ts
@@ -127,6 +172,25 @@ export function decodeEnvelope(data: Uint8Array): {
 };
 export function evalTree(tree: EMLTree, inputs: Float64Array): number;
 export function computeDepth(tree: EMLTree): number;
+
+// Constitutional ledger (0.2.0+)
+export interface LedgerBlock {
+  block_id: number | bigint;
+  prev_block_hash: string;
+  policy_id: string;
+  action_digest: string;
+  verdict: number;
+  timestamp_ns: number | bigint;
+  signer_pubkey: string | Uint8Array;
+  signature: string | Uint8Array;
+}
+export interface CanonicalJsonOptions {
+  floatKeys?: ReadonlySet<string> | readonly string[];
+}
+export class CanonicalizationError extends Error {}
+export function canonicalJson(value: unknown, options?: CanonicalJsonOptions): string;
+export function ledgerBlockSigningBytes(block: LedgerBlock): Uint8Array;
+export function ledgerBlockHash(block: LedgerBlock): string;
 
 // Signing
 export function signSoftware(treeBytes: Uint8Array, userSecret: Uint8Array): Uint8Array;
