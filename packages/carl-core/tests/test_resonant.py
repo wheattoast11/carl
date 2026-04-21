@@ -12,6 +12,7 @@ from carl_core.resonant import (
     Resonant,
     compose_resonants,
     make_resonant,
+    make_reward_resonant,
 )
 
 
@@ -341,3 +342,125 @@ def test_dict_serialization_tree_bytes_present() -> None:
     assert isinstance(d["tree"], str)  # hex encoding
     # Valid hex.
     bytes.fromhex(d["tree"])
+
+
+# ---------------------------------------------------------------------------
+# v0.16 — joint cognition mode + make_reward_resonant
+# ---------------------------------------------------------------------------
+
+
+def test_default_cognition_mode_is_per_dim() -> None:
+    """Backwards-compat: Resonants built without specifying mode stay per_dim."""
+    r = _make(EMLTree.exp_single(), 3, 2, 4)
+    assert r.cognition_mode == "per_dim"
+
+
+def test_joint_mode_requires_readout_scalar_input() -> None:
+    """joint mode: readout.shape[1] must be 1 (scalar after cognize)."""
+    tree = EMLTree.identity(input_dim=3)
+    # projection rows must match tree.input_dim=3, readout cols must be 1.
+    projection = np.eye(tree.input_dim, 5)  # (3, 5)
+    bad_readout = np.eye(4, tree.input_dim)  # (4, 3) — cols=3, not 1
+    with pytest.raises(ValidationError) as excinfo:
+        make_resonant(tree, projection, bad_readout, cognition_mode="joint")
+    assert excinfo.value.code == "carl.eml.domain_error"
+
+
+def test_joint_mode_requires_projection_rows_match_tree_input_dim() -> None:
+    tree = EMLTree.identity(input_dim=3)
+    bad_projection = np.eye(tree.input_dim + 1, 5)  # rows=4, not 3
+    readout = np.ones((1, 1))
+    with pytest.raises(ValidationError) as excinfo:
+        make_resonant(tree, bad_projection, readout, cognition_mode="joint")
+    assert excinfo.value.code == "carl.eml.domain_error"
+
+
+def test_joint_cognize_returns_scalar_shape() -> None:
+    tree = EMLTree.exp_single()
+    r = make_resonant(
+        tree,
+        np.eye(tree.input_dim, 3),
+        np.ones((1, 1)),
+        cognition_mode="joint",
+    )
+    obs = np.ones(3)
+    latent = r.perceive(obs)
+    cognized = r.cognize(latent)
+    assert cognized.shape == (1,)
+    # forward pipeline must also yield shape (action_dim,) = (1,)
+    out = r.forward(obs)
+    assert out.shape == (1,)
+    assert np.isfinite(out[0])
+
+
+def test_joint_cognize_batch_returns_batch_x_one_shape() -> None:
+    tree = EMLTree.exp_single()
+    r = make_resonant(
+        tree,
+        np.eye(tree.input_dim, 3),
+        np.ones((1, 1)),
+        cognition_mode="joint",
+    )
+    batch = np.random.default_rng(0).standard_normal((5, 3))
+    out = r.forward(batch)
+    assert out.shape == (5, 1)
+
+
+def test_make_reward_resonant_happy_path() -> None:
+    tree = EMLTree.exp_single()
+    r = make_reward_resonant(tree, observation_dim=3)
+    assert r.cognition_mode == "joint"
+    assert r.action_dim == 1
+    assert r.observation_dim == 3
+    assert r.latent_dim == tree.input_dim
+
+
+def test_make_reward_resonant_default_observation_dim_matches_tree() -> None:
+    tree = EMLTree.exp_single()
+    r = make_reward_resonant(tree)
+    assert r.observation_dim == tree.input_dim
+
+
+def test_joint_mode_identity_differs_from_per_dim() -> None:
+    """Two Resonants with same tree/matrices but different modes → different identity."""
+    tree = EMLTree.exp_single()
+    # Build per_dim with square matrices so both modes are constructible.
+    projection = np.eye(tree.input_dim, 3)
+    # per_dim needs readout cols == latent_dim (tree.input_dim here).
+    per_dim_readout = np.eye(1, tree.input_dim)
+    joint_readout = np.ones((1, 1))
+    r1 = make_resonant(tree, projection, per_dim_readout, cognition_mode="per_dim")
+    r2 = make_resonant(tree, projection, joint_readout, cognition_mode="joint")
+    assert r1.identity != r2.identity
+
+
+def test_joint_mode_round_trips_through_to_dict_from_dict() -> None:
+    tree = EMLTree.exp_single()
+    r1 = make_reward_resonant(tree)
+    d = r1.to_dict()
+    assert d["cognition_mode"] == "joint"
+    r2 = Resonant.from_dict(d)
+    assert r2.cognition_mode == "joint"
+    assert r2.identity == r1.identity
+
+
+def test_from_dict_defaults_missing_cognition_mode_to_per_dim() -> None:
+    """Pre-v0.16 envelopes (no cognition_mode field) should decode as per_dim."""
+    r1 = _make(EMLTree.exp_single(), 3, 2, 4)
+    d = r1.to_dict()
+    d.pop("cognition_mode")
+    r2 = Resonant.from_dict(d)
+    assert r2.cognition_mode == "per_dim"
+    assert r2.identity == r1.identity
+
+
+def test_make_resonant_rejects_invalid_cognition_mode() -> None:
+    tree = EMLTree.exp_single()
+    with pytest.raises(ValidationError) as excinfo:
+        make_resonant(
+            tree,
+            np.eye(tree.input_dim, 3),
+            np.ones((1, 1)),
+            cognition_mode="hybrid",  # type: ignore[arg-type]
+        )
+    assert excinfo.value.code == "carl.eml.domain_error"

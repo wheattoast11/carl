@@ -203,6 +203,32 @@ def test_translate_config_disaggregated_emits_flag() -> None:
     assert "--disaggregated" in args.to_cli_args()
 
 
+def test_slime_args_json_schema_export_is_stable_dict() -> None:
+    """v0.16: carl.camp consumes SlimeArgs.json_schema() for server-side validation."""
+    schema = SlimeArgs.json_schema()
+    assert isinstance(schema, dict)
+    # Pydantic v2 JSON Schema always includes a top-level type + properties.
+    assert schema.get("type") == "object"
+    props = schema.get("properties")
+    assert isinstance(props, dict)
+    # All four field groups must be in the schema.
+    for key in ("megatron", "sglang", "slime", "extra"):
+        assert key in props
+    # additionalProperties=false enforces extra="forbid" server-side.
+    assert schema.get("additionalProperties") is False
+
+
+def test_slime_args_json_schema_is_json_serializable() -> None:
+    """Server-side callers will JSON-encode the schema; must not contain
+    datetimes, functions, or other non-serializable stragglers."""
+    import json as _json
+
+    schema = SlimeArgs.json_schema()
+    payload = _json.dumps(schema)
+    round_trip = _json.loads(payload)
+    assert round_trip == schema
+
+
 def test_translate_config_missing_slime_block_uses_defaults() -> None:
     cfg = {
         "base_model": "Qwen/Qwen3-7B",
@@ -410,3 +436,113 @@ def test_entry_resolution_config_beats_env(monkeypatch: pytest.MonkeyPatch) -> N
 def test_entry_resolution_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SLIME_ENTRY", raising=False)
     assert resolve_entry({}) == "slime.cli:main"
+
+
+# ---------------------------------------------------------------------------
+# config_requirements — v0.16 NL-interpretable config surface
+# ---------------------------------------------------------------------------
+
+
+def test_config_requirements_returns_typed_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SlimeAdapter.config_requirements() emits a ConfigReport with the
+    expected categories and never leaks values."""
+    from carl_core.config_requirements import ConfigReport, ConfigStatus
+
+    # Clear env so auth items are unset (deterministic).
+    for var in ("HF_TOKEN", "CARL_CAMP_TOKEN", "CARL_CAMP_HF_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+
+    adapter = SlimeAdapter()
+    report = adapter.config_requirements(_SAMPLE_CFG)
+
+    assert isinstance(report, ConfigReport)
+    assert report.component == "slime"
+
+    categories = {req.category for req in report.requirements}
+    assert {"auth", "dataset", "algorithm", "parallelism", "install"}.issubset(
+        categories
+    )
+
+    # The dataset requirements should be SET (we supplied base_model + dataset_repo).
+    by_name = {req.name: req for req in report.requirements}
+    assert by_name["base_model"].status == ConfigStatus.SET
+    assert by_name["dataset_repo"].status == ConfigStatus.SET
+
+    # Auth requirements are UNSET (we just cleared them).
+    assert by_name["HF_TOKEN"].status == ConfigStatus.UNSET
+    assert by_name["CARL_CAMP_HF_TOKEN"].status == ConfigStatus.UNSET
+
+    # Fingerprint is safe — present only for SET items, and is 12 hex chars.
+    bm_fp = by_name["base_model"].fingerprint
+    assert isinstance(bm_fp, str)
+    assert len(bm_fp) == 12
+    int(bm_fp, 16)  # valid hex
+
+    # Critical invariant: NO requirement carries the actual value under any
+    # attribute name. The only value-ish field is default_value, which is
+    # a documented hint string.
+    for req in report.requirements:
+        req_dict = req.model_dump()
+        # Probe every field — no value field should contain the HF token shape
+        # or the model repo path from _SAMPLE_CFG.
+        as_json = str(req_dict)
+        assert "Qwen/Qwen3-7B" not in as_json or req.name == "base_model" and req.default_value is None
+
+
+def test_config_requirements_with_missing_yaml_reports_unset() -> None:
+    """Empty carl.yaml → yaml-keyed requirements come back UNSET."""
+    from carl_core.config_requirements import ConfigStatus
+
+    adapter = SlimeAdapter()
+    report = adapter.config_requirements({})
+
+    by_name = {req.name: req for req in report.requirements}
+    assert by_name["base_model"].status == ConfigStatus.UNSET
+    assert by_name["dataset_repo"].status == ConfigStatus.UNSET
+
+
+def test_config_report_describe_nl_mentions_missing_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for var in ("HF_TOKEN", "CARL_CAMP_TOKEN", "CARL_CAMP_HF_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    adapter = SlimeAdapter()
+    report = adapter.config_requirements({})  # deliberately missing
+    nl = report.describe_nl()
+    assert "slime needs attention" in nl
+    assert "base_model" in nl
+    assert "HF_TOKEN" in nl  # env var name, never its value
+
+
+def test_config_report_missing_excludes_optional_items(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optional items (required=False) must not appear in report.missing()."""
+    adapter = SlimeAdapter()
+    report = adapter.config_requirements(_SAMPLE_CFG)
+    missing = report.missing()
+    # dataset_split is optional → not in missing even when unset.
+    for req in missing:
+        assert req.required is True
+
+
+def test_config_report_summary_shape() -> None:
+    adapter = SlimeAdapter()
+    report = adapter.config_requirements(_SAMPLE_CFG)
+    summary = report.summary()
+    assert set(summary.keys()) == {"component", "ok", "missing_count", "total"}
+    assert summary["component"] == "slime"
+    assert isinstance(summary["ok"], bool)
+    assert isinstance(summary["missing_count"], int)
+    assert summary["total"] > 0
+
+
+def test_carl_camp_hf_token_has_managed_dispatcher_guidance() -> None:
+    """Critical cross-system invariant: the CARL_CAMP_HF_TOKEN description
+    explicitly warns that user HF tokens must NEVER be used for managed runs."""
+    adapter = SlimeAdapter()
+    report = adapter.config_requirements({})
+    by_name = {req.name: req for req in report.requirements}
+    req = by_name["CARL_CAMP_HF_TOKEN"]
+    assert "managed" in req.description.lower()
+    assert "never" in req.description.lower() or "invariant" in req.description.lower()

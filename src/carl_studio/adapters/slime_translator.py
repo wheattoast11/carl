@@ -43,6 +43,11 @@ class SlimeArgs(BaseModel):
     for advanced users who need to inject flags the translator does not
     know about. Everything stays JSON-serializable so dry-run and state
     files round-trip cleanly.
+
+    **Public JSON Schema.** :meth:`json_schema` returns the Pydantic v2
+    JSON Schema of this model. carl.camp's ``POST /api/train/slime/submit``
+    consumes the same schema for server-side validation so the schema
+    definition has exactly one source of truth (v0.16 commitment).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -59,6 +64,16 @@ class SlimeArgs(BaseModel):
             "slime": dict(self.slime),
             "extra": dict(self.extra),
         }
+
+    @classmethod
+    def json_schema(cls) -> dict[str, Any]:
+        """Return the Pydantic v2 JSON Schema for this model.
+
+        Public surface for carl.camp's server-side config validation.
+        The schema is a pure data dict — safe to serialize, publish,
+        or cache.
+        """
+        return cls.model_json_schema()
 
     def to_cli_args(self) -> list[str]:
         """Flatten to a subprocess-ready argument list.

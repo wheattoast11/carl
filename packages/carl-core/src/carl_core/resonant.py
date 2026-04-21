@@ -2,8 +2,20 @@
 
 A `Resonant` wraps an EML expression tree with linear projection (observation
 -> latent) and linear readout (latent -> action) matrices. The tree performs
-the nonlinear "cognition" step per latent dimension; the matrices carry the
-learnable basis change around it.
+the nonlinear "cognition" step; the matrices carry the learnable basis change
+around it.
+
+Cognition modes
+---------------
+
+* ``per_dim`` (default, v0.9.0 behavior) — the tree is applied *per latent
+  dimension* with only ``vec[0] = latent[i]`` populated. Preserves backwards
+  compatibility with every Resonant created before v0.16.
+* ``joint`` (v0.16) — the tree runs *once* over the full latent vector,
+  producing a scalar. Required for trees where the multi-input structure
+  matters (e.g., ``EMLCompositeReward``'s 3-feature reward tree). In joint
+  mode the readout shape is ``(action_dim, 1)`` since cognize collapses the
+  latent to a scalar.
 
 Closure under composition: `compose_resonants(r1, r2)` yields a new Resonant
 whose cognition is `eml(r1.tree, r2.tree)`, provided the shape contract
@@ -12,7 +24,7 @@ holds. This preserves the EML magma structure at the Resonant level.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -20,6 +32,12 @@ from numpy.typing import NDArray
 from carl_core.eml import EMLNode, EMLOp, EMLTree, MAX_DEPTH
 from carl_core.errors import ValidationError
 from carl_core.hashing import content_hash_bytes
+
+
+# Public literal for the cognition mode. Kept as a narrow string literal so
+# it round-trips cleanly through JSON + serializations without enum typing.
+CognitionMode = Literal["per_dim", "joint"]
+_COGNITION_MODES: frozenset[str] = frozenset({"per_dim", "joint"})
 
 
 def _depth_exceeded(depth: int) -> ValidationError:
@@ -41,11 +59,17 @@ class Resonant:
     """Perceive -> cognize -> act triple.
 
     Attributes:
-        tree: EML tree applied per latent dimension during `cognize`.
+        tree: EML tree applied during `cognize`. In ``per_dim`` mode (default),
+            applied per latent dimension with ``vec[0] = latent[i]``. In
+            ``joint`` mode (v0.16), applied once over the full latent vector.
         projection: (k, d) matrix mapping observation (d-dim) -> latent (k-dim).
-        readout: (a, k) matrix mapping latent (k-dim) -> action (a-dim).
-        identity: sha256 hex digest of (tree.hash, projection bytes, readout bytes).
-            Stable identifier suitable for content-addressed storage.
+        readout: (a, k) matrix mapping latent -> action. In per_dim mode k is
+            ``latent_dim``; in joint mode k = 1 (the scalar cognize output).
+        identity: sha256 hex digest of (tree.hash, projection bytes, readout
+            bytes, cognition_mode). Stable identifier for content-addressed
+            storage.
+        cognition_mode: ``"per_dim"`` (default) | ``"joint"``. Changing this
+            for otherwise-identical fields yields a distinct identity.
         metadata: free-form annotations; excluded from identity.
     """
 
@@ -53,6 +77,7 @@ class Resonant:
     projection: NDArray[np.float64]
     readout: NDArray[np.float64]
     identity: str
+    cognition_mode: CognitionMode = "per_dim"
     metadata: dict[str, Any] = field(default_factory=lambda: {})  # noqa: C408
 
     # -- shape accessors --------------------------------------------------
@@ -93,14 +118,22 @@ class Resonant:
         raise _shape_error(f"perceive expects 1D or 2D input, got ndim={obs.ndim}")
 
     def cognize(self, latent: NDArray[np.floating[Any]]) -> NDArray[np.float64]:
-        """Apply the EML tree per latent dimension.
+        """Apply the EML tree.
 
-        Latent shape: (k,) or (B, k). The tree takes each scalar latent value
-        as its input[0] — so the tree must have input_dim >= 1.
+        ``per_dim`` mode (default): tree runs once per latent dimension with
+        ``vec[0] = latent[i]``, zeros elsewhere. Output shape matches input.
+
+        ``joint`` mode (v0.16): tree runs once on the full latent vector;
+        ``latent.shape[-1]`` must equal ``tree.input_dim``. Output is shape
+        ``(1,)`` for 1D input or ``(B, 1)`` for 2D input (scalar per batch).
         """
         lat = np.asarray(latent, dtype=np.float64)
         if self.tree.input_dim < 1:
             raise _shape_error("Resonant tree must have input_dim >= 1 for cognize")
+
+        if self.cognition_mode == "joint":
+            return self._cognize_joint(lat)
+
         if lat.ndim == 1:
             if lat.shape[0] != self.latent_dim:
                 raise _shape_error(
@@ -130,6 +163,34 @@ class Resonant:
                     out2[b, i] = self.tree.forward(vec)
             return out2
         raise _shape_error(f"cognize expects 1D or 2D input, got ndim={lat.ndim}")
+
+    def _cognize_joint(self, lat: NDArray[np.float64]) -> NDArray[np.float64]:
+        """Joint-mode cognize: tree runs once on the full latent vector.
+
+        The tree's ``input_dim`` must match ``self.latent_dim`` (enforced at
+        construction by :func:`make_resonant` / :func:`make_reward_resonant`).
+        Returns shape ``(1,)`` for 1D input, ``(B, 1)`` for 2D.
+        """
+        if lat.ndim == 1:
+            if lat.shape[0] != self.latent_dim:
+                raise _shape_error(
+                    f"joint latent dim {lat.shape[0]} != expected {self.latent_dim}",
+                    got=int(lat.shape[0]),
+                    expected=self.latent_dim,
+                )
+            return np.array([float(self.tree.forward(lat))], dtype=np.float64)
+        if lat.ndim == 2:
+            if lat.shape[1] != self.latent_dim:
+                raise _shape_error(
+                    f"joint latent dim {lat.shape[1]} != expected {self.latent_dim}",
+                    got=int(lat.shape[1]),
+                    expected=self.latent_dim,
+                )
+            out = np.empty((lat.shape[0], 1), dtype=np.float64)
+            for b in range(lat.shape[0]):
+                out[b, 0] = float(self.tree.forward(lat[b]))
+            return out
+        raise _shape_error(f"joint cognize expects 1D or 2D input, got ndim={lat.ndim}")
 
     def act(self, latent: NDArray[np.floating[Any]]) -> NDArray[np.float64]:
         """Project a (post-cognition) latent through the readout matrix."""
@@ -167,6 +228,7 @@ class Resonant:
                 "data": self.readout.astype(np.float64).tolist(),
             },
             "identity": self.identity,
+            "cognition_mode": self.cognition_mode,
             "metadata": dict(self.metadata),
         }
 
@@ -192,7 +254,11 @@ class Resonant:
         projection = np.asarray(proj_data, dtype=np.float64)
         readout = np.asarray(read_data, dtype=np.float64)
         metadata = dict(d.get("metadata", {}))
-        identity = _compute_identity(tree, projection, readout)
+        # cognition_mode is optional on-wire for backwards compat with pre-v0.16
+        # envelopes; default to the v0.9.0 behavior when absent.
+        raw_mode = d.get("cognition_mode", "per_dim")
+        mode: CognitionMode = _validate_mode(raw_mode)
+        identity = _compute_identity(tree, projection, readout, mode)
         # If caller provided an identity, it must match (tamper detection).
         given_id = d.get("identity")
         if isinstance(given_id, str) and given_id != identity:
@@ -206,6 +272,7 @@ class Resonant:
             projection=projection,
             readout=readout,
             identity=identity,
+            cognition_mode=mode,
             metadata=metadata,
         )
 
@@ -233,9 +300,20 @@ def make_resonant(
     projection: NDArray[np.floating[Any]],
     readout: NDArray[np.floating[Any]],
     *,
+    cognition_mode: CognitionMode = "per_dim",
     metadata: dict[str, Any] | None = None,
 ) -> Resonant:
-    """Build a Resonant, validating shapes and computing the identity."""
+    """Build a Resonant, validating shapes and computing the identity.
+
+    Shape contracts:
+
+    * ``per_dim`` (default): ``projection.shape[0] == readout.shape[1]``
+      (the readout consumes the full latent vector produced by cognize).
+    * ``joint``: ``projection.shape[0] == tree.input_dim`` (the tree
+      consumes the full latent) AND ``readout.shape[1] == 1`` (the scalar
+      cognize output).
+    """
+    mode = _validate_mode(cognition_mode)
     proj = np.asarray(projection, dtype=np.float64)
     read = np.asarray(readout, dtype=np.float64)
     if proj.ndim != 2:
@@ -246,41 +324,108 @@ def make_resonant(
         raise _shape_error(
             f"readout must be 2D, got ndim={read.ndim}", ndim=int(read.ndim)
         )
-    if proj.shape[0] != read.shape[1]:
-        raise _shape_error(
-            f"projection rows ({proj.shape[0]}) must match readout cols ({read.shape[1]})",
-            projection_rows=int(proj.shape[0]),
-            readout_cols=int(read.shape[1]),
-        )
     if tree.input_dim < 1:
         raise _shape_error("Resonant requires EMLTree.input_dim >= 1")
-    ident = _compute_identity(tree, proj, read)
+
+    if mode == "joint":
+        if proj.shape[0] != tree.input_dim:
+            raise _shape_error(
+                f"joint mode: projection rows ({proj.shape[0]}) must match "
+                f"tree.input_dim ({tree.input_dim})",
+                projection_rows=int(proj.shape[0]),
+                tree_input_dim=int(tree.input_dim),
+            )
+        if read.shape[1] != 1:
+            raise _shape_error(
+                f"joint mode: readout cols ({read.shape[1]}) must be 1 "
+                f"(cognize collapses latent to a scalar)",
+                readout_cols=int(read.shape[1]),
+            )
+    else:
+        if proj.shape[0] != read.shape[1]:
+            raise _shape_error(
+                f"projection rows ({proj.shape[0]}) must match readout cols "
+                f"({read.shape[1]})",
+                projection_rows=int(proj.shape[0]),
+                readout_cols=int(read.shape[1]),
+            )
+
+    ident = _compute_identity(tree, proj, read, mode)
     return Resonant(
         tree=tree,
         projection=proj,
         readout=read,
         identity=ident,
+        cognition_mode=mode,
         metadata=dict(metadata or {}),
     )
+
+
+def make_reward_resonant(
+    tree: EMLTree,
+    *,
+    observation_dim: int | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> Resonant:
+    """Factory for scalar-output reward Resonants (v0.16).
+
+    Wraps a reward tree (typically from ``EMLCompositeReward``) as a
+    joint-mode Resonant whose ``forward()`` gives ``reward.score_from_trace``-
+    compatible scoring when called with the same feature vector.
+
+    Shapes:
+      * ``observation_dim`` defaults to ``tree.input_dim``.
+      * ``projection = np.eye(tree.input_dim, observation_dim)`` — identity
+        when obs dim matches tree input; otherwise a row-slice that pads or
+        truncates to match the tree's expected feature count.
+      * ``readout = np.ones((1, 1))`` — scalar latent → scalar action.
+      * ``cognition_mode = "joint"`` — tree runs once on the full latent
+        vector, preserving its multi-input semantics.
+    """
+    obs_dim = int(observation_dim) if observation_dim is not None else int(tree.input_dim)
+    if obs_dim < 1:
+        raise _shape_error("observation_dim must be >= 1")
+    projection = np.eye(tree.input_dim, obs_dim, dtype=np.float64)
+    readout = np.ones((1, 1), dtype=np.float64)
+    return make_resonant(
+        tree,
+        projection,
+        readout,
+        cognition_mode="joint",
+        metadata=metadata,
+    )
+
+
+def _validate_mode(mode: Any) -> CognitionMode:
+    if not isinstance(mode, str) or mode not in _COGNITION_MODES:
+        raise _shape_error(
+            f"cognition_mode must be one of {sorted(_COGNITION_MODES)}, got {mode!r}",
+            got=repr(mode),
+            valid=sorted(_COGNITION_MODES),
+        )
+    return cast(CognitionMode, mode)
 
 
 def _compute_identity(
     tree: EMLTree,
     projection: NDArray[np.float64],
     readout: NDArray[np.float64],
+    cognition_mode: CognitionMode = "per_dim",
 ) -> str:
-    """sha256(tree.hash || projection bytes || readout bytes).
+    """sha256(tree.hash || projection bytes || readout bytes || cognition_mode).
 
     The matrices are hashed via their contiguous float64 bytes after rounding
     to 12 decimals — keeps identity stable across innocuous rewrites while
-    still distinguishing real parameter changes.
+    still distinguishing real parameter changes. ``cognition_mode`` is folded
+    into the hash so otherwise-identical Resonants with different modes get
+    distinct identities.
     """
     proj_q = np.round(projection, 12).astype(np.float64, copy=True)
     read_q = np.round(readout, 12).astype(np.float64, copy=True)
     tree_hash = tree.hash()
     proj_hash = content_hash_bytes(np.ascontiguousarray(proj_q).tobytes())
     read_hash = content_hash_bytes(np.ascontiguousarray(read_q).tobytes())
-    combined = f"{tree_hash}|{proj_hash}|{read_hash}".encode("utf-8")
+    combined = f"{tree_hash}|{proj_hash}|{read_hash}|{cognition_mode}".encode("utf-8")
     return content_hash_bytes(combined)
 
 
@@ -351,7 +496,9 @@ def compose_resonants(r1: Resonant, r2: Resonant) -> Resonant:
 
 
 __all__ = [
+    "CognitionMode",
     "Resonant",
-    "make_resonant",
     "compose_resonants",
+    "make_resonant",
+    "make_reward_resonant",
 ]

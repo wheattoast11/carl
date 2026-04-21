@@ -32,9 +32,13 @@ this is core capability.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from carl_core.interaction import ActionType, InteractionChain
+
+if TYPE_CHECKING:
+    from carl_core.eml import EMLTree
+    from carl_core.resonant import Resonant
 
 
 def _empty_meta() -> dict[str, Any]:
@@ -255,6 +259,90 @@ class SlimeRolloutBridge:
     @property
     def training_steps_seen(self) -> int:
         return self._training_steps_seen
+
+    # -- artifact emission (v0.16) ---------------------------------------
+
+    def finalize_resonant(
+        self,
+        *,
+        observation_dim: int | None = None,
+        extra_metadata: dict[str, Any] | None = None,
+    ) -> Resonant:
+        """Snapshot the trained reward tree as a publishable Resonant.
+
+        This is CARL's artifact emission point at the end of a slime run.
+        When the bridge's reward is an ``EMLCompositeReward`` (or any
+        duck-typed scorer exposing ``.tree: EMLTree``), its trained tree
+        becomes the cognition step of a ``make_reward_resonant``-built
+        :class:`Resonant`. The returned Resonant is ready to be passed to
+        :func:`carl_studio.resonant_store.save_resonant` and published
+        through ``carl resonant publish`` → carl.camp ``POST /api/resonants``.
+
+        The Resonant uses ``cognition_mode="joint"``: the tree runs once over
+        the full feature vector (not per-dim), preserving the reward's
+        multi-input semantics.
+
+        Args:
+            observation_dim: Caller override for the observation dim. Default
+                matches ``reward.tree.input_dim`` (3 for ``EMLCompositeReward``).
+            extra_metadata: Optional dict merged into the Resonant's metadata
+                after the standard slime-run fields. Useful for caller-specified
+                tags (dataset id, experiment name, etc.).
+
+        Raises:
+            ValueError: when ``self.reward`` is ``None`` or the reward has no
+                ``.tree`` attribute (non-EML reward classes).
+        """
+        from carl_core.resonant import make_reward_resonant
+
+        if self.reward is None:
+            raise ValueError(
+                "SlimeRolloutBridge.finalize_resonant(): no reward was "
+                "attached to the bridge — nothing to materialize."
+            )
+        tree = getattr(self.reward, "tree", None)
+        if tree is None:
+            raise ValueError(
+                "SlimeRolloutBridge.finalize_resonant(): bridge reward has no "
+                "'.tree' attribute. Only EML-class rewards "
+                "(EMLCompositeReward et al) can be materialized as Resonants."
+            )
+        cast_tree: EMLTree = tree
+
+        meta: dict[str, Any] = {
+            "run_name": self.run_name,
+            "source": "slime-rollout-bridge",
+            "bridge_rollouts_seen": self._rollouts_seen,
+            "bridge_training_steps_seen": self._training_steps_seen,
+            "reward_class": type(self.reward).__name__,
+            "tree_depth": int(cast_tree.depth()),
+            "tree_input_dim": int(cast_tree.input_dim),
+        }
+        if extra_metadata:
+            meta.update(extra_metadata)
+
+        resonant = make_reward_resonant(
+            cast_tree,
+            observation_dim=observation_dim,
+            metadata=meta,
+        )
+
+        # Record the finalization as a Step in the chain so the trace carries
+        # the artifact-emission boundary explicitly. Output is the identity
+        # fingerprint only (no tree bytes, no matrix contents).
+        self.chain.record(
+            ActionType.CHECKPOINT,
+            name=f"{self.run_name}.finalize_resonant",
+            input={"reward_class": type(self.reward).__name__},
+            output={
+                "identity": resonant.identity,
+                "tree_depth": meta["tree_depth"],
+                "tree_input_dim": meta["tree_input_dim"],
+                "rollouts_seen": self._rollouts_seen,
+                "training_steps_seen": self._training_steps_seen,
+            },
+        )
+        return resonant
 
     # -- slime-shaped callable adapters ---------------------------------
 

@@ -26,6 +26,14 @@ import sys
 from textwrap import dedent
 from typing import Any, cast
 
+from carl_core.config_requirements import (
+    ConfigLocation,
+    ConfigReport,
+    ConfigRequirement,
+    ConfigStatus,
+    require_env,
+    require_yaml_key,
+)
 from carl_core.connection import (
     ConnectionDirection,
     ConnectionKind,
@@ -187,6 +195,203 @@ class SlimeAdapter(TrainingConnection):
     def translate(self, carl_config: dict[str, Any]) -> SlimeArgs:
         """Public helper: translate carl.yaml → slime args without submission."""
         return translate_config(carl_config)
+
+    # -- NL-interpretable config surface (v0.16) -------------------------
+
+    def config_requirements(
+        self, carl_config: dict[str, Any] | None = None
+    ) -> ConfigReport:
+        """Return the NL-interpretable configuration surface for slime.
+
+        Carl's chat agent reads this to answer natural-language setup
+        questions ("what do I need to run slime?") **without ever seeing
+        the values**. Each :class:`ConfigRequirement` records presence +
+        (optional) 12-hex fingerprint only.
+
+        Args:
+            carl_config: Optional dict parsed from ``carl.yaml``. When
+                provided, carl.yaml key checks are performed against it.
+                When ``None`` (doctor-style invocation), only env-level
+                checks run.
+
+        The report groups requirements by category:
+
+          * ``auth``       — API tokens (HF, carl.camp).
+          * ``dataset``    — base_model + dataset_repo + split.
+          * ``algorithm``  — method, mode, advantage_estimator.
+          * ``parallelism``— tensor/pipeline/expert parallel dims.
+          * ``install``    — slime / sglang / megatron reachability.
+        """
+        cfg: dict[str, Any] = carl_config if isinstance(carl_config, dict) else {}
+
+        requirements: list[ConfigRequirement] = []
+
+        # -- auth --------------------------------------------------------
+        requirements.append(
+            require_env(
+                "HF_TOKEN",
+                description=(
+                    "Hugging Face user token. Slime reads models + datasets "
+                    "from HF Hub; gated models (GLM, Qwen3-MoE) need this set. "
+                    "Get yours at https://huggingface.co/settings/tokens."
+                ),
+                category="auth",
+            )
+        )
+        requirements.append(
+            require_env(
+                "CARL_CAMP_TOKEN",
+                description=(
+                    "carl.camp bearer token. Only needed when publishing "
+                    "Resonants or agent cards; BYO-compute slime runs do "
+                    "not require it. Unset by default — that's OK."
+                ),
+                category="auth",
+            )
+        )
+        # carl.camp HF token: only relevant when we later ship the managed
+        # dispatcher. Flagged here so Carl can point at it when asked about
+        # managed slime.
+        requirements.append(
+            require_env(
+                "CARL_CAMP_HF_TOKEN",
+                description=(
+                    "carl.camp's own HF token (used ONLY by the managed-slime "
+                    "dispatcher — v0.10+). User HF tokens must NEVER be used "
+                    "for managed runs; this is a cross-system invariant."
+                ),
+                category="auth",
+            )
+        )
+
+        # -- dataset ----------------------------------------------------
+        requirements.append(
+            require_yaml_key(
+                "base_model",
+                cfg,
+                description=(
+                    "Model to train. HF Hub id (e.g., Qwen/Qwen3-7B) or local "
+                    "path. Slime + Megatron resolve the weights at launch."
+                ),
+                category="dataset",
+                required=True,
+            )
+        )
+        requirements.append(
+            require_yaml_key(
+                "dataset_repo",
+                cfg,
+                description=(
+                    "Prompt dataset. HF Hub id or local parquet/jsonl path. "
+                    "Becomes slime's --prompt-data."
+                ),
+                category="dataset",
+                required=True,
+            )
+        )
+        requirements.append(
+            require_yaml_key(
+                "dataset_split",
+                cfg,
+                description="Dataset split to draw prompts from. Defaults to 'train'.",
+                category="dataset",
+                required=False,
+                default_value="train",
+            )
+        )
+
+        # -- algorithm --------------------------------------------------
+        requirements.append(
+            require_yaml_key(
+                "method",
+                cfg,
+                description=(
+                    "Training method: 'grpo' (default, reinforcement), "
+                    "'sft' (supervised), or 'distill' (on-policy distillation)."
+                ),
+                category="algorithm",
+                required=False,
+                default_value="grpo",
+            )
+        )
+        requirements.append(
+            require_yaml_key(
+                "mode",
+                cfg,
+                description=(
+                    "Slime deployment mode. 'sync' (default, GPU-colocated) or "
+                    "'async' (decoupled — PAID: train.slime.async_disaggregated)."
+                ),
+                category="algorithm",
+                required=False,
+                default_value="sync",
+            )
+        )
+
+        # -- parallelism ------------------------------------------------
+        requirements.append(
+            require_yaml_key(
+                "slime.tensor_parallel",
+                cfg,
+                description=(
+                    "Megatron tensor-parallel dimension. Defaults to 1 "
+                    "(single GPU). For 7B-scale runs use 2-4; 100B+ MoE "
+                    "typically uses 8-16."
+                ),
+                category="parallelism",
+                required=False,
+                default_value="1",
+            )
+        )
+        requirements.append(
+            require_yaml_key(
+                "slime.pipeline_parallel",
+                cfg,
+                description=(
+                    "Megatron pipeline-parallel dimension. Defaults to 1. "
+                    "Needed for model weights that don't fit on a single node."
+                ),
+                category="parallelism",
+                required=False,
+                default_value="1",
+            )
+        )
+        requirements.append(
+            require_yaml_key(
+                "slime.expert_parallel",
+                cfg,
+                description=(
+                    "Megatron expert-parallel dimension (MoE only). Defaults "
+                    "to 1. Set when training GLM-5, DeepSeek-V3, or Qwen3-MoE."
+                ),
+                category="parallelism",
+                required=False,
+                default_value="1",
+            )
+        )
+
+        # -- install (probe) --------------------------------------------
+        # We don't leak the importability check through require_env; instead,
+        # we re-use missing_dependencies() for a direct truth surface.
+        missing = set(self.missing_dependencies())
+        for pkg, hint in (
+            ("slime", "Follow https://thudm.github.io/slime/ to build from source."),
+            ("sglang", "pip install 'carl-studio[slime]' pulls sglang."),
+            ("megatron-lm", "Build Megatron-LM per slime's quick_start.md."),
+        ):
+            status = ConfigStatus.UNSET if pkg in missing else ConfigStatus.SET
+            requirements.append(
+                ConfigRequirement(
+                    name=pkg,
+                    location=ConfigLocation.EXTERNAL,
+                    required=True,
+                    status=status,
+                    description=hint,
+                    category="install",
+                )
+            )
+
+        return ConfigReport(component="slime", requirements=requirements)
 
     # -- submit ----------------------------------------------------------
 

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import pytest
+
 from carl_core.interaction import ActionType, InteractionChain
 from carl_studio.training.slime_bridge import (
     CompletionTraceAdapter,
@@ -219,3 +221,147 @@ def test_as_slime_reward_coerces_bad_kwarg_types() -> None:
     )
     assert reward == 0.0
     assert bridge.rollouts_seen == 1
+
+
+# ---------------------------------------------------------------------------
+# finalize_resonant — v0.16 artifact emission
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_resonant_requires_reward_attached() -> None:
+    chain = InteractionChain()
+    bridge = SlimeRolloutBridge(chain, reward=None)
+    with pytest.raises(ValueError, match="no reward was attached"):
+        bridge.finalize_resonant()
+
+
+def test_finalize_resonant_requires_reward_with_tree_attribute() -> None:
+    chain = InteractionChain()
+    bridge = SlimeRolloutBridge(chain, reward=_StaticScorer(value=1.0))
+    with pytest.raises(ValueError, match="no '.tree' attribute"):
+        bridge.finalize_resonant()
+
+
+def test_finalize_resonant_emits_joint_mode_resonant() -> None:
+    """End-to-end: EML-shaped reward → Resonant with the trained tree."""
+    from carl_core.eml import EMLTree
+
+    tree = EMLTree.identity(input_dim=3)
+
+    class _EMLScorer:
+        """Duck-typed EMLCompositeReward stand-in."""
+
+        def __init__(self, tree: EMLTree) -> None:
+            self.tree = tree
+
+        def score_from_trace(self, _trace: Any) -> tuple[float, dict[str, Any]]:
+            return 0.5, {"source": "eml-like"}
+
+    chain = InteractionChain()
+    bridge = SlimeRolloutBridge(
+        chain,
+        reward=_EMLScorer(tree),
+        run_name="slime-run-A",
+    )
+
+    resonant = bridge.finalize_resonant(observation_dim=3)
+
+    assert resonant.cognition_mode == "joint"
+    assert resonant.action_dim == 1
+    assert resonant.observation_dim == 3
+    assert resonant.latent_dim == 3  # matches tree.input_dim
+    assert len(resonant.identity) == 64
+
+    # Metadata captures run provenance without leaking values.
+    meta = resonant.metadata
+    assert meta["run_name"] == "slime-run-A"
+    assert meta["source"] == "slime-rollout-bridge"
+    assert meta["reward_class"] == "_EMLScorer"
+    assert meta["tree_input_dim"] == 3
+    assert meta["bridge_rollouts_seen"] == 0
+    assert meta["bridge_training_steps_seen"] == 0
+
+
+def test_finalize_resonant_records_checkpoint_step() -> None:
+    """The finalization must leave a CHECKPOINT step in the chain."""
+    from carl_core.eml import EMLTree
+    from carl_core.interaction import ActionType
+
+    class _EMLScorer:
+        def __init__(self, tree: EMLTree) -> None:
+            self.tree = tree
+
+        def score_from_trace(self, _t: Any) -> tuple[float, dict[str, Any]]:
+            return 0.0, {}
+
+    tree = EMLTree.identity(input_dim=3)
+    chain = InteractionChain()
+    bridge = SlimeRolloutBridge(chain, reward=_EMLScorer(tree), run_name="run-B")
+
+    resonant = bridge.finalize_resonant()
+
+    # Must have recorded exactly one step: the CHECKPOINT boundary.
+    assert len(chain) == 1
+    step = chain.last()
+    assert step is not None
+    assert step.action == ActionType.CHECKPOINT
+    assert step.name == "run-B.finalize_resonant"
+
+    output_raw = step.output
+    assert isinstance(output_raw, dict)
+    output = cast(dict[str, Any], output_raw)
+    # Output records the identity fingerprint but NOT the tree bytes or matrices.
+    assert output["identity"] == resonant.identity
+    assert "tree_bytes" not in output
+    assert "projection" not in output
+    assert "readout" not in output
+
+
+def test_finalize_resonant_counters_persist_into_metadata() -> None:
+    from carl_core.eml import EMLTree
+
+    class _EMLScorer:
+        def __init__(self, tree: EMLTree) -> None:
+            self.tree = tree
+
+        def score_from_trace(self, _t: Any) -> tuple[float, dict[str, Any]]:
+            return 0.1, {}
+
+    tree = EMLTree.identity(input_dim=3)
+    chain = InteractionChain()
+    bridge = SlimeRolloutBridge(chain, reward=_EMLScorer(tree))
+
+    # Exercise some rollouts + training steps so the counters bump.
+    for i in range(4):
+        bridge.score_completion(
+            RolloutCompletion(prompt="p", text="c", rollout_index=i)
+        )
+    for s in range(2):
+        bridge.record_training_step(TrainingStep(step=s))
+
+    resonant = bridge.finalize_resonant()
+    assert resonant.metadata["bridge_rollouts_seen"] == 4
+    assert resonant.metadata["bridge_training_steps_seen"] == 2
+
+
+def test_finalize_resonant_extra_metadata_merges() -> None:
+    from carl_core.eml import EMLTree
+
+    class _EMLScorer:
+        def __init__(self, tree: EMLTree) -> None:
+            self.tree = tree
+
+        def score_from_trace(self, _t: Any) -> tuple[float, dict[str, Any]]:
+            return 0.0, {}
+
+    tree = EMLTree.identity(input_dim=3)
+    chain = InteractionChain()
+    bridge = SlimeRolloutBridge(chain, reward=_EMLScorer(tree))
+
+    resonant = bridge.finalize_resonant(
+        extra_metadata={"dataset": "yourorg/grpo-prompts", "gpu_hours": 12.5},
+    )
+    assert resonant.metadata["dataset"] == "yourorg/grpo-prompts"
+    assert resonant.metadata["gpu_hours"] == 12.5
+    # Standard fields are not clobbered.
+    assert resonant.metadata["source"] == "slime-rollout-bridge"
