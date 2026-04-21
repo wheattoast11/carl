@@ -184,9 +184,18 @@ class Step:
     #    "populated": list[str]}
     # Digests (not full payloads) preserve BITC axiom 1 (finite support).
     probe_call: dict[str, Any] | None = None
+    # v0.9 EML audit hook: when a step was emitted by a code path that
+    # composed the EML kernel (exp(x) - ln(y)) — the smooth coherence
+    # gate, an Adam-trainable reward tree, an eval scoring tree — the
+    # caller can attach the tree's structural snapshot here so downstream
+    # consumers can replay, audit, or retrain it. Shape is left to the
+    # producer: typically ``{"op": "eml", "children": [...], "score":
+    # float, ...}``. Absent by default so legacy serializations stay
+    # byte-identical (see ``to_dict`` — the key is omitted when None).
+    eml_tree: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "step_id": self.step_id,
             "action": self.action.value,
             "name": self.name,
@@ -209,6 +218,11 @@ class Step:
                 dict(self.probe_call) if self.probe_call is not None else None
             ),
         }
+        # Only add eml_tree when populated so pre-v0.9 serializations
+        # stay byte-identical (no empty key proliferation in the jsonl).
+        if self.eml_tree is not None:
+            d["eml_tree"] = _json_safe(self.eml_tree)
+        return d
 
 
 @dataclass
@@ -391,6 +405,8 @@ class InteractionChain:
                 cc = None
             else:
                 cc = {str(k): float(v) for k, v in cc_raw.items()}
+            eml_tree_raw = raw.get("eml_tree")
+            eml_tree = dict(eml_tree_raw) if isinstance(eml_tree_raw, dict) else None
             chain.steps.append(
                 Step(
                     action=ActionType(raw["action"]),
@@ -407,6 +423,7 @@ class InteractionChain:
                     phi=raw.get("phi"),
                     kuramoto_r=raw.get("kuramoto_r"),
                     channel_coherence=cc,
+                    eml_tree=eml_tree,
                 )
             )
         return chain

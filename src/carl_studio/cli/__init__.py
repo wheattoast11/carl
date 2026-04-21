@@ -30,4 +30,18 @@ for _module in (
 ):
     import_module(f"{__name__}.{_module}")
 
+
+# Top-level ``carl contract`` mount so the constitutional ledger is reachable
+# without the ``camp`` prefix (spec: ``carl contract constitution [...]``).
+# ``wiring.py`` has already mounted ``contract_app`` under ``camp_app``; we
+# additionally mount it at the root here. Typer apps can be added to multiple
+# parents safely — commands are looked up per parent.
+try:  # best-effort: missing extras should not break the root CLI
+    from .contract import contract_app as _contract_app
+
+    app.add_typer(_contract_app, name="contract")
+except ImportError:  # pragma: no cover - only when optional extras missing
+    pass
+
+
 __all__ = ["app", "camp_app", "lab_app"]

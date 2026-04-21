@@ -150,6 +150,10 @@ Fatal paths raise `carl_core.errors.CARLError` subclasses with stable codes you 
 | `carl.timeout` | Operation exceeded its deadline. |
 | `carl.freshness.stale_pkg` | Installed package older than recommended floor. |
 | `carl.freshness.camp_session_expired` | `carl.camp` session needs `carl camp login`. |
+| `carl.eml.depth_exceeded` | EML tree exceeded depth bound. |
+| `carl.eml.domain_error` | EML operator applied outside its valid domain. |
+| `carl.eml.decode_error` | EML canonical-encoding decode failed. |
+| `carl.eml.signature_mismatch` | Signed EML head failed HMAC verification. |
 
 `CARLError.to_dict()` produces a secrets-redacted, telemetry-safe payload. See `packages/carl-core/src/carl_core/errors.py` for the full hierarchy.
 
@@ -218,6 +222,7 @@ carl eval --adapter your-username/your-model
 | Privacy consent | `carl camp consent show`, `carl camp consent update` | included |
 | x402 payment rail | `carl camp x402 configure`, `carl camp x402 status` | included |
 | Contract witnessing | `carl camp contract sign`, `carl camp contract verify` | included |
+| Constitutional ledger | `carl contract constitution genesis\|verify\|evaluate\|status` | `pip install 'carl-studio[constitutional]'` |
 | Carlito management | `carl carlito list`, `carl carlito spawn`, `carl carlito show` | included |
 
 Managed tiers build on top of these open workflows; extras control local capabilities, not research access.
@@ -248,6 +253,30 @@ Trained with CARL on [OmniCoder-9B](https://huggingface.co/Tesslate/OmniCoder-9B
 | Phase 2' eval gate | **PASS** |
 
 80 GRPO steps. Five reward functions. Self-calibrating cascade gate.
+
+---
+
+## What's new (v0.9.0)
+
+**EML symbolic witness — third realizability primitive alongside BITC and DMC.**
+
+- **New reward option: `reward_class="eml"`.** Depth-3 learnable tree, 7 parameters,
+  **+0.972 correlation with PhaseAdaptive** — a nearly-indistinguishable signal at
+  ~10x parameter efficiency. Benchmarks in `scripts/eml_reward_benchmark.md`.
+- **Resonants — a new entity class.** `carl_core.resonant.Resonant` + `compose_resonants`
+  enables typed, depth-bounded (`MAX_DEPTH=4`) composition of reward / policy primitives
+  without ad-hoc schema drift.
+- **Constitutional ledger.** New subcommand `carl contract constitution`
+  (`genesis | verify | evaluate | status`) — hash-chained append-only ledger
+  over action features (25-dim encoding). Install via:
+
+```bash
+pip install 'carl-studio[constitutional]'   # pulls pynacl>=1.5
+```
+
+- **Public EML paper** — see the upstream Observable Computation bundle for
+  `eml-symbolic-witness.md` (numerical verification: ln identity max absolute
+  error 4.44e-16 over 990 sample points on `x ∈ [0.1, 10)` at 0.01 step).
 
 ---
 

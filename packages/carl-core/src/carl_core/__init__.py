@@ -51,6 +51,35 @@ from carl_core.tier import (
     tier_allows,
 )
 from carl_core.timeutil import ISO8601_Z, now_iso, now_iso_ms
+from carl_core.eml import (
+    CLAMP_X,
+    EPS,
+    MAX_DEPTH,
+    EMLNode,
+    EMLOp,
+    EMLTree,
+    eml,
+    eml_array,
+    eml_scalar_reward,
+)
+from carl_core.resonant import Resonant, compose_resonants, make_resonant
+from carl_core.heartbeat import (
+    ChainAppender,
+    GradientFn,
+    HeartbeatConfig,
+    HeartbeatState,
+    adam_step,
+    detect_resonant_modes,
+    heartbeat,
+    initial_state,
+    is_resonant,
+    run_heartbeat,
+)
+from carl_core.optimizer_state import (
+    DEFAULT_OPT_STATE_DIR,
+    AdamMoments,
+    OptimizerStateStore,
+)
 from carl_core.connection import (
     VALID_TRANSITIONS,
     AsyncBaseConnection,
@@ -163,5 +192,34 @@ __all__ = [
     "ChannelCoherence",
     "channel_coherence_diff",
     "channel_coherence_distance",
+    # EML primitive (Odrzywolek magma)
+    "EPS",
+    "MAX_DEPTH",
+    "CLAMP_X",
+    "EMLOp",
+    "EMLNode",
+    "EMLTree",
+    "eml",
+    "eml_array",
+    "eml_scalar_reward",
+    # Resonant (perceive -> cognize -> act)
+    "Resonant",
+    "make_resonant",
+    "compose_resonants",
+    # Heartbeat — CARL standing-wave loop
+    "HeartbeatState",
+    "HeartbeatConfig",
+    "GradientFn",
+    "ChainAppender",
+    "adam_step",
+    "heartbeat",
+    "is_resonant",
+    "run_heartbeat",
+    "detect_resonant_modes",
+    "initial_state",
+    # Optimizer state — durable Adam (m, v)
+    "DEFAULT_OPT_STATE_DIR",
+    "AdamMoments",
+    "OptimizerStateStore",
     "__version__",
 ]

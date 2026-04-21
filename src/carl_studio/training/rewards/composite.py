@@ -378,9 +378,18 @@ def make_carl_reward(
         carl: CARLReward = CARLReward()
     elif reward_class == "phase_adaptive":
         carl = PhaseAdaptiveCARLReward()
+    elif reward_class == "eml":
+        # Third option (T2): depth-3 learnable EML tree. Duck-typed — exposes
+        # the same ``score_from_trace(trace) -> (reward, meta)`` signature as
+        # CARLReward / PhaseAdaptiveCARLReward so the closure below works
+        # unchanged. Imported here (not at module top) to keep the stub /
+        # real-carl_core.eml swap local to the rewards.eml module.
+        from carl_studio.training.rewards.eml import EMLCompositeReward
+
+        carl = EMLCompositeReward()  # type: ignore[assignment]
     else:
         raise ValueError(
-            "reward_class must be 'static' or 'phase_adaptive', got "
+            "reward_class must be 'static', 'phase_adaptive', or 'eml', got "
             f"{reward_class!r}"
         )
     _step_counter = [0]

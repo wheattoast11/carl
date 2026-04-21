@@ -25,6 +25,7 @@ pip install -e ".[dev]"
 pip install -e ".[all]"
 ```
 - Use `.[all]` only when touching optional backends, training extras, MCP, or observe UI.
+- **After any editable-package refactor, re-run `pip install -e ".[dev]"`.** Otherwise the installed metadata lags the source tree and you will see spurious `ImportError` / "module not found" / test-collection errors for freshly-added modules (e.g., the v0.9.0 heartbeat / constitutional / optimizer_state false alarms). When in doubt after pulling: `pip install -e ".[dev]"` first, then run the tests.
 
 ## Build
 ```bash
@@ -46,7 +47,9 @@ pytest --lf -q --tb=short
 - Run pytest from repo root. `tests/conftest.py` reads `src/carl_studio/__init__.py` via repo-relative path.
 - Pytest is configured with `importlib` import mode (in `pyproject.toml`) — tests under `packages/carl-core/tests/` and `tests/` both resolve without `__init__.py` collisions.
 - For fast feedback, run a single file or node ID first, then broaden if needed.
-- Test baseline: 1864 tests passing across `tests/` + `packages/carl-core/tests/`.
+- Test baseline: 3088 tests (v0.15 /simplify) across `tests/` +
+  `packages/carl-core/tests/`. v0.9.0 EML work adds further coverage
+  (count refresh pending T12 validation).
 
 ## Lint and format
 ```bash
@@ -76,15 +79,26 @@ pyright src/carl_studio/<changed_module>.py
   marker lives at `~/.carl/.initialized`.
 - `src/carl_studio/cli/flow.py` — `carl flow "/a /b /c"` operation chainer.
 - `src/carl_studio/cli/operations.py` — flow op registry.
+- `src/carl_studio/cli/contract.py` — v0.9.0. Adds `constitution` subcommand
+  (`genesis | verify | evaluate | status`). Mounted at top level via
+  `cli/__init__.py` as `contract_app`. Requires `[constitutional]` extra.
 - `src/carl_studio/settings.py` — layered settings from env, `~/.carl/config.yaml`, and `carl.yaml`.
 - `src/carl_studio/tier.py` — FREE/PAID feature gating (thin shim over `carl_core.tier`).
 - `src/carl_studio/types/config.py` — Pydantic training config.
 - `src/carl_studio/training/` — trainer, pipeline, rewards, cascade.
+  v0.9.0 adds `training/rewards/eml.py::EMLCompositeReward` as third
+  reward_class; factory branch in `composite.py:381-389` dispatches on
+  `reward_class="eml"`.
 - `src/carl_studio/eval/runner.py` — eval runner and eval sandbox.
 - `src/carl_studio/compute/` — backend registry and compute backends.
 - `src/carl_studio/mcp/server.py` — FastMCP server.
 - `src/carl_studio/db.py` — SQLite persistence under `~/.carl/carl.db`.
 - `src/carl_studio/admin.py` — hardware-gated private runtime access.
+- `src/carl_studio/fsm_ledger.py` — v0.9.0. `FSMState`,
+  `ConstitutionalGatePredicate`, `evaluate_action`. Wires constitutional ledger
+  into the gating surface.
+- `src/carl_studio/ttt/eml_head.py` — v0.9.0. Public opaque handle; actual
+  `fit` runs in `terminals-runtime` when the admin gate resolves.
 - `src/carl_studio/freshness.py` — typed `FreshnessReport` / `FreshnessIssue` primitive.
 - `src/carl_studio/skills/`, `a2a/`, `credits/`, `marketplace.py`, and `curriculum.py` are live modules.
 
@@ -93,6 +107,8 @@ pyright src/carl_studio/<changed_module>.py
   ConfigError, CredentialError, BudgetError, PermissionError, CARLTimeoutError`
   — all fatal paths use these; each carries a stable `code` under the
   `carl.<namespace>` convention. `to_dict()` auto-redacts secret-shaped keys.
+  v0.9.0 adds `carl.eml.depth_exceeded`, `carl.eml.domain_error`,
+  `carl.eml.decode_error`, `carl.eml.signature_mismatch`.
 - `from carl_core.retry import retry, async_retry, RetryPolicy,
   CircuitBreaker, CircuitState, poll` — exponential backoff with circuit-breaker
   state machine.
@@ -104,7 +120,19 @@ pyright src/carl_studio/<changed_module>.py
   feature_tier, TierGateError` — canonical FREE/PAID enum.
 - `from carl_core.interaction import InteractionChain, Step, ActionType`
   — structured interaction trace primitive threading through training, eval,
-  x402, and the agent loop.
+  x402, and the agent loop. v0.9.0: `Step.eml_tree: dict | None = None`
+  (optional witness tree; legacy wire format preserved when unset).
+- `from carl_core.eml import EMLNode, EMLTree, eml` — v0.9.0. Tree-structured
+  symbolic witness primitive; depth-bounded, canonically encoded.
+- `from carl_core.resonant import Resonant, compose_resonants` — v0.9.0.
+  Composable typed entities; `MAX_DEPTH=4` guard on composition.
+- `from carl_core.heartbeat import ...` — v0.9.0. Pure-functional heartbeat
+  loop; Standing Wave Theorem in docstring.
+- `from carl_core.optimizer_state import ...` — v0.9.0. Durable Adam `(m, v)`
+  at `~/.carl/optimizer_states/`.
+- `from carl_core.constitutional import ConstitutionalPolicy, LedgerBlock,
+  ConstitutionalLedger, encode_action_features` — v0.9.0. Hash-chained
+  append-only constitutional ledger; 25-dim action features.
 
 ## Session surface
 - Chat sessions persist at `~/.carl/sessions/<id>.json` with `schema_version=1`.

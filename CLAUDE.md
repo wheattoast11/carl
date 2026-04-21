@@ -30,17 +30,39 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - `packages/carl-core/` — primitive layer (own pyproject, own tests). Owns
   `errors`, `retry`, `safepath`, `hashing`, `tier`, coherence math, interaction
   chain. `py.typed` marker published; pyright needs the editable install.
+  **v0.9.0 additions:**
+  - `eml.py` — EML primitive (`EMLNode`, `EMLTree`, `eml` scalar, factories).
+    Error codes: `carl.eml.depth_exceeded`, `carl.eml.domain_error`,
+    `carl.eml.decode_error`, `carl.eml.signature_mismatch`.
+  - `resonant.py` — `Resonant` type + `compose_resonants` with `MAX_DEPTH=4`
+    composition-guard (prevents runaway nesting).
+  - `heartbeat.py` — pure-functional heartbeat loop; Standing Wave Theorem in
+    docstring.
+  - `optimizer_state.py` — durable Adam `(m, v)` persistence at
+    `~/.carl/optimizer_states/` (keyed by run/param).
+  - `constitutional.py` — `ConstitutionalPolicy`, `LedgerBlock`,
+    `ConstitutionalLedger`, `encode_action_features` (25-dim feature vector).
 - `src/carl_studio/__init__.py` keeps top-level imports light and lazy-loads heavy modules.
 - `src/carl_studio/primitives/` — removed. All in-tree consumers migrated to `carl_core.*` imports. Downstream callers must import from `carl_core` directly.
 - `src/carl_studio/freshness.py` — typed `FreshnessReport`/`FreshnessIssue` with stable issue codes under `carl.freshness.*`.
 - `src/carl_studio/types/config.py` — Pydantic training config surface.
 - `src/carl_studio/training/` — trainer, pipeline, rewards, cascade.
 - `src/carl_studio/eval/runner.py` — eval runner and sandbox.
+- `src/carl_studio/training/rewards/eml.py` — `EMLCompositeReward` (v0.9.0).
+  Third reward_class alongside `"carl"` / `"phase_adaptive"` — depth-3 learnable
+  tree, 7 params, +0.972 correlation with PhaseAdaptive. Factory branch in
+  `composite.py:381-389` selects via `reward_class="eml"`.
+- `src/carl_studio/fsm_ledger.py` — `FSMState`, `ConstitutionalGatePredicate`,
+  `evaluate_action` (v0.9.0). Wires `carl_core.constitutional` into the
+  gating surface for constitution-gated autonomy.
+- `src/carl_studio/ttt/eml_head.py` — opaque public handle for the EML head
+  (v0.9.0). The `fit` path is gated through `admin.py` + the private runtime
+  (`terminals-runtime`); only the surface is MIT.
 - `src/carl_studio/compute/` — backend registry and compute backends.
 - `src/carl_studio/cli/` — modular Typer CLI package entrypoint.
 - `src/carl_studio/cli/init.py` — `carl init` / `carl camp init` one-shot wizard. First-run marker `~/.carl/.initialized`.
 - `src/carl_studio/cli/flow.py` — `carl flow "/a /b /c"` operation chainer (trace → `~/.carl/interactions/<id>.jsonl`).
-- `src/carl_studio/cli/operations.py` — flow op registry (doctor, start, init, ask, chat, flow, ship, review, simplify, train, eval, infer, publish, push, diagnose).
+- `src/carl_studio/cli/operations.py` — flow op registry (doctor, start, init, ask, chat, flow, ship, review, simplify, train, eval, infer, publish, push, diagnose). **Flow ops vs top-level commands:** `doctor`, `chat`, `init`, `flow`, `train`, `eval`, `publish`, `push`, `update`, `env`, `agent`, `contract`, `metrics`, `run` are both flow ops AND top-level CLI commands. `ship`, `review`, `simplify`, `ask`, `diagnose`, `start`, `infer` are ONLY flow ops — invoke via `carl flow "/ship"`, not `carl ship`.
 - `src/carl_studio/mcp/server.py` — FastMCP server.
 - `src/carl_studio/db.py` — local SQLite state under `~/.carl`.
 - `src/carl_studio/settings.py` — layered config from env, `~/.carl/config.yaml`, and `carl.yaml`.
@@ -117,7 +139,7 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - `python -m build` works.
 - Single pytest node IDs work from the repo root.
 - Repo-wide Ruff and Pyright currently have pre-existing noise; validate touched files first.
-- Test baseline (as of v0.15 + /simplify): **3088 tests pass** across `tests/` + `packages/carl-core/tests/` in ~65s with `--timeout-method=thread`. `tests/test_uat_e2e.py` + `tests/test_uat.py` are the UAT suites.
+- Test baseline (as of v0.15 + /simplify): **3088 tests pass** across `tests/` + `packages/carl-core/tests/` in ~65s with `--timeout-method=thread`. `tests/test_uat_e2e.py` + `tests/test_uat.py` are the UAT suites. **v0.9.0 adds EML primitive + reward + constitutional ledger + Resonants + fsm_ledger tests** (count refresh pending T12 validation).
 - Pytest uses `importlib` import mode; `tests/` and `packages/carl-core/tests/` coexist without `__init__.py` collisions.
 - Use `--timeout-method=thread` (not default signal-based) when running the full suite — macOS signal-based timeout can wedge on some tests; thread-based is clean.
 
@@ -174,6 +196,7 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 | `carl agent list` | `a2a/_cli.py:list_cards` | Enumerate local agent cards. |
 | `carl metrics serve` | `cli/metrics.py` | **v0.7.1.** Prometheus scrape endpoint (requires `[metrics]` extra). |
 | `carl run diff <id1> <id2>` | `cli/training.py:run_diff_cmd` | **v0.7.1.** Trajectory delta between two training runs. |
+| `carl contract constitution [genesis\|verify\|evaluate\|status]` | `cli/contract.py:constitution` | **v0.9.0.** Manages the constitutional ledger: genesis block, hash-chain verify, action evaluation, status summary. Requires `[constitutional]` extra (`pynacl>=1.5`). |
 | `carl lab repl` | `cli/lab.py:chat_repl` | Simple REPL, no tool use (legacy). |
 | `carl lab curriculum` / `carl lab carlito` | `cli/lab.py` | Canonical paths (not top-level). |
 
@@ -356,6 +379,38 @@ What this means concretely: the v0.10-A integration compiles the
 wins are (in order of importance): deterministic reproducibility,
 anticipatory variance minimization via parallel void-point exploration,
 mesh-visible training traces. Speed is a side effect.
+
+## EML primitive (v0.9.0 · shipped)
+
+**EML** = Entropic Memoryless Log — a tree-structured symbolic witness primitive for
+reward composition, policy features, and hardware-attested head fitting.
+
+- **Core types** (all in `carl_core.eml`): `EMLNode` (sum/product/log/exp leaves),
+  `EMLTree` (depth-bounded, canonically encoded), `eml` (scalar).
+- **Resonants** (in `carl_core.resonant`): composable typed entities; `compose_resonants`
+  enforces `MAX_DEPTH=4`. New entity class in the public API — expect it to surface
+  in downstream vocab.
+- **Reward integration**: `reward_class="eml"` branch in
+  `training/rewards/composite.py:381-389`. Depth-3 learnable tree, 7 params,
+  benchmark: +0.972 correlation with PhaseAdaptive. Benchmark script:
+  `scripts/benchmark_eml_reward.py` (report: `scripts/eml_reward_benchmark.md`).
+- **Gating integration**: `gating.py::CoherenceGatePredicate` gains
+  `use_eml_smoothing=False`, `tau=None` (default preserves legacy gate). Set these
+  to opt into EML-smoothed coherence thresholds.
+- **InteractionChain integration**: `carl_core.interaction.Step` gains optional
+  `eml_tree: dict | None = None` field. Legacy wire format untouched when unset.
+- **Constitutional ledger**: `carl_core.constitutional` + `fsm_ledger.py` +
+  `cli/contract.py::constitution` subcommand. Hash-chained append-only ledger
+  with 25-dim action-feature encoding. Admin-gated for mutation; read-only for
+  public callers.
+- **Public TTT handle**: `ttt/eml_head.py` exposes an opaque handle. The actual
+  `fit` path runs inside `terminals-runtime` (HMAC-SHA256 signed on
+  `hw_fp XOR user_secret`) and is only available when the admin gate resolves.
+- **New extra**: `pip install 'carl-studio[constitutional]'` pulls `pynacl>=1.5`.
+- **Paper**: see `observable-computation/papers/eml-symbolic-witness.md` —
+  third realizability witness alongside BITC and DMC (numerical verification:
+  ln identity max abs error 4.44e-16 over 990 sample points on
+  `x ∈ [0.1, 10)` at 0.01 step).
 
 ## Keep an eye on
 

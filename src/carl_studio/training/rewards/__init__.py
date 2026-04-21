@@ -5,6 +5,11 @@ from carl_studio.training.rewards.composite import (
     RewardComponents,
     make_carl_reward,
 )
+from carl_studio.training.rewards.eml import (
+    EMLCompositeReward,
+    eml_reward_from_trace,
+    make_eml_reward,
+)
 from carl_studio.training.rewards.task import (
     tool_call_format_reward,
     tool_selection_reward,
@@ -20,6 +25,9 @@ __all__ = [
     "PhaseAdaptiveCARLReward",
     "RewardComponents",
     "make_carl_reward",
+    "EMLCompositeReward",
+    "eml_reward_from_trace",
+    "make_eml_reward",
     "tool_call_format_reward",
     "tool_selection_reward",
     "chain_completion_reward",

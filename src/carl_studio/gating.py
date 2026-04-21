@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import math
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -38,6 +39,13 @@ from typing import (
     TypeVar,
     runtime_checkable,
 )
+
+from carl_core.eml import eml as _eml_kernel
+
+# EML-smoothing coherence-gate: keep the predicate readable by exposing a
+# descriptive alias rather than inlining ``eml(...)`` at the call-site.
+# The canonical implementation in ``carl_core.eml`` already clamps its
+# logarithm argument at EPS; no local fallback is needed.
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -537,7 +545,20 @@ def read_chain_coherence(chain: Any, window: int = 16) -> CoherenceSnapshot:
 
 
 class CoherenceGatePredicate:
-    """A :class:`GatingPredicate` that denies when recent Kuramoto R < threshold."""
+    """A :class:`GatingPredicate` that denies when recent Kuramoto R < threshold.
+
+    Two modes:
+
+    * ``use_eml_smoothing=False`` (default) — hard cliff: ``allowed iff
+      R >= min_R``. This preserves the pre-v0.8.1 behaviour byte-for-byte
+      and remains the path exercised by every existing gating test.
+    * ``use_eml_smoothing=True`` — smooth admission via the EML kernel
+      ``exp(R) - ln(min_R)``. The allow/deny boundary becomes
+      ``score > tau`` where ``tau`` defaults to ``exp(min_R) - ln(min_R)``
+      (the neutral point at ``R == min_R``), and the margin to the
+      boundary is Adam-trainable. An explicit ``tau`` override lets
+      callers shift the policy without rebuilding the kernel.
+    """
 
     def __init__(
         self,
@@ -545,16 +566,22 @@ class CoherenceGatePredicate:
         min_R: float,
         chain: Any = None,
         window: int = 16,
+        use_eml_smoothing: bool = False,
+        tau: float | None = None,
     ) -> None:
         if not 0.0 <= min_R <= 1.0:
             raise ValueError(f"min_R must be in [0, 1]; got {min_R}")
         self._min_R = min_R
         self._chain = chain
         self._window = window
+        self._use_eml_smoothing = use_eml_smoothing
+        self._tau = tau
         self._last_snapshot: CoherenceSnapshot | None = None
 
     @property
     def name(self) -> str:
+        if self._use_eml_smoothing:
+            return f"coherence:min_R={self._min_R}:eml"
         return f"coherence:min_R={self._min_R}"
 
     @property
@@ -562,14 +589,46 @@ class CoherenceGatePredicate:
         return self._min_R
 
     @property
+    def tau(self) -> float | None:
+        return self._tau
+
+    @property
+    def use_eml_smoothing(self) -> bool:
+        return self._use_eml_smoothing
+
+    @property
     def last_snapshot(self) -> CoherenceSnapshot | None:
         return self._last_snapshot
+
+    def _default_tau(self) -> float:
+        """The neutral EML threshold at R = min_R.
+
+        ``exp(min_R) - ln(min_R)`` evaluates the kernel at the very
+        boundary, so a sample sitting exactly on ``min_R`` is neither
+        allowed nor denied by the raw comparison — the strict
+        ``score > tau`` tips denial, matching the discrete-mode
+        contract ``R >= min_R`` being allowed at equality plus a
+        smoothness budget.
+        """
+        y = max(self._min_R, 1e-6)
+        return math.exp(self._min_R) - math.log(y)
 
     def check(self) -> tuple[bool, str]:
         snap = read_chain_coherence(self._chain, self._window)
         self._last_snapshot = snap
         if not snap.has_data:
             return True, "no coherence data"
+        if self._use_eml_smoothing:
+            y = max(self._min_R, 1e-6)
+            score = _eml_kernel(snap.R, y)
+            threshold = self._tau if self._tau is not None else self._default_tau()
+            allowed = score > threshold
+            cmp = ">" if allowed else "<="
+            reason = (
+                f"eml(R={snap.R:.3f}, min_R={self._min_R:.3f})={score:.3f} "
+                f"{cmp} tau={threshold:.3f} (window={snap.window_size})"
+            )
+            return allowed, reason
         if snap.R < self._min_R:
             return (
                 False,
