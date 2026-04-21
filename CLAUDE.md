@@ -197,6 +197,10 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 | `carl metrics serve` | `cli/metrics.py` | **v0.7.1.** Prometheus scrape endpoint (requires `[metrics]` extra). |
 | `carl run diff <id1> <id2>` | `cli/training.py:run_diff_cmd` | **v0.7.1.** Trajectory delta between two training runs. |
 | `carl contract constitution [genesis\|verify\|evaluate\|status]` | `cli/contract.py:constitution` | **v0.9.0.** Manages the constitutional ledger: genesis block, hash-chain verify, action evaluation, status summary. Requires `[constitutional]` extra (`pynacl>=1.5`). |
+| `carl resonant whoami` | `cli/resonant.py:whoami_cmd` | **v0.9.1.** Show `sig_public_component = sha256(user_secret)[:16]` identity fingerprint. Auto-generates `~/.carl/credentials/user_secret` (32 bytes, 0600) on first call. |
+| `carl resonant list` | `cli/resonant.py:list_cmd` | **v0.9.1.** Enumerate local Resonants in `~/.carl/resonants/<name>/`. |
+| `carl resonant eval <name> --inputs <json>` | `cli/resonant.py:eval_cmd` | **v0.9.1.** Local perceive→cognize→act on a saved Resonant. |
+| `carl resonant publish <name>` | `cli/resonant.py:publish_cmd` | **v0.9.1.** POST signed envelope to `{CARL_CAMP_BASE}/api/resonants` per `docs/eml_signing_protocol.md` §5.1. Headers: `X-Carl-User-Secret` (b64), `X-Carl-Projection`, `X-Carl-Readout`. Refuses non-HTTPS unless `--dry-run`. |
 | `carl lab repl` | `cli/lab.py:chat_repl` | Simple REPL, no tool use (legacy). |
 | `carl lab curriculum` / `carl lab carlito` | `cli/lab.py` | Canonical paths (not top-level). |
 
