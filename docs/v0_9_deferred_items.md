@@ -37,6 +37,39 @@ Implementation pattern: add `cli/resonant.py`, `cli/marketplace.py`, `cli/ledger
 mirroring `cli/contract.py`. Register in `cli/__init__.py`. Reuse existing
 `admin.is_admin()` + `consent_gate` machinery.
 
+**`carl resonant publish` wire contract (v0.9.x, locked 2026-04-21).**
+Confirmed with the carl.camp platform agent; the upload MUST match
+`docs/eml_signing_protocol.md` §5.1 exactly.
+
+```
+POST {carlcamp_base}/api/resonants
+Content-Type: application/octet-stream
+Authorization: Bearer {supabase_jwt}
+X-Carl-User-Secret: {base64(contents_of_~/.carl/credentials/user_secret)}
+X-Carl-Input-Dim:   {tree.input_dim}
+X-Carl-Output-Dim:  {readout.shape[0]}
+X-Carl-Projection:  {base64(projection.tobytes())}
+X-Carl-Readout:     {base64(readout.tobytes())}
+
+<body: raw .emlt envelope = codec_impl.encode(tree, sig=sign_tree_software(tree.to_bytes(), secret))>
+```
+
+CLI obligations for the implementer of `cli/resonant.py::publish`:
+
+- Read `~/.carl/credentials/user_secret` (mode 0600); generate with
+  `os.urandom(32)` on first run if absent; never log the raw bytes.
+- Compute `sig_public_component = sha256(user_secret)[:16].hex()`
+  and show the first 8 chars on `carl whoami` and the
+  publish-confirmation prompt so the user recognizes their identity.
+  **Do NOT** send the fingerprint as a header — server re-derives
+  from the body.
+- Standard base64 for the header (NOT url-safe); matches the
+  `@terminals-tech/emlt-codec` server-side decode.
+- Add `X-Carl-User-Secret` to the CLI HTTP client's redaction list so
+  verbose logs and tracebacks never surface it.
+- On 402 response, surface the platform's x402 payment body; the
+  publish path is free-tier, 402 indicates tier misconfiguration.
+
 ### 1.2 EML-native Adam optimizer
 Team ι proposed replacing Adam's `m̂/(√v̂ + ε)` update with
 `exp(log m̂ - 0.5·log v̂)` for full EML coordinates. This would be the
