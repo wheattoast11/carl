@@ -44,4 +44,14 @@ except ImportError:  # pragma: no cover - only when optional extras missing
     pass
 
 
+# ``carl resonant [publish|list|whoami|eval]`` — v0.9.x manages local
+# Resonants and pushes them to carl.camp per docs/eml_signing_protocol.md §5.
+try:
+    from .resonant import resonant_app as _resonant_app
+
+    app.add_typer(_resonant_app, name="resonant")
+except ImportError:  # pragma: no cover
+    pass
+
+
 __all__ = ["app", "camp_app", "lab_app"]

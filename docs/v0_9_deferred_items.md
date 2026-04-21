@@ -16,7 +16,23 @@ entry or move it under `## Category 0 — Shipped since v0.9.0`.
 
 ## Category 0 — Shipped since v0.9.0
 
-_(empty at v0.9.0 tag-cut; append as items move from later categories)_
+- **2026-04-21 — `cli/resonant.py` with `publish` / `list` / `whoami` /
+  `eval`** (commit pending). Moved out of §1.1. Remaining in §1.1:
+  `carl resonant fit` (needs admin-gated private backend), `carl
+  resonant compose` (utility, low priority), `carl marketplace buy`
+  (requires carl.camp purchase endpoint to land first), `carl ledger
+  today` (cli/contract.py has `constitution status` — ledger read
+  command deferred).
+- **2026-04-21 — `@terminals-tech/emlt-codec@0.1.0` published to
+  npm.** 82/82 tests, ESM + CJS dual, byte-parity with Python reference.
+- **2026-04-21 — `carl_core.signing` public software-tier helpers**
+  (`sign_tree_software`, `verify_software_signature`, platform
+  countersig pair). 11 tests.
+- **2026-04-21 — `docs/eml_signing_protocol.md` §5.1 + §5.2**
+  locking `X-Carl-User-Secret` transmission and
+  `sig_public_component = sha256(user_secret)[:16]` fingerprint.
+- **2026-04-21 — `carlcamp_eml_integration_brief.md` refresh**
+  replacing stale ed25519 primary-path refs with HMAC software tier.
 
 ## Category 1 — Near-term patches (v0.9.x / v0.10.0)
 
@@ -25,13 +41,18 @@ Seven CLI commands were fully specified in `docs/summercamp_eml_ux.md`
 and `docs/hardware_interface_spec.md` but only `carl contract
 constitution [genesis|verify|evaluate|status]` actually ships in v0.9.0.
 
+- ~~`carl resonant eval`~~, ~~`carl resonant list`~~,
+  ~~`carl resonant publish`~~, ~~`carl resonant whoami`~~ —
+  SHIPPED 2026-04-21, see Category 0
 - `carl resonant fit <dataset>` — train an EML tree on provided data
-- `carl resonant compose <tree_a> <tree_b>` — magma composition with depth-4 guard
-- `carl resonant eval <tree> <inputs>` — evaluate a signed `.emlt` blob
-- `carl resonant list` — enumerate local resonants from `~/.carl/resonants/`
-- `carl resonant publish <tree>` — push signed tree to carl.camp marketplace
-- `carl marketplace buy <resonant_id>` — x402 settlement for a downloaded resonant
-- `carl ledger today` — today's constitutional ledger blocks
+  (needs admin-gated backend; follow `ttt/eml_head.py` pattern)
+- `carl resonant compose <tree_a> <tree_b>` — magma composition with
+  depth-4 guard (utility wrapper around `carl_core.resonant.compose_resonants`)
+- `carl marketplace buy <resonant_id>` — x402 settlement for a
+  downloaded resonant (blocked on platform purchase endpoint)
+- `carl ledger today` — today's constitutional ledger blocks (read
+  surface for the Supabase ledger; complements
+  `carl contract constitution status`)
 
 Implementation pattern: add `cli/resonant.py`, `cli/marketplace.py`, `cli/ledger.py`
 mirroring `cli/contract.py`. Register in `cli/__init__.py`. Reuse existing
