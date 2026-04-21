@@ -119,6 +119,14 @@ FEATURE_TIERS: dict[str, Tier] = {
     "learn": Tier.FREE,
     "checkpoint": Tier.FREE,
     "compute": Tier.FREE,
+    # v0.16 zero-knowledge secrets toolkit — capability, not autonomy. The
+    # whole point is that the agent orchestrates value transfer without
+    # seeing the value. Gating it would break the C-in-CARL and the
+    # virtual-KVM security model. See docs/v16_secrets_toolkit_design.md.
+    "secrets.mint": Tier.FREE,
+    "secrets.resolve": Tier.FREE,
+    "secrets.clipboard": Tier.FREE,
+    "secrets.audit": Tier.FREE,
     # ---------------------------------------------------------------
     # PAID ($29/mo) — Autonomy + Discovery + Resonance + Platform.
     # Everything that runs without human in the loop.

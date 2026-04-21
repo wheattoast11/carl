@@ -105,8 +105,18 @@ constitutional = ["pynacl>=1.5"]
 # SlimeAdapter.available() returns False until the user finishes the
 # source-build steps, with missing_dependencies() naming each gap.
 slime = ["sglang>=0.4"]
+# Zero-knowledge secrets toolkit (v0.16). Aggregates the three new deps
+# required for the virtual-KVM flow (mint → clipboard → paste → wipe)
+# with audit via InteractionChain. pynacl + keyring also appear in other
+# extras; this aggregator lets users install the full secrets surface
+# without pulling wallet/constitutional transitively.
+secrets = [
+    "pynacl>=1.5",
+    "keyring>=24.0.0",
+    "pyperclip>=1.9.0",
+]
 dev = ["pytest", "ruff", "pyright", "hypothesis>=6.100"]
-all = ["carl-studio[training,observe,hf,runpod,tinker,tui,mcp,research,a2a,x402,payments,metrics,constitutional,slime,dev]"]
+all = ["carl-studio[training,observe,hf,runpod,tinker,tui,mcp,research,a2a,x402,payments,metrics,constitutional,slime,secrets,dev]"]
 
 [project.scripts]
 carl = "carl_studio.cli:app"

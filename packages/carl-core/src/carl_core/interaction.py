@@ -59,6 +59,13 @@ class ActionType(str, Enum):
     MEMORY_WRITE = "memory_write"     # memory commit (write to any layer)
     HEARTBEAT_CYCLE = "heartbeat_cycle"  # full sticky-note cycle boundary (start/end)
     STICKY_NOTE = "sticky_note"       # note append / dequeue / status transition
+    # v0.16 secrets toolkit — zero-knowledge value-transfer lifecycle. Every
+    # op emits a Step with a fingerprint, never the value. See
+    # docs/v16_secrets_toolkit_design.md for the capability-security model.
+    SECRET_MINT = "secret_mint"         # new value minted / stored into the vault
+    SECRET_RESOLVE = "secret_resolve"   # privileged deref of a handle
+    SECRET_REVOKE = "secret_revoke"     # handle invalidated
+    CLIPBOARD_WRITE = "clipboard_write" # scoped clipboard bridge emit
 
 
 # v0.10 W10: actions eligible for coherence auto-attach via a registered

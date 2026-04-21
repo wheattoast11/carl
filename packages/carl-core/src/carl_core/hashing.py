@@ -40,6 +40,36 @@ def content_hash_bytes(data: bytes, *, algorithm: str = "sha256") -> str:
     return h.hexdigest()
 
 
+def fingerprint(data: str | bytes, *, length: int = 12) -> str:
+    """Return a short sha256 prefix of ``data`` — safe to log.
+
+    The canonical "12-hex" fingerprint used across CARL: audit trails,
+    ``InteractionChain.Step.probe_call``, config-requirement presence
+    records, and the secrets vault all render a value's fingerprint
+    (never the value) so logs and events stay free of credentials
+    while still supporting change detection and dedup.
+
+    Formalizes the inline pattern already used across the codebase
+    (``hashlib.sha256(...).hexdigest()[:12]``) as one import-point.
+
+    Args:
+        data: The value to fingerprint. Strings are UTF-8 encoded.
+        length: Hex-char prefix length (default 12 = 48 bits, matches
+            the chain / probe_call convention). Must be in [4, 64].
+
+    Returns:
+        Lowercase hex string of ``length`` characters.
+    """
+    if length < 4 or length > 64:
+        raise ValidationError(
+            f"fingerprint length must be in [4, 64], got {length!r}",
+            code="carl.hash_bad_length",
+            context={"length": length},
+        )
+    payload = data.encode("utf-8") if isinstance(data, str) else data
+    return hashlib.sha256(payload).hexdigest()[:length]
+
+
 def _to_canonical(obj: Any) -> Any:
     # Order matters: bool is a subclass of int, so handle bool via the
     # (bool, int, str) branch. None/str/int/bool are JSON-native leaves.
@@ -107,4 +137,5 @@ __all__ = [
     "canonical_json",
     "content_hash",
     "content_hash_bytes",
+    "fingerprint",
 ]
