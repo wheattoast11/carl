@@ -13,6 +13,28 @@ The foundational layer of the CARL stack. Pure coherence math + interaction trac
 - `compute_phi` (from `math`)
 - `KAPPA`, `SIGMA`, `DEFECT_THRESHOLD`, `T_STAR` (from `constants`)
 - `InteractionChain`, `Step`, `ActionType` (from `interaction`)
+  - `Step.probe_call: dict | None` (v0.11) — fingerprint of the coherence
+    probe invocation that populated phi/kuramoto_r/channel_coherence.
+    12-hex sha256 digests, not full payloads.
+  - `InteractionChain.register_coherence_probe(fn)` / `clear_coherence_probe()` —
+    opt-in hook invoked at `record()` for `LLM_REPLY` / `TOOL_CALL` /
+    `TRAINING_STEP` / `EVAL_PHASE` / `REWARD` when no explicit coherence
+    kwargs are passed.
+- `PresenceReport`, `compose_presence_report` (from `presence`, v0.11)
+- `success_rate_probe` (from `presence`, v0.11) — default endogenous probe;
+  estimates `kuramoto_r` from chain's tail success rate per action type.
+- `BreakAndRetryStrategy`, `CircuitOpenError` (from `resilience`, v0.8) —
+  composes `RetryPolicy` + `CircuitBreaker`. Used by x402 facilitator calls
+  and `carl update`'s PyPI fetch.
+- `CARLError` + subclasses (from `errors`): `ConfigError`, `ValidationError`,
+  `CredentialError`, `NetworkError`, `BudgetError`, `PermissionError`,
+  `CARLTimeoutError`. All carry stable `code` under `carl.<namespace>`.
+- `canonical_json`, `content_hash`, `content_hash_bytes` (from `hashing`)
+- `CircuitBreaker`, `RetryPolicy`, `retry`, `async_retry`, `poll` (from `retry`)
+- `PathEscape`, `SandboxedPath`, `safe_resolve`, `within` (from `safepath`)
+- `Tier`, `FEATURE_TIERS`, `TierGateError`, `feature_tier`, `tier_allows` (from `tier`)
+- `MemoryItem`, `MemoryLayer`, `MemoryStore` (from `memory`)
+- `InteractionStore` (from `interaction_store`)
 
 ## Dependencies
 

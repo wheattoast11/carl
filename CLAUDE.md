@@ -45,11 +45,17 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - `src/carl_studio/db.py` — local SQLite state under `~/.carl`.
 - `src/carl_studio/settings.py` — layered config from env, `~/.carl/config.yaml`, and `carl.yaml`.
 - `src/carl_studio/admin.py` — hardware-gated access to the private runtime.
-- `src/carl_studio/chat_agent.py` — CARLAgent agentic loop (streaming, tools, sessions, cost, permissions). Sessions persist with `schema_version=1`.
+- `src/carl_studio/chat_agent.py` — CARLAgent agentic loop. Post-v0.15 the tool-use loop delegates to `ToolDispatcher.execute_block`; pre/post hooks + DENY + schema validation + dispatch + post-hook all live on the dispatcher now.
+- `src/carl_studio/sessions.py` — `SessionStore` (extracted from chat_agent in v0.12). Sessions persist with `schema_version=1` at `~/.carl/sessions/`; corrupted files quarantined.
+- `src/carl_studio/tool_dispatcher.py` — `ToolDispatcher.execute_block(...)` is the per-block lifecycle (v0.14). Returns `(ToolOutcome, list[ToolEvent])`; `ToolOutcomeType` enum covers OK/DENIED/SCHEMA_ERROR/ERROR.
+- `src/carl_studio/gating.py` — `BaseGate[P: GatingPredicate]` + `consent_gate` + `tier_gate`. v0.10 added `CoherenceGate` / `@coherence_gate(min_R=...)` that reads `kuramoto_r` from the chain's tail window.
+- `src/carl_studio/a2a/marketplace.py` — `MarketplaceAgentCard` + `AgentCardStore` (SQLite) + `CampSyncClient` (HTTP). Mirrors carl.camp `/api/agents/register` + `/api/sync/agent-cards` contract (envelope: `{ok, synced, skipped, ids, rejected}`).
+- `src/carl_studio/update/` — `carl update` package (v0.11). Git-log + PyPI-version deltas + blast-radius summary. PyPI fetch wrapped in `BreakAndRetryStrategy`.
+- `src/carl_studio/env_setup/` — `carl env` wizard (v0.12 + v0.14). 7-question functor-composed flow; enums for Mode/Method/DatasetKind/EvalGate. Resume via `~/.carl/last_env_state.json`.
 - `src/carl_studio/frame.py` — WorkFrame analytical lens (domain/function/role/objectives).
 - `src/carl_studio/contract.py` — service contract witnessing (SHA-256 hash chain).
 - `src/carl_studio/consent.py` — privacy-first consent state machine (all flags off by default).
-- `src/carl_studio/x402.py` — HTTP 402 payment rail client (facilitator-based, no web3.py).
+- `src/carl_studio/x402.py` — HTTP 402 payment rail client (facilitator-based, no web3.py). SpendTracker uses v0.8's `ConfigRegistry[SpendState]`.
 - `src/carl_studio/carlito.py` — small specialized agents spawned from graduated curricula.
 - `src/carl_studio/camp.py` — CampProfile managed-account contract for billing/credits.
 - `skills/`, `a2a/`, `credits/`, `marketplace.py`, and `curriculum.py` are live code paths.
@@ -111,8 +117,9 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - `python -m build` works.
 - Single pytest node IDs work from the repo root.
 - Repo-wide Ruff and Pyright currently have pre-existing noise; validate touched files first.
-- Test baseline: 1556 tests in `tests/` (`~40s` full run) plus the `carl-core` suite under `packages/carl-core/tests/`. `tests/test_uat_e2e.py` is the E2E UAT suite.
+- Test baseline (as of v0.15 + /simplify): **3088 tests pass** across `tests/` + `packages/carl-core/tests/` in ~65s with `--timeout-method=thread`. `tests/test_uat_e2e.py` + `tests/test_uat.py` are the UAT suites.
 - Pytest uses `importlib` import mode; `tests/` and `packages/carl-core/tests/` coexist without `__init__.py` collisions.
+- Use `--timeout-method=thread` (not default signal-based) when running the full suite — macOS signal-based timeout can wedge on some tests; thread-based is clean.
 
 ## Production hardening patterns (post-v0.3.0)
 
@@ -150,24 +157,30 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - Sessions persist at `~/.carl/sessions/` with `schema_version=1`. Knowledge `words` are sets — serialize as sorted lists.
 - Anthropic SDK: >=0.95.0 required for `cache_control` top-level param and streaming.
 
-## CLI routing (as of 2026-04-17)
+## CLI routing (as of 2026-04-20, v0.15)
 
 | User invocation | Routes to | Behavior |
 |---|---|---|
 | `carl` (bare) | `cli/chat.py:chat_cmd` via `_default_to_chat` callback | Full CARLAgent loop. |
 | `carl chat` | `cli/chat.py:chat_cmd` | Full CARLAgent loop (same as bare). |
-| `carl "<prompt>"` | `cli/chat.py:ask_cmd` → `run_one_shot_agent` | One-shot agent — single Anthropic call with tools. |
-| `carl ask "<prompt>"` | same as `carl "<prompt>"` | Alias. |
+| `carl "<prompt>"` / `carl ask "<prompt>"` | `cli/chat.py:ask_cmd` → `run_one_shot_agent` | One-shot agent — single Anthropic call with tools. |
 | `carl flow "/a /b /c"` | `cli/flow.py:flow_cmd` → `cli/operations.OPERATIONS` | Chains ops; trace persisted to `~/.carl/interactions/<id>.jsonl`. |
-| `carl init` | `cli/init.py:init_cmd` | One-shot wizard. First-run marker `~/.carl/.initialized`. |
-| `carl camp init` | `cli/init.py:init_cmd` (same callable) | Wired under `camp_app` as alias. |
+| `carl init` / `carl camp init` | `cli/init.py:init_cmd` | One-shot wizard. First-run marker `~/.carl/.initialized`. |
 | `carl doctor` | `cli/startup.py:doctor` | Readiness + typed freshness report. |
+| `carl update` | `cli/update.py:update_cmd` | **v0.11.** Git-delta + PyPI-version delta + blast-radius report. Flags: `--dry-run --json --summary-only --detailed`. Consent-gated for network. |
+| `carl env` | `cli/env.py:env_cmd` | **v0.12/v0.14.** 7-question progressive-disclosure wizard → `carl.yaml`. Flags: `--resume --auto --json --dry-run --output`. |
+| `carl agent register <name>` | `a2a/_cli.py:register` | **v0.13.** Mints recipe-shell via `POST /api/agents/register` when authenticated; always writes locally. `--local-only --org --url --capability --description`. |
+| `carl agent publish [--agent-id X]` | `a2a/_cli.py:publish` | **v0.13.** Pushes local cards to carl.camp. **Coherence-gated** via `@coherence_gate(min_R=0.5, feature="agent.publish")` + `success_rate_probe`. |
+| `carl agent list` | `a2a/_cli.py:list_cards` | Enumerate local agent cards. |
+| `carl metrics serve` | `cli/metrics.py` | **v0.7.1.** Prometheus scrape endpoint (requires `[metrics]` extra). |
+| `carl run diff <id1> <id2>` | `cli/training.py:run_diff_cmd` | **v0.7.1.** Trajectory delta between two training runs. |
 | `carl lab repl` | `cli/lab.py:chat_repl` | Simple REPL, no tool use (legacy). |
 | `carl lab curriculum` / `carl lab carlito` | `cli/lab.py` | Canonical paths (not top-level). |
 
-- `carl lab chat` no longer exists — it was renamed to `carl lab repl`.
+- `carl lab chat` no longer exists — renamed to `carl lab repl`.
 - `settings.py` defaults: `default_model=""`, `naming_prefix=""` — user must configure.
 - CLI `wiring.py` stubs print install hints when extras are missing (not silent `pass`).
+- Bearer token for `carl agent register/publish`: `CARL_CAMP_TOKEN` env var OR `~/.carl/camp_token` file; absent → local-only + FYI nudge.
 
 ## Documentation header convention (as of 2026-04-20 · v0.8.0)
 
@@ -204,25 +217,25 @@ behavior, not narration on every file.
 When a doc falls more than one minor version behind current, treat it
 as a review candidate: either update and re-stamp, or delete.
 
-## v0.10 master plan (authoritative until superseded)
+## Release history (v0.10 → v0.15, shipped)
 
-`docs/v10_master_plan.md` is the phase-locked SOP for v0.10 (2026-04-20).
-Consolidates 4 vanilla-context peer-review JSON DAGs (math · architecture ·
-plan · IP), the Bend-style MECE-coalesced finding set, the antipattern
-catalog, the scope DAG, and the ER diagram. **Read it before taking any
-v0.10 action.** Supersedes partial content in v10_terminals_tech_deep_dive.md.
+All items in this arc are live on `main`. See `CHANGELOG.md` for details.
 
-## P0 open items (from peer review, 2026-04-20)
+- **v0.10.0** — architecture completion. `BaseGate[P]`, `ConfigRegistry[T]`,
+  `BreakAndRetryStrategy`, paper series, v0.10 master plan + Fano K_7 peer review.
+- **v0.11.0** — `Step.probe_call` audit trail, `success_rate_probe`,
+  `carl update` command.
+- **v0.12.0** — `SessionStore` extracted to `sessions.py`; `carl env`
+  4-question MVP.
+- **v0.13.0** — marketplace `carl agent register/publish/list`; first
+  production `@coherence_gate` wiring on agent.publish.
+- **v0.14.0** — `ToolDispatcher.execute_block` + `ToolOutcome` / `ToolEvent`
+  / `ToolPermission` canonical enums; `carl env` expanded to 7 questions.
+- **v0.15.0** — chat_agent tool-loop body collapsed onto `execute_block`
+  (~100 LOC → ~40 LOC). Anti-Deferral Protocol ledger closed.
 
-1. **Tool-call witness debt** (P0-1). `chat_agent.py` tool-use loop
-   (lines 1286-1346) doesn't record `ActionType.TOOL_CALL` steps.
-   Breaks the witness-log claim. ~25 LOC fix, blocks nothing else but
-   must land before W7/W8.
-2. **carl.camp backend contract** (P0-2). `POST /api/sync/agent-cards`
-   is undefined. Blocks v0.10-A #1 (agent cards + Supabase) unless
-   stubbed.
-3. **py2bend LOC estimate** (P0-3). 350 is optimistic; 600-700
-   realistic. De-risk with minimal rollout.bend template first.
+`docs/v10_master_plan.md` remains the historical Fano-consensus record.
+`docs/v10_agent_card_supabase_spec.md` is implementation-complete.
 
 ## Anti-pattern catalog (confirmed via vanilla-context peer review)
 
@@ -247,26 +260,22 @@ future-session filtering:
   The reframe is in this file — rollout loop compilation IS the IRE
   on HVM native substrate; speed is a side effect.
 
-## v0.9 + v0.10 roadmap (docs landed 2026-04-20, implementation pending Tej sign-off)
+## Historical design docs (all implementations shipped)
 
-Four design docs under `docs/v09_*.md` + `docs/v10_*.md`:
+`docs/v09_*.md` and `docs/v10_*.md` are the design/roadmap artifacts that
+drove the v0.10→v0.15 implementation arc. Kept for provenance; the code
+is now authoritative. Notable design records:
 
-- `v09_carl_update_design.md` — self-updating meta-pipeline (`carl update`)
-  with 3-day staleness nudge, PyPI/CVE/git-delta scan, positive-framed
-  blast-radius reporting. Zero new deps.
-- `v09_carl_env_design.md` — 7-question progressive-disclosure env
-  wizard (`carl env`) with functor composition + resume-capable state.
-  Verifier hook reserved for prime-rl integration.
-- `v09_terminals_runtime_integration_matrix.md` — IP-respecting lazy-import
-  matrix for 10 terminals-runtime primitives. Three v0.9-A picks:
-  Kuramoto-R order parameter, conservation-law token budget, upgraded
-  OBSERVER_SYSTEM_PROMPT.
-- `v10_terminals_tech_deep_dive.md` — grounded review of 5 terminals-tech
-  paths + 4 research papers. **Two corrections to the v0.9 matrix:**
-  (1) `agent-sdk` is MIT (not BUSL), unblocking agent-card Supabase work
-  to v0.10-A; (2) `semantic-mesh/convergence` is NOT Kuramoto — carl-core
-  is already ahead. Three v0.10-A picks: TerminalAgent mirror + Supabase,
-  py2bend reward compilation (admin-gated BUSL), Substrate presence probe.
+- `v09_carl_update_design.md` — drove v0.11 `carl update`.
+- `v09_carl_env_design.md` — drove v0.12/v0.14 `carl env` (7-question full design).
+- `v10_terminals_tech_deep_dive.md` — 5-path + 4-paper grounded review. κ-constant ruling; `agent-sdk` is MIT correction.
+- `v10_agent_card_supabase_spec.md` — drove v0.13 agent-card register/publish; the envelope contract (`{ok, synced, skipped, ids, rejected}`) + idempotency-via-content_hash is live.
+
+**Still-open v0.16+ candidates** (not yet implementation-ready):
+- py2bend rollout-loop compilation (BUSL-gated, admin-only). See HVM
+  mental-model section below for why this matters structurally.
+- AXON-isomorphic event emission from carl-studio via HTTP to carl.camp.
+- Substrate presence probe lazy-import seam.
 
 ## κ-constant ruling (resolved 2026-04-20)
 
