@@ -8,6 +8,8 @@ maps backend name → adapter instance. Built-in names:
 * ``axolotl`` — pipes translated YAML to ``axolotl train -``.
 * ``tinker`` — translates + records state; submission path pending API lock-in.
 * ``atropos`` — shells out to the atropos CLI with a JSON config file.
+* ``slime`` — launches THUDM/slime (Megatron-LM + SGLang) via a generated
+  entrypoint. Requires ``carl-studio[slime]`` + user-built slime + Megatron.
 
 Registration happens on first import. Override by calling
 ``register_adapter()`` with a custom implementation.
@@ -20,6 +22,7 @@ from .axolotl_adapter import AxolotlAdapter
 from .connection import DEFAULT_TRAINING_SPEC, TrainingConnection
 from .protocol import AdapterError, BackendJob, BackendStatus, UnifiedBackend
 from .registry import get_adapter, list_adapters, register_adapter
+from .slime_adapter import SlimeAdapter
 from .tinker_adapter import TinkerAdapter
 from .trl_adapter import TRLAdapter
 from .unsloth_adapter import UnslothAdapter
@@ -31,6 +34,7 @@ _BUILTIN_ADAPTERS: tuple[UnifiedBackend, ...] = (
     AxolotlAdapter(),
     TinkerAdapter(),
     AtroposAdapter(),
+    SlimeAdapter(),
 )
 
 
@@ -49,6 +53,7 @@ __all__ = [
     "BackendJob",
     "BackendStatus",
     "DEFAULT_TRAINING_SPEC",
+    "SlimeAdapter",
     "TRLAdapter",
     "TinkerAdapter",
     "TrainingConnection",

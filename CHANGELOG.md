@@ -2,6 +2,48 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`slime` training adapter** (`src/carl_studio/adapters/slime_adapter.py`,
+  `src/carl_studio/adapters/slime_translator.py`). Routes
+  `carl train --backend slime` to THUDM/slime (Apache-2.0) — the RL stack
+  behind Z.ai's GLM-5 / 4.7 / 4.6 / 4.5 and the only verified OSS framework
+  for RL training on 100B+ MoE. Megatron-LM + SGLang are user-installed;
+  the `carl-studio[slime]` extra pulls only the thin rollout-side dep
+  (`sglang`). Registered in `_BUILTIN_ADAPTERS` — `list_adapters()` now
+  returns six entries.
+- **`SlimeRolloutBridge`** (`src/carl_studio/training/slime_bridge.py`) —
+  wires slime's rollout + training callbacks into
+  `carl_core.interaction.InteractionChain`. Custom rewards
+  (`EMLCompositeReward` / `PhaseAdaptiveCARLReward` / `CARLReward`) plug
+  into slime's reward hook via `bridge.as_slime_reward()`. A
+  `CompletionTraceAdapter` shim lets the existing `score_from_trace`
+  surface run unchanged when slime provides only raw text + logprobs.
+- **Five tier feature keys** in `FEATURE_TIERS`
+  (`packages/carl-core/src/carl_core/tier.py`):
+  - `train.slime` — FREE (BYOK adapter)
+  - `train.slime.rollout_bridge` — FREE (coherence bridge, capability
+    not autonomy per the tier philosophy at `tier.py:16-24`)
+  - `train.slime.managed` — PAID (carl.camp orchestration)
+  - `train.slime.moe_presets` — PAID (GLM-5 / DeepSeek-V3 / Qwen3-MoE)
+  - `train.slime.async_disaggregated` — PAID (async PD disaggregation)
+- **`docs/adapters/slime.md`** — tier split, BYOK install steps,
+  `carl.yaml` example, bridge wiring snippet, troubleshooting table.
+- **Tests** — `tests/test_slime_adapter.py` (22 cases) and
+  `tests/test_slime_bridge.py` (9 cases). Mocks
+  `slime`/`sglang`/`megatron` via `importlib.util.find_spec` patches so
+  the adapter's availability + translation + submission paths exercise
+  without touching a real GPU stack.
+
+### Changed
+
+- **`pyproject.toml`** — added `slime = ["sglang>=0.4"]` optional
+  extra and rolled it into `[all]`. Intentionally **not** in
+  `[training]`: slime's full install still requires CUDA/ROCm-specific
+  Megatron-LM + slime source builds that cannot be covered by a wheel.
+  `SlimeAdapter.available()` returns False until the user finishes the
+  source-build steps.
+
 ## [0.15.0] — 2026-04-20
 
 Tool-loop extraction release. `chat_agent.py`'s tool-use loop body

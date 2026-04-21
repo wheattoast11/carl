@@ -99,6 +99,12 @@ FEATURE_TIERS: dict[str, Tier] = {
     "train": Tier.FREE,
     "train.grpo": Tier.FREE,
     "train.sft": Tier.FREE,
+    # Slime adapter — THUDM/slime (Apache-2.0). The adapter surface and the
+    # rollout↔InteractionChain bridge are FREE because CARL's coherence
+    # story requires a reward bridge be available; gating it would mean
+    # gating the C-in-CARL. Users BYO Megatron-LM + SGLang + GPUs.
+    "train.slime": Tier.FREE,
+    "train.slime.rollout_bridge": Tier.FREE,
     "bench": Tier.FREE,
     "bench.basic": Tier.FREE,
     "project": Tier.FREE,
@@ -132,6 +138,13 @@ FEATURE_TIERS: dict[str, Tier] = {
     "orchestration": Tier.PAID,
     "orchestration.multi_run": Tier.PAID,
     "train.pipeline.multi": Tier.PAID,  # Multi-model pipeline orchestration
+    # Slime PAID surfaces — managed orchestration, MoE-scale presets, and
+    # async disaggregated deployments. These are autonomy + scale features,
+    # not core capability; matches the train.send_it / compute.multi_backend
+    # precedent.
+    "train.slime.managed": Tier.PAID,
+    "train.slime.moe_presets": Tier.PAID,
+    "train.slime.async_disaggregated": Tier.PAID,
     "rbac": Tier.PAID,
     "audit_trail": Tier.PAID,
     "experiment": Tier.PAID,  # Discovery engine
