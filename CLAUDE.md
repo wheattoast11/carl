@@ -72,6 +72,25 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
   {publish,list,whoami,eval}` using only public primitives. Refuses
   non-HTTPS base URLs unless `--dry-run`. `X-Carl-User-Secret` +
   `Authorization` redacted in every log/error path.
+- `src/carl_studio/adapters/slime_adapter.py` — v0.16-pending (commit
+  `9e4eaab`, 2026-04-21). `SlimeAdapter` routes `backend: "slime"` in
+  `carl.yaml` to THUDM/slime (Apache-2.0, Megatron-LM + SGLang, 100B+
+  MoE RL). Staged availability probe (`slime` / `sglang` /
+  `megatron|megatron.core`); torchrun → python fallback launcher.
+  Public helpers `resolve_entry` / `resolve_launch_cmd` (intentionally
+  not `_`-prefixed so tests + dry-run callers can use them).
+- `src/carl_studio/adapters/slime_translator.py` — v0.16-pending.
+  `SlimeArgs` Pydantic v2 (`frozen=True`, `extra="forbid"`) +
+  `translate_config()`. Sole owner of slime's three-group CLI arg
+  surface (Megatron / SGLang-prefixed / slime). Reuse via
+  `SlimeArgs.model_json_schema()` for carl.camp server-side validation.
+- `src/carl_studio/training/slime_bridge.py` — v0.16-pending.
+  `SlimeRolloutBridge` wires slime rollout + training callbacks into
+  `carl_core.InteractionChain`. `CompletionTraceAdapter` shims raw
+  text + logprobs into the `score_from_trace` surface so
+  `EMLCompositeReward` / `PhaseAdaptiveCARLReward` / `CARLReward`
+  run unchanged. `bridge.as_slime_reward()` returns the slime-shaped
+  reward callable for `--custom-reward-fn`.
 - `src/carl_studio/compute/` — backend registry and compute backends.
 - `src/carl_studio/cli/` — modular Typer CLI package entrypoint.
 - `src/carl_studio/cli/init.py` — `carl init` / `carl camp init` one-shot wizard. First-run marker `~/.carl/.initialized`.
@@ -144,6 +163,36 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - CLI change -> targeted tests + targeted Ruff.
 - Packaging/release change -> `tests/test_release_version.py` + `python -m build`.
 - Avoid turning unrelated lint/type debt into drive-by cleanup unless asked.
+- Packaging extras: `tests/test_extras_coverage.py` enforces every
+  declared extra must be in `[all]` OR declared as conflict in
+  `[tool.uv].conflicts`. Default new extras to `[all]` when
+  pip-installable; reserve conflict groups for genuinely-mutually-
+  exclusive pins (precedent: `wallet` vs `x402`).
+
+## Pyright strict gotchas (confirmed in-practice, 2026-04-21)
+
+- `isinstance(x, dict)` on a `dict[str, Any]` param fires
+  `reportUnnecessaryIsInstance` + `reportUnreachable` (strict mode).
+  Either drop the runtime guard or type the param `Any` and narrow
+  via `cast(dict[str, Any], x)` after the check.
+- `dict(raw)` where `raw` is `Any`-typed returns `dict[Unknown, Unknown]`.
+  Skip the constructor: `narrowed = cast(dict[str, Any], raw)` after
+  `isinstance(raw, dict)`.
+- `dataclass(field(default_factory=dict))` on a `dict[str, Any]` field
+  fires `reportUnknownVariableType`. Use a named factory:
+  `def _empty_meta() -> dict[str, Any]: return {}`.
+- `pytest.approx(x)` is untyped — use `abs(actual - expected) < 1e-9`
+  in tests.
+- `step.input` / `step.output` (Any-typed on
+  `carl_core.interaction.Step`) need `cast(dict[str, Any], raw)` after
+  `isinstance(raw, dict)` — pyright does NOT narrow Any-containers.
+- Private helpers (`_foo`) used from tests fire `reportPrivateUsage`.
+  Rename to public (`foo`) and add to `__all__` when tests need them.
+- Autouse fixtures fire `reportUnusedFunction` — add
+  `# pyright: ignore[reportUnusedFunction]` on the `def` line.
+- After `Write` / `Edit` the harness may report stale "could not be
+  resolved" diagnostics. Trust a direct `pyright <file>` CLI run
+  over inline harness reports.
 
 ## Current repo truths
 
@@ -161,7 +210,15 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - `python -m build` works.
 - Single pytest node IDs work from the repo root.
 - Repo-wide Ruff and Pyright currently have pre-existing noise; validate touched files first.
-- Test baseline (as of v0.15 + /simplify): **3088 tests pass** across `tests/` + `packages/carl-core/tests/` in ~65s with `--timeout-method=thread`. `tests/test_uat_e2e.py` + `tests/test_uat.py` are the UAT suites. **v0.9.0 adds EML primitive + reward + constitutional ledger + Resonants + fsm_ledger tests** (count refresh pending T12 validation).
+- Test baseline (as of `9e4eaab` / slime adapter merge, 2026-04-21):
+  **3623 tests pass; 16 pre-existing `test_heartbeat.py` fixture-
+  collision errors surface ONLY in full-suite runs.** Running
+  `pytest packages/carl-core/tests/test_heartbeat.py tests/test_heartbeat.py`
+  in isolation passes (24/24) — the collision is cross-suite, NOT a
+  regression. Full suite ~67s with `--timeout-method=thread`.
+  `tests/test_uat_e2e.py` + `tests/test_uat.py` are the UAT suites
+  (skip by default in targeted runs via `--ignore=...`). Slime adapter
+  adds 31 tests (22 adapter + 9 bridge).
 - Pytest uses `importlib` import mode; `tests/` and `packages/carl-core/tests/` coexist without `__init__.py` collisions.
 - Use `--timeout-method=thread` (not default signal-based) when running the full suite — macOS signal-based timeout can wedge on some tests; thread-based is clean.
 
@@ -320,11 +377,66 @@ is now authoritative. Notable design records:
 - `v10_terminals_tech_deep_dive.md` — 5-path + 4-paper grounded review. κ-constant ruling; `agent-sdk` is MIT correction.
 - `v10_agent_card_supabase_spec.md` — drove v0.13 agent-card register/publish; the envelope contract (`{ok, synced, skipped, ids, rejected}`) + idempotency-via-content_hash is live.
 
-**Still-open v0.16+ candidates** (not yet implementation-ready):
-- py2bend rollout-loop compilation (BUSL-gated, admin-only). See HVM
-  mental-model section below for why this matters structurally.
-- AXON-isomorphic event emission from carl-studio via HTTP to carl.camp.
+**Deferred roadmap** (grounded in 2026-04-21 slime-integration review
++ carl.camp agent handoff; every item here has a named owner in the
+next planning window):
+
+**v0.16 (slime artifact emission + schema sharing):**
+- `SlimeRolloutBridge.finalize_resonant() -> Resonant` — snapshot the
+  trained `EMLTree` (`reward_class="eml"` case) into a `Resonant` via
+  `carl_core.resonant` + `docs/eml_signing_protocol.md`. Publishes
+  through the **existing** `carl resonant publish` (v0.9.1) →
+  carl.camp `POST /api/resonants`. **No new carl.camp endpoint
+  required** — confirmed by carl.camp agent 2026-04-21; metadata JSONB
+  absorbs slime provenance without migration.
+- Export `SlimeArgs.model_json_schema()` for carl.camp's
+  `/api/train/slime/submit` server-side validation. Reuse
+  `translate_config()` end-to-end; `AdapterError` codes
+  (`carl.adapter.translation`, `carl.adapter.missing_required`,
+  `carl.adapter.unavailable`) map cleanly to HTTP 400.
+- AXON-isomorphic event emission from carl-studio via HTTP to
+  carl.camp. Step shapes already align; needs the HTTP forwarder.
+
+**v0.17 (policy-head compile + input schema):**
+- py2bend compilation of the **policy head** (not the reward head —
+  that's covered in v0.16 via composition). BUSL-gated via `admin.py`,
+  separate wheel, lazy-imported. See HVM mental-model section below.
+- `SlimeConfig` input-shape Pydantic model (sibling to `SlimeArgs`,
+  captures the `slime:` block in `carl.yaml`). Enables OpenAPI client
+  generation for third-party tooling.
 - Substrate presence probe lazy-import seam.
+
+**v0.10 remote-tier verification (carl.camp signed entitlements):**
+- Decorator-level `@tier_gate(Tier.PAID, feature="...",
+  verify_remote=True)` — **NOT** detector-level (would break
+  offline/fast-path UX on every `carl train --dry-run`).
+  Local SQLite read stays the default fast path; remote verify fires
+  in the background after local passes. JWT + ed25519 (pynacl already
+  in `[constitutional]` extra). 15-min cache at
+  `~/.carl/entitlements_cache.json`. New error code
+  `carl.gate.tier_remote_mismatch`. 24h offline-grace fallback so
+  carl.camp outages don't create hard-denials.
+- Deliverable: **`docs/v10_remote_entitlements_spec.md`** stub
+  before implementation — owner: next-session agent_2.
+
+**Locked scope decisions (do not re-litigate):**
+- `train.slime.managed` tier key covers BOTH paths: (a) carl.camp-
+  owned compute + Lodge metered billing, AND (b) carl.camp-
+  orchestrated BYO (user brings HF / RunPod key, flat orchestration
+  fee). The FREE path `train.slime` handles fully-BYO (user runs on
+  their own iron).
+- **CRITICAL cross-system invariant** (carl.camp agent, 2026-04-21):
+  when the v0.10 managed-slime dispatcher ships on carl.camp, it
+  **MUST** use carl.camp's HF token (new env var
+  `CARL_CAMP_HF_TOKEN`) — **NEVER** the user's encrypted token.
+  Mixing paths leaks user credentials. carl.camp's existing
+  `dispatch-hf/[runId]` route is BYO-only; managed needs a fork at
+  the top of the dispatcher. Enforce this in the CLI when we add
+  `--managed` selection: reject any code path that reads a user HF
+  token and then posts to the managed endpoint.
+
+**Status at 2026-04-21 handoff:** zero carl.camp code changes pending
+for v0.9.x slime integration; EML routes are forward-compat.
 
 ## κ-constant ruling (resolved 2026-04-20)
 
