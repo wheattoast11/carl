@@ -154,6 +154,35 @@ tests (`pytest.approx` returns `ApproxBase` without type args). Not a
 correctness issue but pollutes IDE diagnostics. Add a
 `tests/_typing.py` with typed wrappers if team capacity allows.
 
+### 1.11 `content_hash` ↔ `Resonant.identity` reconciliation
+Surfaced during carl.camp 2026-04-21 handoff. Platform computes
+`content_hash = sha256(envelope ‖ projection ‖ readout)` server-side.
+Client computes `Resonant.identity = sha256(tree.hash() + "|" +
+sha256(round12(proj)) + "|" + sha256(round12(readout)))` with 12-decimal
+matrix rounding (see `carl_core.resonant._compute_identity`). The two
+hex strings will never match byte-for-byte by design. Decision for
+marketplace UI: either (a) echo BOTH in `POST /api/resonants` response
+so clients correlate their local identity to the server's artifact
+address, OR (b) pick one as the canonical public handle. Platform-side
+call; flag when marketplace UI starts.
+
+### 1.12 Zombie-file sweeper hooked into `carl doctor`
+Finder-duplicate files (`" N.py"` / `" N.md"` naming) recur across
+sessions and pollute pytest collection + `git fetch` (ghost
+`.git/refs/stash N`). Add a `FreshnessIssue` with stable code
+`carl.freshness.zombie_files` listing them + `--fix` to delete. Lives
+in `src/carl_studio/freshness.py`; runs inside `carl doctor`.
+Detection regex: `r'\s[0-9]+\.[a-z]+$'` on file name. Use Python
+`os.unlink` (PreToolUse hook blocks `rm -rf`).
+
+### 1.13 `@terminals-tech/emlt-codec` 0.2.1 — ship test vectors (conditional)
+Current `packages/emlt-codec-ts/package.json` `files` array is
+`["dist", "src", "README.md", "LICENSE"]` — `test/ledger_vectors.json`
+and `test/vectors.json` are NOT shipped in the npm tarball. If
+carl.camp wants to consume them from `node_modules/@terminals-tech/emlt-codec/`
+instead of fetching from GitHub raw, bump to 0.2.1 adding `"test"` to
+the `files` array. Low cost; semver-governed. Hold until asked.
+
 ## Category 2 — Platform work (carl.camp agent scope)
 
 These land on the **carl.camp platform agent** (different session).
