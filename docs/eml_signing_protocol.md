@@ -245,15 +245,60 @@ const ok = await verifyCountersig(
 
 ## 5. Software tier onboarding flow
 
-1. User signs up → platform issues 32-byte `user_secret`
-2. User stores `user_secret` in their client (carl CLI writes to
-   `~/.carl/credentials/user_secret`, mode 0600)
-3. User trains a tree; client signs with `sign_tree_software(bytes, user_secret)`
-4. Client uploads envelope (inner + sig) to `POST /api/resonants`
-5. Platform retrieves `user_secret` for the authenticated user,
-   verifies, and on success inserts
+1. User signs up → client generates 32-byte `user_secret` locally
+   (cryptographically random) and writes to
+   `~/.carl/credentials/user_secret`, mode 0600. The server does NOT
+   store the secret.
+2. User trains a tree; client signs with
+   `sign_tree_software(bytes, user_secret)`
+3. Client uploads envelope (inner + sig) to `POST /api/resonants`
+   with the `X-Carl-User-Secret` header carrying the base64-encoded
+   raw secret (see §5.1 for the transmission contract).
+4. Platform reads `X-Carl-User-Secret`, runs `verify_software_signature`
+   against the envelope's inner bytes, and on success inserts.
+5. Platform stores only the derived `sig_public_component` (§5.2) as
+   the user's stable identity fingerprint — NEVER the raw secret.
 6. Success response includes the Resonant's `id` and
-   `content_hash` for reference
+   `content_hash` for reference.
+
+### 5.1 Per-request secret transmission contract
+
+The `X-Carl-User-Secret` header carries the raw 16–64 byte
+`user_secret` base64-encoded. Server obligations:
+
+- Platform MUST add `X-Carl-User-Secret` to its global logger
+  redaction list before the first deployment that accepts EML traffic
+- Platform MUST NOT persist the secret in any database, cache, queue,
+  or structured log — use transiently for `verifySoftware()` then
+  GC (Node: let the buffer fall out of scope; Python: `del` and
+  overwrite with zeros where possible)
+- Transport is TLS-only; reject plain HTTP at the edge
+- Rotate-on-suspect: if a secret ever appears in an error message,
+  crash report, or replay trace, the affected user MUST rotate via
+  `POST /api/auth/rotate-user-secret` and the platform SHOULD surface
+  a warning in the user dashboard
+
+Stateless verify is a deliberate trade-off: the platform never
+accumulates a long-term secret store, so DB breach exposure is
+minimized — but every request carries the secret. TLS + redaction
+discipline is load-bearing; do not skip.
+
+### 5.2 Public identity fingerprint (`sig_public_component`)
+
+```
+sig_public_component = sha256(user_secret)[0:16] encoded as hex
+```
+
+- 32-char one-way fingerprint; stable per `user_secret` → stable per
+  user identity across Resonants
+- Stored on every `resonants` row; lets marketplace consumers answer
+  "was this Resonant signed by the same hand as that one?"
+- Client computes locally for user-facing identity display (e.g.,
+  `carl whoami` shows the first 8 chars as an avatar anchor)
+- Server computes independently from the transmitted secret; the two
+  MUST match or the insert is rejected as `carl.eml.attestation_failed`
+- **v0.10 upgrade path:** when hardware-tier ed25519 lands, the same
+  column holds the raw ed25519 pubkey hex. No schema migration.
 
 ## 6. Rotation + revocation
 
@@ -288,4 +333,9 @@ Any impl that decodes + verifies all 10 passes the interop bar.
 
 ## 9. Changelog
 
+- 2026-04-21 — §5 refreshed with the per-request `X-Carl-User-Secret`
+  header transmission contract and the `sig_public_component`
+  fingerprint derivation (§5.1, §5.2). Resolves the undocumented-decision
+  gap surfaced during the carl.camp integration round. No wire-format
+  changes; only onboarding + identity-display are new.
 - 2026-04-20 v1 — initial protocol spec, paired with v0.9.0 ship.

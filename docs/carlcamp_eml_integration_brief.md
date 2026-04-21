@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-04-20
+last_updated: 2026-04-21
 author: Tej Desai + Claude Opus 4.7 (1M context)
 applies_to: v0.9.0
 audience: carl.camp platform agent
@@ -7,6 +7,17 @@ status: actionable brief
 ---
 
 # carl.camp × EML integration brief
+
+> **v0.9.x signing-tier note (2026-04-21 refresh).** The v0.9.0 wire
+> protocol is **HMAC-SHA256 software tier**, not ed25519. Ed25519
+> remains the primitive for `constitutional_ledger_blocks` (§3.2)
+> and is NOT used for Resonant attestation. The hardware-attested
+> variant (ed25519 + device key) is explicitly deferred to v0.10 per
+> §9.3 of the agent-handoff prompt. Where this brief still reads
+> "Ed25519" against `resonants` or the purchase countersig, treat
+> those as forward references; the shipped contract is in
+> `docs/eml_signing_protocol.md` §2.1 and §4. Surgical corrections
+> below.
 
 This is a scoped brief for the carl.camp platform agent. It tells the
 platform side exactly what changes are needed to host, sell, and route
@@ -42,7 +53,7 @@ monetizes.
 | -------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `carl-core`          | MIT     | `carl_core.eml` primitive (`EMLNode`, `EMLTree`, `EMLOp`, `eml`, `eml_scalar_reward`), `Resonant` dataclass, `compose_resonants`, trace hash |
 | `carl-studio`        | MIT     | `EMLCompositeReward`, smooth coherence gate, Constitutional ledger format, `carl publish` and `carl push resonant` CLIs                      |
-| `terminals-runtime`  | BUSL    | Private fitter, closed-form eval optimizer, Ed25519 signer, hardware attestation                                                             |
+| `terminals-runtime`  | BUSL    | Private fitter, closed-form eval optimizer, HMAC-SHA256 hardware-tier signer (`hw_fp XOR user_secret`), Ed25519 for ledger blocks only       |
 | **carl.camp** (you)  | —       | Supabase schema, x402 settlement, marketplace API, a2a discovery, MCP tools for `eml_evaluate` / `eml_fit_request`, training-run hooks       |
 
 **Do not** re-implement the fitter on the platform side. The platform
@@ -61,7 +72,9 @@ create table public.resonants (
     id              uuid primary key default gen_random_uuid(),
     user_id         uuid not null references auth.users(id) on delete cascade,
     tree_bytes      bytea not null,                 -- serialized EMLTree (carl_core.eml.encode_tree)
-    signature       bytea not null,                 -- Ed25519 over tree_bytes || projection || readout
+    signature       bytea not null,                 -- HMAC-SHA256 over inner tree bytes (software tier, v0.9); 32 bytes fixed
+    trust_tier      text not null default 'software' check (trust_tier in ('software', 'hardware')),
+    sig_public_component text not null,             -- sha256(user_secret)[0:16] hex; identity fingerprint, not the secret
     input_dim       int  not null check (input_dim  > 0),
     output_dim      int  not null check (output_dim > 0),
     projection_shape int[] not null,                 -- [k, d]
@@ -163,8 +176,13 @@ x402-flavored settlement. Typical unit price is `$0.50 – $5.00`.
 3. Client signs payment and re-POSTs with the `X-PAYMENT` header.
 4. Platform verifies via the existing facilitator, on success returns
    `200 OK` with `Content-Type: application/octet-stream` carrying the
-   signed `.emlt` blob and a `X-Resonant-Attestation` header containing
-   an Ed25519 signature over `(blob_hash || buyer_id || timestamp)`.
+   signed `.emlt` blob and the platform countersignature headers
+   defined in `docs/eml_signing_protocol.md` §4.1:
+   `X-Carl-Platform-Countersig` (base64 HMAC-SHA256 over the §4.2
+   payload), `X-Carl-Platform-Countersig-Timestamp`, and
+   `X-Carl-Platform-Countersig-Txid`. Use
+   `carl_core.signing.sign_platform_countersig()` as the reference
+   impl; the TS mirror ships in `@terminals-tech/emlt-codec`.
 5. Platform writes a marketplace-income row and increments
    `eml_marketplace.downloads`.
 
@@ -175,7 +193,9 @@ on a 24-hour tumbling window.
 
 **Attestation rule.** When the buyer has admin tier, the response MUST
 include a hardware attestation chain from `carl admin attest-device`
-(see the hardware spec). Free-tier users get the Ed25519 signature only.
+(see the hardware spec). Free-tier and paid-tier users get the
+HMAC-SHA256 software-tier signature (v0.9.x). Admin-tier adds the
+hardware attestation envelope on top (v0.10+).
 
 ### 4.2 · Price derivation
 
@@ -303,9 +323,14 @@ The platform must:
 1. **Respect MIT / BUSL split.** The platform must never host the
    private fitter source. `eml_fit_request` routes to the user's own
    compute; the platform is a dispatcher, not the trainer.
-2. **Signature-gated uploads.** Every `resonants` insert must verify an
-   Ed25519 signature over `tree_bytes || projection || readout` against
-   the user's device key. Reject unsigned uploads at the edge function.
+2. **Signature-gated uploads.** Every `resonants` insert must verify
+   the HMAC-SHA256 signature over the **inner tree bytes** (see
+   `docs/eml_signing_protocol.md` §2.1) using the user's `user_secret`
+   obtained from the `X-Carl-User-Secret` header on the upload
+   request. Reject unsigned or mis-signed uploads at the edge function
+   with `carl.eml.attestation_failed`. Projection + readout matrices
+   are not part of the signed scope; their integrity is enforced via
+   the Resonant identity hash (content-addressing) at insert time.
 3. **Hardware-attested downloads for admin tier.** Admin-tier buyers
    receive an attestation chain with the blob; free/paid do not.
 4. **Rate limits.** `eml_fit_request`: 10/hr on free, 100/hr on paid,
@@ -322,12 +347,24 @@ The platform must:
 ```http
 POST /api/resonants
 Content-Type: application/octet-stream
-X-Signature: <ed25519-base64>
-X-Input-Dim: 3
-X-Output-Dim: 2
+Authorization: Bearer <supabase_jwt>
+X-Carl-User-Secret: <base64(user_secret, 16-64 bytes)>
+X-Carl-Input-Dim: 3
+X-Carl-Output-Dim: 2
+X-Carl-Projection: <base64(projection_matrix_bytes)>
+X-Carl-Readout: <base64(readout_matrix_bytes)>
 
-<raw .emlt bytes>
+<raw .emlt envelope bytes: EMLT magic | version | inner tree | 32-byte HMAC sig>
 ```
+
+The `X-Carl-User-Secret` header MUST be added to the logger redaction
+list, never written to the database, and used only transiently for the
+HMAC verify (GC'd after the `verifySoftware()` call). TLS-only
+transport. Identity fingerprint stored in the DB is
+`sha256(user_secret)[0:16]` hex — a 32-char one-way fingerprint that
+lets consumers recognize the signing identity without ever seeing the
+secret. **Upgrade path (v0.10):** `sig_public_component` becomes the
+raw ed25519 pubkey hex; schema unchanged.
 
 ### 9.2 · Evaluate
 
