@@ -1,0 +1,25 @@
+carl-studio — NOTICE
+====================
+
+carl-studio is released under the MIT License.
+Copyright (c) 2025–2026 Tej Desai and contributors.
+
+
+Third-Party Components
+----------------------
+
+The following third-party software is used by carl-studio under its
+respective open-source license. carl-studio does NOT redistribute source
+or binary copies of these libraries; it provides adapter/bridge code that
+interfaces with them when installed by the end user.
+
+THUDM/slime
+  License: Apache License, Version 2.0
+  Source:  https://github.com/THUDM/slime
+  Note:    carl-studio incorporates an adapter + rollout-bridge for
+           THUDM/slime (src/carl_studio/adapters/slime_adapter.py,
+           src/carl_studio/adapters/slime_translator.py,
+           src/carl_studio/training/slime_bridge.py).
+           The Apache-2.0 license text is available at
+           https://www.apache.org/licenses/LICENSE-2.0.
+           slime source code is NOT bundled in this repository.
