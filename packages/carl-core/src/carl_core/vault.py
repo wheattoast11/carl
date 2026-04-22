@@ -167,6 +167,32 @@ class Vault(Generic[H, V]):
     _ref_class: ClassVar[type]  # must be set by subclasses; type: type[H]
     _require_privileged_resolve: ClassVar[bool] = False
     _resolver_ttl_s: ClassVar[int | None] = None  # cache duration for resolved values
+    # Error-code namespace. Subclasses override to preserve their existing
+    # error-code taxonomy — e.g. SecretVault sets "carl.secrets" so raised
+    # errors have codes like "carl.secrets.not_found" rather than the
+    # generic "carl.vault.not_found".
+    _error_prefix: ClassVar[str] = "carl.vault"
+    # Exception class raised by the base lifecycle methods. Subclasses override
+    # to their own VaultError subclass (e.g. SecretsError) so `pytest.raises`
+    # catches the specific subtype AND `carl.<namespace>.*` codes stay stable.
+    _error_class: ClassVar[type[VaultError]] = VaultError
+
+    @classmethod
+    def _err_code(cls, suffix: str) -> str:
+        return f"{cls._error_prefix}.{suffix}"
+
+    @classmethod
+    def _err(
+        cls, suffix: str, message: str, context: dict[str, Any] | None = None,
+        *, cause: BaseException | None = None,
+    ) -> VaultError:
+        """Build a subclass-typed VaultError with the right code + context."""
+        return cls._error_class(
+            message,
+            code=cls._err_code(suffix),
+            context=context or {},
+            cause=cause,
+        )
 
     def __init__(self) -> None:
         self._entries: dict[uuid.UUID, _VaultEntry[V]] = {}
@@ -180,7 +206,7 @@ class Vault(Generic[H, V]):
         if ttl_s is not None and ttl_s < 1:
             raise ValidationError(
                 f"ttl_s must be a positive int or None, got {ttl_s!r}",
-                code="carl.vault.invalid_ttl",
+                code=type(self)._err_code("invalid_ttl"),
                 context={"ttl_s": ttl_s},
             )
 
@@ -219,16 +245,17 @@ class Vault(Generic[H, V]):
     def resolve(self, ref: H, *, privileged: bool = False) -> V:
         """Dereference a handle.
 
-        Non-privileged callers hit `carl.vault.unauthorized_resolve` when the
-        subclass sets `_require_privileged_resolve = True`. This is a visibility
-        marker, not a cryptographic guard — its purpose is to make every value
-        access visible in code review.
+        Non-privileged callers hit ``<prefix>.unauthorized_resolve`` when the
+        subclass sets ``_require_privileged_resolve = True``. This is a
+        visibility marker, not a cryptographic guard — its purpose is to make
+        every value access visible in code review.
         """
-        if type(self)._require_privileged_resolve and not privileged:
-            raise VaultError(
-                f"{type(self).__name__}.resolve() requires privileged=True",
-                code="carl.vault.unauthorized_resolve",
-                context={"ref_id": str(ref.ref_id), "kind": ref.kind},
+        cls = type(self)
+        if cls._require_privileged_resolve and not privileged:
+            raise cls._err(
+                "unauthorized_resolve",
+                f"{cls.__name__}.resolve() requires privileged=True",
+                {"ref_id": str(ref.ref_id), "kind": ref.kind},
             )
 
         entry, current = self._lookup_live(ref)
@@ -250,10 +277,10 @@ class Vault(Generic[H, V]):
         # (3) fall through to registered resolver
         resolver = self._resolvers.get(current.kind)
         if resolver is None:
-            raise VaultError(
+            raise cls._err(
+                "resolver_unavailable",
                 f"no value and no resolver registered for kind={current.kind!r}",
-                code="carl.vault.resolver_unavailable",
-                context={"ref_id": str(ref.ref_id), "kind": current.kind},
+                {"ref_id": str(ref.ref_id), "kind": current.kind},
             )
 
         try:
@@ -261,10 +288,10 @@ class Vault(Generic[H, V]):
         except VaultError:
             raise
         except Exception as exc:
-            raise VaultError(
+            raise cls._err(
+                "resolver_failed",
                 f"resolver for kind={current.kind!r} raised {type(exc).__name__}: {exc}",
-                code="carl.vault.resolver_failed",
-                context={"ref_id": str(ref.ref_id), "kind": current.kind},
+                {"ref_id": str(ref.ref_id), "kind": current.kind},
                 cause=exc,
             ) from exc
 
@@ -279,17 +306,18 @@ class Vault(Generic[H, V]):
         """12-hex preview of the value. Safe to log / show to the agent.
 
         For local values, returns the cached fingerprint or computes it from
-        `bytes(value)` if possible. For resolver-backed values, forces a
+        ``bytes(value)`` if possible. For resolver-backed values, forces a
         resolve + hashes the result. Subclasses may override for non-byte
         values (e.g. file refs compute from path-read).
         """
+        cls = type(self)
         with self._lock:
             entry = self._entries.get(ref.ref_id)
             if entry is None:
-                raise VaultError(
+                raise cls._err(
+                    "not_found",
                     f"unknown handle: {ref.ref_id}",
-                    code="carl.vault.not_found",
-                    context={"ref_id": str(ref.ref_id)},
+                    {"ref_id": str(ref.ref_id)},
                 )
             if entry.fingerprint_hex is not None:
                 return entry.fingerprint_hex
@@ -305,10 +333,10 @@ class Vault(Generic[H, V]):
                 if (e := self._entries.get(ref.ref_id)) is not None:
                     e.fingerprint_hex = fp
             return fp
-        raise VaultError(
+        raise cls._err(
+            "unsupported_fingerprint",
             f"value for {ref.ref_id} is not byte-like; subclass must override fingerprint_of",
-            code="carl.vault.unsupported_fingerprint",
-            context={"ref_id": str(ref.ref_id), "type": type(value).__name__},
+            {"ref_id": str(ref.ref_id), "type": type(value).__name__},
         )
 
     def exists(self, ref: H) -> bool:
@@ -363,7 +391,7 @@ class Vault(Generic[H, V]):
         if not callable(resolver):
             raise ValidationError(
                 f"resolver for kind={kind!r} must be callable",
-                code="carl.vault.invalid_resolver",
+                code=type(self)._err_code("invalid_resolver"),
                 context={"kind": kind, "type": type(resolver).__name__},
             )
         with self._lock:
@@ -383,31 +411,29 @@ class Vault(Generic[H, V]):
 
     def _lookup_live(self, ref: H) -> tuple[_VaultEntry[V], H]:
         """Find the (entry, stored_ref) pair or raise. Handles expiry self-clean."""
+        cls = type(self)
         with self._lock:
             entry = self._entries.get(ref.ref_id)
             current = self._refs.get(ref.ref_id)
             if entry is None or current is None:
-                raise VaultError(
+                raise cls._err(
+                    "not_found",
                     f"unknown handle: {ref.ref_id}",
-                    code="carl.vault.not_found",
-                    context={"ref_id": str(ref.ref_id)},
+                    {"ref_id": str(ref.ref_id)},
                 )
             if entry.revoked:
-                raise VaultError(
+                raise cls._err(
+                    "revoked",
                     f"handle {ref.ref_id} was revoked",
-                    code="carl.vault.revoked",
-                    context={"ref_id": str(ref.ref_id)},
+                    {"ref_id": str(ref.ref_id)},
                 )
             if current.is_expired():
                 entry.revoked = True
                 entry.resolved_cache = None
                 entry.resolved_at = None
-                raise VaultError(
+                raise cls._err(
+                    "expired",
                     f"handle {ref.ref_id} has expired",
-                    code="carl.vault.expired",
-                    context={
-                        "ref_id": str(ref.ref_id),
-                        "ttl_s": current.ttl_s,
-                    },
+                    {"ref_id": str(ref.ref_id), "ttl_s": current.ttl_s},
                 )
             return entry, current

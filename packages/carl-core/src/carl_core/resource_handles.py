@@ -1,44 +1,26 @@
-"""Resource-handle primitives (v0.16.1 — Stage C-2).
+"""Resource-handle primitives (v0.17) — specialization of ``Vault[ResourceRef, Any]``.
 
-Extends the capability-constrained handle runtime to long-lived external
-resources: browser pages, subprocess groups, MCP server connections,
-SGLang rollout engines — anything that's stateful, addressable, and
-closeable.
+Long-lived external resources (browser pages, subprocess groups, MCP sessions,
+SGLang rollout engines) addressed by opaque :class:`ResourceRef` handles.
+Lifecycle inherited from :class:`carl_core.vault.Vault` — the only specialization
+is that ``revoke`` runs a caller-supplied ``closer(backend)`` callback so
+e.g. a browser page gets ``.close()``'d and a subprocess gets ``.terminate()``'d
+without the vault needing to know about either library.
 
-Shape mirrors :class:`carl_core.secrets.SecretRef` +
-:class:`carl_core.data_handles.DataRef` by design. One grammar across all
-three; Carl doesn't need to learn three mental models.
-
-What lives here (carl-core, dependency-free):
-
-* :class:`ResourceRef` — frozen handle with kind / uri / provider /
-  pid-or-session-id / ttl metadata.
-* :class:`ResourceVault` — thread-safe registry. Stores the opaque
-  "backend" object (e.g. a Playwright Page, a subprocess.Popen) behind
-  the ref but never serializes it.
-* Error codes under ``carl.resource.*``:
-
-  - ``carl.resource.not_found`` — handle ref_id unknown
-  - ``carl.resource.revoked`` — explicitly closed
-  - ``carl.resource.expired`` — TTL elapsed
-  - ``carl.resource.invalid_kind`` — invalid kind
-  - ``carl.resource.backend_error`` — backend raised during close
-
-Above in carl_studio: ``BrowserToolkit``, ``SubprocessToolkit``, etc.
-consume this vault; they own the optional deps (Playwright, psutil) and
-the agent-callable method surfaces.
+Resolver chain is inherited. Future adapters (e.g. MCP-session resolvers, remote
+SGLang endpoints) register resolvers for their kind without touching this file.
 """
 
 from __future__ import annotations
 
-import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from carl_core.errors import CARLError, ValidationError
+from carl_core.errors import ValidationError
+from carl_core.vault import Vault, VaultError
 
 
 __all__ = [
@@ -50,12 +32,12 @@ __all__ = [
 
 
 ResourceKind = Literal[
-    "browser_page",     # a Playwright / puppeteer page
-    "browser_context",  # a Playwright browser context (cookies+storage)
-    "subprocess",       # a spawned OS subprocess
-    "mcp_session",      # a live MCP stdio / SSE session
-    "rollout_engine",   # an SGLang / TRL rollout engine reference
-    "remote_agent",     # an A2A remote-agent session handle
+    "browser_page",
+    "browser_context",
+    "subprocess",
+    "mcp_session",
+    "rollout_engine",
+    "remote_agent",
 ]
 _RESOURCE_KINDS: frozenset[str] = frozenset(
     {
@@ -69,19 +51,18 @@ _RESOURCE_KINDS: frozenset[str] = frozenset(
 )
 
 
-class ResourceError(CARLError):
-    """Base for all ``carl.resource.*`` errors."""
+class ResourceError(VaultError):
+    """Base for ``carl.resource.*`` errors.
+
+    Inherits from :class:`VaultError` so generic ``except VaultError`` catches
+    both. Direct ``except ResourceError`` continues to work as before.
+    """
 
     code = "carl.resource"
 
 
 class ResourceRef(BaseModel):
-    """Opaque handle to a long-lived resource held in a :class:`ResourceVault`.
-
-    The handle carries provider metadata (e.g. ``provider="playwright"``,
-    ``provider="subprocess"``) so toolkit layers can dispatch on it, but
-    the backend object itself never crosses a tool-call boundary.
-    """
+    """Opaque handle to a long-lived resource held in a :class:`ResourceVault`."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -98,7 +79,7 @@ class ResourceRef(BaseModel):
         "for subprocesses, 'mcp://<server>' for MCP.",
     )
     labels: dict[str, str] = Field(
-        default_factory=dict,
+        default_factory=lambda: {},  # type: dict[str, str]
         description="Free-form tags (e.g. {'role': 'login', 'tenant': 'acme'}). "
         "Informational — not consulted by lifecycle logic.",
     )
@@ -134,29 +115,13 @@ class ResourceRef(BaseModel):
         }
 
 
-class _ResourceEntry:
-    __slots__ = ("backend", "closer", "revoked")
+class ResourceVault(Vault[ResourceRef, Any]):
+    """Privileged vault for long-lived backends with caller-supplied closers."""
 
-    def __init__(self, backend: Any, closer: Any) -> None:
-        self.backend: Any = backend
-        self.closer: Any = closer  # optional callable(backend) -> None
-        self.revoked: bool = False
-
-
-class ResourceVault:
-    """Thread-safe KV of ``ResourceRef → backend``.
-
-    The backend is stored opaque. Toolkit layers retrieve the backend via
-    :meth:`resolve` (privileged) and dispatch on it. Closing a ref runs
-    the caller-supplied ``closer`` (if provided) so e.g. a browser page
-    gets ``.close()``'d and a subprocess gets ``.terminate()``'d on
-    revoke — without the vault knowing about either library.
-    """
-
-    def __init__(self) -> None:
-        self._entries: dict[uuid.UUID, _ResourceEntry] = {}
-        self._refs: dict[uuid.UUID, ResourceRef] = {}
-        self._lock = threading.RLock()
+    _ref_class = ResourceRef
+    _require_privileged_resolve = True
+    _error_prefix: ClassVar[str] = "carl.resource"
+    _error_class: ClassVar[type[VaultError]] = ResourceError
 
     def put(
         self,
@@ -169,25 +134,18 @@ class ResourceVault:
         labels: dict[str, str] | None = None,
         ttl_s: int | None = None,
     ) -> ResourceRef:
-        """Register a resource. ``closer`` (if any) runs on :meth:`revoke`.
+        """Register a resource + optional closer callback.
 
-        ``closer`` takes the backend and returns None; exceptions raised
-        during close get swallowed into :class:`ResourceError` with code
-        ``carl.resource.backend_error`` so one broken resource doesn't
-        kill the vault.
+        ``closer(backend) -> None`` (if given) runs at :meth:`revoke` time.
+        Closer exceptions are surfaced as ``carl.resource.backend_error``.
         """
         if kind not in _RESOURCE_KINDS:
             raise ValidationError(
                 f"invalid resource kind: {kind!r}",
-                code="carl.resource.invalid_kind",
+                code=type(self)._err_code("invalid_kind"),
                 context={"kind": kind, "valid": sorted(_RESOURCE_KINDS)},
             )
-        if ttl_s is not None and ttl_s < 1:
-            raise ValidationError(
-                f"ttl_s must be a positive int or None, got {ttl_s!r}",
-                code="carl.resource.invalid_kind",
-                context={"ttl_s": ttl_s},
-            )
+        self._validate_ttl(ttl_s)
 
         ref = ResourceRef(
             kind=kind,
@@ -196,99 +154,43 @@ class ResourceVault:
             labels=dict(labels or {}),
             ttl_s=ttl_s,
         )
-        entry = _ResourceEntry(backend=backend, closer=closer)
-        with self._lock:
-            self._entries[ref.ref_id] = entry
-            self._refs[ref.ref_id] = ref
+        self.put_value(ref, backend)
+        # Store the closer on the entry's extras so revoke() can invoke it.
+        if closer is not None:
+            with self._lock:
+                self._entries[ref.ref_id].extra["closer"] = closer
         return ref
 
-    def resolve(self, ref: ResourceRef, *, privileged: bool = False) -> Any:
-        """Return the backend object for a ref. Privileged-only.
-
-        Toolkit layers call this with ``privileged=True`` when they're
-        about to act against the backend. The agent never gets a backend
-        object directly; the toolkit mediates.
-        """
-        if not privileged:
-            raise ResourceError(
-                "ResourceVault.resolve() requires privileged=True.",
-                code="carl.resource.unauthorized_resolve",
-                context={"ref_id": str(ref.ref_id)},
-            )
-        with self._lock:
-            entry = self._entries.get(ref.ref_id)
-            current = self._refs.get(ref.ref_id)
-            if entry is None or current is None:
-                raise ResourceError(
-                    f"unknown resource handle: {ref.ref_id}",
-                    code="carl.resource.not_found",
-                    context={"ref_id": str(ref.ref_id)},
-                )
-            if entry.revoked:
-                raise ResourceError(
-                    f"resource handle {ref.ref_id} was revoked",
-                    code="carl.resource.revoked",
-                    context={"ref_id": str(ref.ref_id)},
-                )
-            if current.is_expired():
-                self._close_entry(entry)
-                raise ResourceError(
-                    f"resource handle {ref.ref_id} has expired",
-                    code="carl.resource.expired",
-                    context={"ref_id": str(ref.ref_id)},
-                )
-            return entry.backend
-
     def revoke(self, ref: ResourceRef) -> bool:
-        """Close + invalidate a handle. Runs the registered closer if any."""
+        """Close + invalidate a handle. Runs the registered closer if any.
+
+        Overrides the base to run `extra["closer"](backend)` before marking
+        the entry revoked. Closer exceptions become ``carl.resource.backend_error``.
+        The base's idempotency semantics are preserved: revoking an
+        already-revoked or unknown handle returns False without raising.
+        """
+        cls = type(self)
         with self._lock:
             entry = self._entries.get(ref.ref_id)
             if entry is None or entry.revoked:
                 return False
-            self._close_entry(entry)
-        return True
+            closer = entry.extra.get("closer")
+            backend = entry.value
+            # Mark revoked FIRST so re-entrant closer calls don't loop.
+            entry.revoked = True
+            entry.resolved_cache = None
+            entry.resolved_at = None
 
-    def exists(self, ref: ResourceRef) -> bool:
-        with self._lock:
-            entry = self._entries.get(ref.ref_id)
-            if entry is None or entry.revoked:
-                return False
-        return not ref.is_expired()
+        if closer is None:
+            return True
 
-    def list_refs(self) -> list[ResourceRef]:
-        now = datetime.now(timezone.utc)
-        with self._lock:
-            refs: list[ResourceRef] = []
-            for ref_id, ref in self._refs.items():
-                entry = self._entries.get(ref_id)
-                if entry is None or entry.revoked:
-                    continue
-                if ref.is_expired(now=now):
-                    continue
-                refs.append(ref)
-            return refs
-
-    def __len__(self) -> int:
-        with self._lock:
-            return sum(
-                1
-                for ref_id, ref in self._refs.items()
-                if (entry := self._entries.get(ref_id)) is not None
-                and not entry.revoked
-                and not ref.is_expired()
-            )
-
-    def _close_entry(self, entry: _ResourceEntry) -> None:
-        """Mark revoked + run closer. Closer exceptions become ResourceError."""
-        entry.revoked = True
-        if entry.closer is None:
-            return
         try:
-            entry.closer(entry.backend)
+            closer(backend)
         except Exception as exc:
-            raise ResourceError(
+            raise cls._err(
+                "backend_error",
                 f"resource closer raised: {type(exc).__name__}: {exc}",
-                code="carl.resource.backend_error",
-                context={"exception_type": type(exc).__name__},
+                {"exception_type": type(exc).__name__},
                 cause=exc,
             ) from exc
+        return True
