@@ -139,31 +139,60 @@ def admin_status() -> dict[str, str]:
 
 
 def load_private(module_name: str) -> Any:
-    """Dynamically import a module from the private CARL repo.
+    """Dynamically import a module from the private CARL runtime.
 
-    Only succeeds when is_admin() returns True.
-    Modules live in wheattoast11/carl-private as dataset files.
+    Resolution order (v0.17):
+
+    1. **Local ``resonance`` package.** Terminals-team machines have the
+       private repo at ``/Users/.../models/resonance/`` pip-installed
+       editable. Try ``importlib.import_module(f"resonance.{module_name}")``
+       first — fastest path, works offline, supports dotted submodules
+       (e.g. ``"signals.constitutional"``).
+    2. **HuggingFace dataset fallback.** For distributed access, download
+       a single ``.py`` file from ``wheattoast11/carl-private``. Works only
+       for flat module names (no dots) since the dataset has flat files.
+
+    Only succeeds when :func:`is_admin` returns True. Without admin unlock
+    raises ``ImportError`` with access instructions.
 
     Usage in stubs::
 
         from carl_studio.admin import load_private, is_admin
         if is_admin():
-            mod = load_private("slot")          # downloads slot.py
-            impl = mod.SLOTOptimizerImpl(...)
+            mod = load_private("signals.constitutional")  # local resonance
+            impl = mod.ConstitutionalLedgerImpl(...)
         else:
-            raise ImportError("Requires admin unlock or terminals-runtime")
+            raise ImportError("Requires admin unlock or resonance runtime")
     """
     if not is_admin():
         raise ImportError(
             f"Module '{module_name}' is in the private CARL runtime. "
-            "Either install terminals-runtime or unlock admin mode: 'carl admin unlock'. "
-            "Contact support@terminals.tech for access."
+            "Either install the resonance package or unlock admin mode: "
+            "'carl admin unlock'. Contact support@terminals.tech for access."
+        )
+
+    # (1) Fast path — local resonance package
+    try:
+        import importlib
+
+        return importlib.import_module(f"resonance.{module_name}")
+    except ImportError:
+        # Fall through to HF dataset path
+        pass
+
+    # (2) HF dataset fallback — flat module names only
+    if "." in module_name:
+        raise ImportError(
+            f"Module '{module_name}' requires the local resonance package. "
+            f"The HuggingFace dataset fallback only supports flat module names "
+            f"(no dotted paths). Install the resonance package for access."
         )
     try:
-        from huggingface_hub import hf_hub_download
         import importlib.util
 
-        path = hf_hub_download(
+        from huggingface_hub import hf_hub_download
+
+        path: str = hf_hub_download(  # pyright: ignore[reportUnknownVariableType]
             repo_id=_PRIVATE_REPO,
             filename=f"{module_name}.py",
             repo_type="dataset",
@@ -180,3 +209,76 @@ def load_private(module_name: str) -> Any:
         raise ImportError(
             f"Failed to load private module '{module_name}' from {_PRIVATE_REPO}: {exc}"
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# AdminToken — capability proof of admin-gate traversal
+# ---------------------------------------------------------------------------
+#
+# The admin-gate seam (v0.17 plan §4.A8 / §9) wants a way for private runtime
+# modules to register proprietary resolvers into a public `Vault` without
+# carl-studio needing to import `resonance` at module load. Pattern:
+#
+#   1. `resonance.signals.foo` calls `admin.issue_token()` on import.
+#   2. It passes the token + resolver to `vault.register_runtime_resolver`.
+#   3. The public Vault class verifies the token is current + hardware-matches.
+#
+# This is a VISIBILITY guard, not a cryptographic one. Holding an AdminToken
+# means "I went through the admin gate at this point in time on this machine."
+# The real enforcement is the CI moat-boundary check (F7).
+
+
+from dataclasses import dataclass  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+
+@dataclass(frozen=True)
+class AdminToken:
+    """Proof of admin-gate traversal. Issued by :func:`issue_token` only.
+
+    Carry this opaque value to private-runtime entry points (e.g.
+    ``Vault.register_runtime_resolver``) as a visibility marker that the
+    registration flows from an admin-unlocked context. Tokens expire after
+    one hour to bound replay damage if a token leaks.
+    """
+
+    issued_at: datetime
+    hw_fingerprint_prefix: str  # first 12 hex of the current hw fingerprint
+    _max_age_s: int = 3600  # 1 hour
+
+    def is_expired(self, *, now: datetime | None = None) -> bool:
+        current = now if now is not None else datetime.now(timezone.utc)
+        return current >= self.issued_at + timedelta(seconds=self._max_age_s)
+
+    def verify(self) -> None:
+        """Raise :class:`ImportError` if the token is stale or mismatches the
+        current hardware fingerprint.
+        """
+        if self.is_expired():
+            raise ImportError(
+                "AdminToken has expired (>1h old); re-issue via admin.issue_token()"
+            )
+        current_fp = _hw_fingerprint().hex()[:12]
+        if self.hw_fingerprint_prefix != current_fp:
+            raise ImportError(
+                "AdminToken hardware fingerprint mismatch — token was issued "
+                "on a different machine. Re-issue via admin.issue_token()."
+            )
+
+
+def issue_token() -> AdminToken:
+    """Issue a fresh :class:`AdminToken`. Only succeeds when admin unlocked.
+
+    Raises :class:`ImportError` if the admin gate is locked. Expected caller
+    is the private runtime (``resonance``) at its own module-import time —
+    the token is handed to the vault's ``register_runtime_resolver`` entry
+    point as proof the registration came from an admin-gated context.
+    """
+    if not is_admin():
+        raise ImportError(
+            "issue_token() requires admin unlock. Run 'carl admin unlock' first."
+        )
+    return AdminToken(
+        issued_at=datetime.now(timezone.utc),
+        hw_fingerprint_prefix=_hw_fingerprint().hex()[:12],
+    )

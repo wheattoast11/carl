@@ -397,6 +397,51 @@ class Vault(Generic[H, V]):
         with self._lock:
             self._resolvers[kind] = resolver
 
+    def register_runtime_resolver(
+        self,
+        kind: str,
+        resolver: Resolver,
+        *,
+        admin_token: Any | None = None,
+    ) -> None:
+        """Register a resolver sourced from the private runtime.
+
+        Admin-gate seam for proprietary backends. Functionally identical to
+        :meth:`register_resolver`; the separate entry point signals intent
+        and accepts an optional ``admin_token`` that this vault verifies
+        via a duck-typed ``.verify()`` call (so ``carl-core`` stays
+        independent of ``carl_studio.admin``).
+
+        Typical call site — inside the private runtime module::
+
+            from carl_studio.admin import issue_token
+            token = issue_token()  # raises if admin gate locked
+            vault.register_runtime_resolver(
+                "hardware-attested",
+                hardware_resolver,
+                admin_token=token,
+            )
+
+        The real moat enforcement lives in CI: ``carl-studio`` and
+        ``carl-core`` must not import ``resonance`` / ``terminals_runtime``
+        at module load. This method is documentation + a visibility
+        touchpoint — it does not grant access the caller didn't already
+        have via :meth:`register_resolver`.
+        """
+        if admin_token is not None:
+            # Duck-typed verify() — AdminToken.verify() raises ImportError on
+            # stale / mismatched tokens. We don't type-narrow because
+            # carl-core doesn't know AdminToken's type.
+            verify = getattr(admin_token, "verify", None)
+            if not callable(verify):
+                raise ValidationError(
+                    "admin_token must expose a callable .verify() method",
+                    code=type(self)._err_code("invalid_admin_token"),
+                    context={"type": type(admin_token).__name__},
+                )
+            verify()
+        self.register_resolver(kind, resolver)
+
     def unregister_resolver(self, kind: str) -> bool:
         """Remove a registered resolver. Returns True iff one was registered."""
         with self._lock:
