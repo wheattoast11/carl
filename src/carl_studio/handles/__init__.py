@@ -21,21 +21,22 @@ is the ``*Toolkit`` classes themselves, not every internal helper.
 
 from __future__ import annotations
 
-from carl_studio.handles.bundle import (
-    HandleRuntimeBundle,
-    make_handler,
-)
 from carl_studio.handles.data import DataToolkit, DataToolkitError
 from carl_studio.handles.subprocess import (
     SubprocessToolkit,
     SubprocessToolkitError,
 )
 
+# HandleRuntimeBundle + make_handler live in carl_studio.handles.bundle but
+# are NOT re-exported here. The bundle transitively imports the full CU
+# stack (anthropic_compat + browser) which creates a circular-import risk
+# with carl_studio.session (Session also uses the CU stack). Users who want
+# the bundle import it explicitly: ``from carl_studio.handles.bundle import
+# HandleRuntimeBundle``. Session is the preferred top-level API post-v0.17.
+
 __all__ = [
     "DataToolkit",
     "DataToolkitError",
     "SubprocessToolkit",
     "SubprocessToolkitError",
-    "HandleRuntimeBundle",
-    "make_handler",
 ]
