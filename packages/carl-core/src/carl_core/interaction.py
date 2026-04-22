@@ -100,6 +100,34 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
+def _step_content_hash(step_dict: dict[str, Any]) -> str:
+    """Compute sha256 over the canonical JSON of ``step_dict``.
+
+    The input MUST NOT already contain a ``content_hash`` key — callers pass
+    the body they intend to embed next to the hash. 64 lowercase hex chars.
+    """
+    import hashlib
+
+    canonical = json.dumps(step_dict, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def verify_step_content_hash(step_dict: dict[str, Any]) -> bool:
+    """Recompute ``content_hash`` from ``step_dict`` and compare with stored.
+
+    Returns True iff the stored hash matches a fresh recompute over the
+    rest of the dict. Missing ``content_hash`` key returns False.
+
+    Tampered-after-serialization detection: any mutation to the step body
+    that lands in the JSONL will fail verification.
+    """
+    stored = step_dict.get("content_hash")
+    if not isinstance(stored, str):
+        return False
+    body = {k: v for k, v in step_dict.items() if k != "content_hash"}
+    return _step_content_hash(body) == stored
+
+
 def _short_sha256(payload: str) -> str:
     """Return the first 12 hex chars of sha256(payload) — audit fingerprint.
 
@@ -241,6 +269,11 @@ class Step:
         # stay byte-identical (no empty key proliferation in the jsonl).
         if self.eml_tree is not None:
             d["eml_tree"] = _json_safe(self.eml_tree)
+        # v0.17 D3: content-addressed step. Hash over the final serialized
+        # + secret-scrubbed payload so re-serializing produces the same
+        # hash. Append AFTER the serialization so the hash itself is not
+        # part of the hashed preimage (standard content-addressing pattern).
+        d["content_hash"] = _step_content_hash(d)
         return d
 
 
@@ -446,6 +479,15 @@ class InteractionChain:
                 )
             )
         return chain
+
+
+# Public surface for the content-hash verifier (consumers + tests).
+__all__ = [
+    "ActionType",
+    "Step",
+    "InteractionChain",
+    "verify_step_content_hash",
+]
 
 
 # ---------------------------------------------------------------------------
