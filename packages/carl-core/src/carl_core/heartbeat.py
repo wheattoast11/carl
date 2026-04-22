@@ -52,13 +52,34 @@ This is pure functional code: `heartbeat()` takes a state and returns the
 next state. No module-level state, no hidden side effects. The only
 external effect is the `chain_appender` callback (which may, e.g., persist
 a step to an InteractionStore) — and that is a parameter.
+
+**Public / private split (v0.17 moat extraction).**
+
+The theorem + API are public (paper content, shared downstream contract).
+The coefficient-pinned reference implementation of the observer functions
+(``_observe_phi`` / ``_observe_kuramoto`` / ``_observe_lyapunov_proxy``)
+and their orchestration via ``heartbeat()`` / ``run_heartbeat()`` moved to
+``resonance.signals.heartbeat`` for v0.17. When the admin gate unlocks and
+the private runtime resolves, ``heartbeat()`` delegates there. Without
+admin unlock, ``heartbeat()`` falls through to a PEDAGOGICAL simple-
+reference implementation whose observers are sufficient to run the loop
+end-to-end and preserve the theorem's structural invariants (bounded Φ,
+bounded R, neutral Lyapunov at rest) but whose coefficients are **not
+tuned** against the paper's benchmark suite.
+
+Simple-reference callers get a working loop + working theorem geometry.
+Competitor reproductions built on the simple-reference path will not
+match the benchmark numbers — production dynamics live in the private
+runtime.
 """
 from __future__ import annotations
 
 import math
 import time
 from dataclasses import dataclass, replace
-from typing import Any, Callable, Protocol
+from importlib import import_module
+from types import ModuleType
+from typing import Any, Callable, Protocol, cast
 
 import numpy as np
 from numpy.typing import NDArray
@@ -162,7 +183,7 @@ class ChainAppender(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# Pure-functional building blocks
+# Pure-functional building blocks — public, theorem-derived.
 # ---------------------------------------------------------------------------
 
 
@@ -177,6 +198,10 @@ def adam_step(
     observable fields (phi_mean, kuramoto_R, lyapunov_proxy,
     chain_head_hash, wall_time_ns) are left at their incoming values and
     should be refreshed by `heartbeat()` which owns the observation side.
+
+    Canonical Kingma & Ba 2014 recurrence — kept public since Adam itself
+    is not proprietary; the moat is in which coherence observables feed
+    the gradient, not the optimizer.
     """
     g = np.asarray(grad, dtype=np.float64).reshape(state.weights.shape)
     t = state.step + 1
@@ -195,47 +220,55 @@ def adam_step(
     )
 
 
-def _observe_phi(weights: NDArray[np.float64]) -> float:
-    """Bounded proxy for the per-tick coherence field Φ.
+# ---------------------------------------------------------------------------
+# Pedagogical simple-reference observers.
+#
+# These preserve the theorem's structural invariants (bounded Φ, bounded R,
+# neutral Lyapunov at rest) so the public API delivers a working loop
+# out-of-the-box. They are INTENTIONALLY un-tuned — callers wanting
+# benchmark-accurate dynamics unlock the admin gate to route through
+# ``resonance.signals.heartbeat.reference_heartbeat``.
+# ---------------------------------------------------------------------------
 
-    A weight-norm-based scalar in (0, 1) suffices for tests and for a cheap
-    default observable. Production callers will pass a richer probe via
-    the `grad_fn` closure; this keeps the loop self-contained when they
-    don't.
+
+def _simple_observe_phi(weights: NDArray[np.float64]) -> float:
+    """Pedagogical reference — coefficients un-tuned.
+
+    For production dynamics install the private runtime. This simple
+    bounded proxy tracks the shape the theorem requires (smooth, bounded,
+    strictly positive) without the specific calibration the paper's
+    benchmark suite relies on.
     """
     n = float(np.linalg.norm(weights))
     return 1.0 / (1.0 + n * n)
 
 
-def _observe_kuramoto(weights: NDArray[np.float64]) -> float:
-    """Bounded proxy for the Kuramoto order parameter R ∈ [0, 1].
+def _simple_observe_kuramoto(weights: NDArray[np.float64]) -> float:
+    """Pedagogical reference — coefficients un-tuned.
 
-    Uses the cosine of pairwise-aligned weight phases; for a 1D or 2D test
-    signal this gives a stable R that reacts to weight rotation. Clamps into
-    [0, 1].
+    For production dynamics install the private runtime. Computes a
+    bounded Kuramoto order parameter R ∈ [0, 1] via pairwise-phase
+    aggregation — enough for the theorem to be structurally witnessable,
+    not enough for benchmark-accurate edge-band detection.
     """
     w = np.asarray(weights, dtype=np.float64).reshape(-1)
     if w.size < 2:
         return 1.0
-    # Normalise to phase-like values via atan2 on successive pairs; for a
-    # single-vector heartbeat this is a cheap surrogate for channel-wise
-    # cross-coherence.
     phases = np.angle(w[:-1] + 1j * w[1:])
     R = float(abs(np.mean(np.exp(1j * phases))))
     return max(0.0, min(1.0, R))
 
 
-def _observe_lyapunov_proxy(
+def _simple_observe_lyapunov_proxy(
     grad_prev: NDArray[np.float64] | None,
     grad_curr: NDArray[np.float64],
 ) -> float:
-    """Single-step Lyapunov proxy: sign-aligned log-ratio of gradient norms.
+    """Pedagogical reference — coefficients un-tuned.
 
-    Returns 0.0 when the norms are equal (neutral / edge-of-chaos),
-    positive when expanding, negative when contracting. In ι's framing this
-    approximates the dominant Lyapunov exponent along the trajectory — at
-    the flat-landscape edge it sits near zero, which is exactly the
-    regime the heartbeat theorem targets.
+    For production dynamics install the private runtime. Returns 0.0 for
+    the initial tick and a log-ratio estimate thereafter; sufficient to
+    exercise the ``|λ| < edge_band`` gate shape but not tuned against the
+    paper's benchmark suite.
     """
     if grad_prev is None:
         return 0.0
@@ -244,6 +277,47 @@ def _observe_lyapunov_proxy(
     if n_prev < 1e-12 or n_curr < 1e-12:
         return 0.0
     return float(math.log(n_curr / n_prev))
+
+
+# ---------------------------------------------------------------------------
+# Private-runtime resolution — lazy, admin-gated.
+# ---------------------------------------------------------------------------
+
+
+def _load_private_impl() -> ModuleType | None:
+    """Resolve the private ``resonance.signals.heartbeat`` implementation.
+
+    Uses a runtime import of ``carl_studio.admin`` to invoke ``load_private``.
+    carl-core cannot import carl-studio at module-load time (carl-core is
+    upstream), so this dance stays inside a function body.
+
+    Returns the private module on admin unlock, or ``None`` when the gate
+    is locked. Any underlying ImportError is caught — the public façade
+    then falls through to the pedagogical simple-reference path.
+    """
+    try:
+        admin = import_module("carl_studio.admin")
+    except ImportError:
+        return None
+    try:
+        is_admin_fn = getattr(admin, "is_admin", None)
+        load_private_fn = getattr(admin, "load_private", None)
+        if is_admin_fn is None or load_private_fn is None:
+            return None
+        if not is_admin_fn():
+            return None
+        mod = load_private_fn("signals.heartbeat")
+        return cast(ModuleType, mod)
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Public façade — delegates to private impl when available, else uses
+# the pedagogical simple-reference path.
+# ---------------------------------------------------------------------------
 
 
 def heartbeat(
@@ -260,31 +334,40 @@ def heartbeat(
     `chain_appender` (which the caller controls). The chain_appender is
     given the *pre-update* state and the gradient used for the update, so
     a persistent store can witness the derivative that shaped the step.
+
+    With the private resonance runtime resolvable (admin-unlocked host),
+    delegates to ``resonance.signals.heartbeat.reference_heartbeat`` for
+    benchmark-tuned observers. Without it, runs a pedagogical simple-
+    reference path that preserves the theorem's invariants but lacks the
+    paper's calibrated coefficients.
     """
+    priv = _load_private_impl()
+    if priv is not None:
+        ref = getattr(priv, "reference_heartbeat", None)
+        if callable(ref):
+            return cast(
+                HeartbeatState,
+                ref(state, cfg, grad_fn, chain_appender),
+            )
+
+    # Pedagogical reference — coefficients un-tuned. For production
+    # dynamics, install the private runtime.
     grad = np.asarray(
         grad_fn(state.weights, state.phi_mean, state.kuramoto_R),
         dtype=np.float64,
     ).reshape(state.weights.shape)
 
-    # Lyapunov proxy wants a previous-gradient reference; we reconstruct it
-    # from the old adam_m (bias-corrected) which sits in the same geometry.
     t = state.step
     if t > 0:
         m_hat_prev = state.adam_m / (1.0 - cfg.beta1 ** max(t, 1))
-        lyap = _observe_lyapunov_proxy(m_hat_prev, grad)
+        lyap = _simple_observe_lyapunov_proxy(m_hat_prev, grad)
     else:
         lyap = 0.0
 
-    # Emit the pre-update step to the interaction chain (durable witness).
-    # The appender returns the next chain-head hash (idempotent string).
     next_head = chain_appender(state, grad)
-
-    # Adam step yields new weights + new (m, v).
     post_adam = adam_step(state, grad, cfg)
-
-    # Refresh observables on the post-update weights.
-    phi = _observe_phi(post_adam.weights)
-    R = _observe_kuramoto(post_adam.weights)
+    phi = _simple_observe_phi(post_adam.weights)
+    R = _simple_observe_kuramoto(post_adam.weights)
 
     return replace(
         post_adam,
@@ -303,6 +386,8 @@ def is_resonant(state: HeartbeatState, cfg: HeartbeatConfig) -> bool:
     condition failing signals a collapse of the wavefunction — the loop
     has left the resonant band and is either damping (|λ| << 0) or
     diverging (|λ| >> 0) or decohering (R < τ).
+
+    Simple truth-table test; kept public — no benchmarked coefficients.
     """
     return (
         abs(state.lyapunov_proxy) < cfg.edge_band
@@ -326,7 +411,29 @@ def run_heartbeat(
     * ``chain_appender`` returns an empty string (stop-signal).
 
     Returns the full trajectory, including the initial state at index 0.
+
+    With the private resonance runtime resolvable, delegates to
+    ``resonance.signals.heartbeat.reference_run_heartbeat`` so both the
+    observer math AND the loop driver come from the same (private) source
+    of truth. Without it, this public driver composes :func:`heartbeat`
+    (which itself falls through to the pedagogical path).
     """
+    priv = _load_private_impl()
+    if priv is not None:
+        ref = getattr(priv, "reference_run_heartbeat", None)
+        if callable(ref):
+            return cast(
+                list[HeartbeatState],
+                ref(
+                    initial,
+                    cfg,
+                    grad_fn,
+                    chain_appender,
+                    max_ticks,
+                    halt_on_collapse,
+                ),
+            )
+
     trajectory: list[HeartbeatState] = [initial]
     state = initial
     ticks = 0
@@ -346,7 +453,7 @@ def run_heartbeat(
 
 
 # ---------------------------------------------------------------------------
-# Fourier analysis — heartbeat resonance detection
+# Fourier analysis — heartbeat resonance detection (public, plain FFT).
 # ---------------------------------------------------------------------------
 
 
@@ -360,6 +467,11 @@ def detect_resonant_modes(trajectory: list[HeartbeatState]) -> dict[str, Any]:
     * ``is_standing_wave`` — True iff the dominant period is finite AND the
       trajectory is bounded (peak-to-peak within ±3·std of the mean), i.e.
       NOT monotone drift.
+
+    Plain FFT over a bounded-signal test; kept public — no benchmarked
+    coefficients. The trajectory's phi_mean samples may come from either
+    the private or the pedagogical observer — the FFT geometry is the
+    same either way.
     """
     if len(trajectory) < 4:
         return {
@@ -406,7 +518,10 @@ def detect_resonant_modes(trajectory: list[HeartbeatState]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Convenience constructor
+# Convenience constructor — uses the pedagogical observers so that
+# ``initial_state`` always works, even without admin unlock. Subsequent
+# ticks through ``heartbeat()`` will use the private observers when they
+# resolve.
 # ---------------------------------------------------------------------------
 
 
@@ -418,9 +533,11 @@ def initial_state(
 ) -> HeartbeatState:
     """Build a fresh `HeartbeatState` from a weight vector.
 
-    Zero-initialises Adam moments, observes phi/R from the weights, and
-    stamps wall_time_ns. Use this once at loop start; the loop's own
-    `heartbeat` handles every subsequent tick.
+    Zero-initialises Adam moments, observes phi/R from the weights using
+    the pedagogical simple-reference observers, and stamps wall_time_ns.
+    Use this once at loop start; the loop's own ``heartbeat`` handles
+    every subsequent tick (and will route through the private observers
+    when the admin gate unlocks).
     """
     w = np.asarray(weights, dtype=np.float64).copy()
     return HeartbeatState(
@@ -428,8 +545,8 @@ def initial_state(
         adam_m=np.zeros_like(w),
         adam_v=np.zeros_like(w),
         step=0,
-        phi_mean=_observe_phi(w),
-        kuramoto_R=_observe_kuramoto(w),
+        phi_mean=_simple_observe_phi(w),
+        kuramoto_R=_simple_observe_kuramoto(w),
         lyapunov_proxy=0.0,
         chain_head_hash=chain_head_hash,
         wall_time_ns=wall_time_ns if wall_time_ns is not None else time.time_ns(),

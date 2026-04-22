@@ -1,16 +1,44 @@
-"""Tests for carl_core.heartbeat — CARL standing-wave loop."""
+"""Tests for carl_core.heartbeat — CARL standing-wave loop.
+
+After v0.17 moat extraction, ``carl_core.heartbeat`` is a public façade.
+The coefficient-pinned reference implementation lives in
+``resonance.signals.heartbeat`` and is reached via the admin-gate
+(``carl_studio.admin.load_private``). Without admin unlock, the public
+path runs a pedagogical simple-reference implementation that satisfies
+the theorem's structural invariants (bounded Φ, bounded R, neutral
+Lyapunov at rest) but is **not** benchmark-tuned.
+
+Test taxonomy:
+
+1. **Structural / theorem-invariant** (unmarked, always run). These
+   verify properties the theorem implies — bounded weights on an
+   oscillator gradient, sign-flips on an edge-of-chaos trajectory,
+   FFT recovery of a synthetic sinusoid, fingerprint stability. Both
+   the private reference and the pedagogical fallback satisfy these,
+   so the public API keeps being useful without admin unlock.
+
+2. **Private reference plumbing** (``@pytest.mark.private``). Verify
+   that ``heartbeat()`` / ``run_heartbeat()`` route through
+   ``resonance.signals.heartbeat.reference_heartbeat`` /
+   ``reference_run_heartbeat`` when the admin gate unlocks. Skipped
+   unless the resonance runtime is resolvable.
+"""
 from __future__ import annotations
 
 import dataclasses
+import sys
+from pathlib import Path
+from typing import Any
 
 import numpy as np
+import pytest
+from numpy.typing import NDArray
 
 from carl_core.heartbeat import (
     HeartbeatConfig,
     HeartbeatState,
     adam_step,
     detect_resonant_modes,
-    heartbeat,
     initial_state,
     is_resonant,
     run_heartbeat,
@@ -22,21 +50,92 @@ from carl_core.heartbeat import (
 # ---------------------------------------------------------------------------
 
 
-def _trivial_chain(_state: HeartbeatState, _grad: np.ndarray) -> str:
+def _trivial_chain(
+    state: HeartbeatState, grad: NDArray[np.float64]
+) -> str:
+    del state, grad
     return "deadbeef"
 
 
-def _flat_grad(weights: np.ndarray, _phi: float, _R: float) -> np.ndarray:
+def _flat_grad(
+    weights: NDArray[np.float64], phi: float, R: float
+) -> NDArray[np.float64]:
+    del phi, R
     return np.zeros_like(weights)
 
 
-def _downhill_grad(weights: np.ndarray, _phi: float, _R: float) -> np.ndarray:
+def _downhill_grad(
+    weights: NDArray[np.float64], phi: float, R: float
+) -> NDArray[np.float64]:
     # Gradient of 0.5 * ||w||^2: pulls toward origin
+    del phi, R
     return np.asarray(weights, dtype=np.float64).copy()
 
 
 # ---------------------------------------------------------------------------
-# 1. adam_step determinism
+# Private-runtime resolution — helpers for @pytest.mark.private tests.
+# ---------------------------------------------------------------------------
+
+
+def _try_load_resonance() -> bool:
+    """True if ``resonance.signals.heartbeat`` is importable right now."""
+    try:
+        import resonance.signals.heartbeat  # type: ignore[import-not-found]  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+_RESONANCE_LOCAL_SRC = (
+    Path(__file__).resolve().parents[3] / ".." / "resonance" / "src"
+).resolve()
+
+
+@pytest.fixture
+def admin_unlocked(monkeypatch: pytest.MonkeyPatch) -> bool:
+    """Simulate an admin-unlocked host; returns True iff resolution succeeds.
+
+    Patches ``carl_studio.admin.is_admin`` and ``load_private`` so the
+    heartbeat façade routes to the private resonance implementation
+    without needing a real admin key. Returns ``False`` when the resonance
+    package is unreachable (CI / contributor machines without the private
+    repo) — @pytest.mark.private tests call :func:`_maybe_skip_private`
+    on the fixture value to bail cleanly.
+    """
+    if _RESONANCE_LOCAL_SRC.is_dir() and str(_RESONANCE_LOCAL_SRC) not in sys.path:
+        sys.path.insert(0, str(_RESONANCE_LOCAL_SRC))
+
+    if not _try_load_resonance():
+        return False
+
+    from carl_studio import admin as admin_mod
+
+    monkeypatch.setattr(admin_mod, "is_admin", lambda: True)
+
+    def _fake_load_private(name: str) -> Any:
+        import importlib
+
+        return importlib.import_module(f"resonance.{name}")
+
+    monkeypatch.setattr(admin_mod, "load_private", _fake_load_private)
+    return True
+
+
+private_required = pytest.mark.private
+
+
+def _maybe_skip_private(admin_unlocked: bool) -> None:
+    if not admin_unlocked:
+        pytest.skip("resonance private runtime not available")
+
+
+# ===========================================================================
+# 1. Structural / theorem-invariant tests — always run.
+# ===========================================================================
+
+
+# ---------------------------------------------------------------------------
+# 1.1 adam_step determinism (pure Kingma & Ba recurrence, public)
 # ---------------------------------------------------------------------------
 
 
@@ -55,7 +154,7 @@ def test_adam_step_is_deterministic() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. heartbeat with flat gradient does not diverge (phi stays finite/bounded)
+# 1.2 heartbeat with flat gradient does not diverge (phi stays finite/bounded)
 # ---------------------------------------------------------------------------
 
 
@@ -75,14 +174,31 @@ def test_heartbeat_with_flat_gradient_converges() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. Edge-of-chaos (oscillator) trajectory: bounded oscillation, NOT monotone
+# 1.3 Edge-of-chaos (oscillator) trajectory: bounded oscillation, NOT monotone
 # ---------------------------------------------------------------------------
 
 
-def _edge_oscillator_grad_factory() -> tuple[
-    int,
-    "_GradCallable",
-]:
+class _OscillatorGrad:
+    """Harmonic-oscillator vector field gradient. See factory docstring."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(
+        self, weights: NDArray[np.float64], phi: float, R: float
+    ) -> NDArray[np.float64]:
+        del phi, R
+        self.calls += 1
+        w = np.asarray(weights, dtype=np.float64).reshape(-1)
+        omega = 0.5
+        grad = np.zeros_like(w)
+        if w.size >= 2:
+            grad[0] = -omega * w[1]
+            grad[1] = omega * w[0]
+        return grad
+
+
+def _edge_oscillator_grad_factory() -> tuple[int, _OscillatorGrad]:
     """Build a gradient fn with a harmonic-oscillator vector field in weight-space.
 
     The effective dynamics: ∂w/∂t = R · w⊥  where w⊥ is the 90° rotation.
@@ -90,25 +206,7 @@ def _edge_oscillator_grad_factory() -> tuple[
     weight space) because the Jacobian of the vector field has purely
     imaginary eigenvalues → |λ_max| ≈ 0.
     """
-    calls = {"n": 0}
-
-    class _GradCallable:
-        def __call__(
-            self, weights: np.ndarray, _phi: float, _R: float
-        ) -> np.ndarray:
-            calls["n"] += 1
-            w = np.asarray(weights, dtype=np.float64).reshape(-1)
-            # Small amplitude so we stay in a linear regime.
-            omega = 0.5
-            grad = np.zeros_like(w)
-            # Pairwise rotation gradient; for a length-2 weight vector this
-            # is: grad = omega * [-w[1], w[0]]
-            if w.size >= 2:
-                grad[0] = -omega * w[1]
-                grad[1] = omega * w[0]
-            return grad
-
-    return 0, _GradCallable()
+    return 0, _OscillatorGrad()
 
 
 def test_heartbeat_edge_of_chaos_produces_bounded_oscillation() -> None:
@@ -131,7 +229,7 @@ def test_heartbeat_edge_of_chaos_produces_bounded_oscillation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. is_resonant truth table
+# 1.4 is_resonant truth table (pure, no benchmarked coefficients)
 # ---------------------------------------------------------------------------
 
 
@@ -160,7 +258,7 @@ def test_is_resonant_truth_table() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Fourier recovers ground-truth period on synthetic sinusoid
+# 1.5 Fourier recovers ground-truth period on synthetic sinusoid (pure FFT)
 # ---------------------------------------------------------------------------
 
 
@@ -225,7 +323,7 @@ def test_detect_resonant_modes_short_trajectory() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 6. Tick count: long oscillator run → trajectory visits multiple phases
+# 1.6 Tick count: long oscillator run → trajectory visits multiple phases
 # ---------------------------------------------------------------------------
 
 
@@ -246,7 +344,7 @@ def test_long_heartbeat_run_is_not_monotone() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Collapse detection halts the loop
+# 1.7 Collapse detection halts the loop
 # ---------------------------------------------------------------------------
 
 
@@ -274,7 +372,7 @@ def test_no_halt_when_halt_on_collapse_false() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 8. Heartbeat state fingerprint is deterministic
+# 1.8 Heartbeat state fingerprint is deterministic (pure content-hash)
 # ---------------------------------------------------------------------------
 
 
@@ -290,7 +388,7 @@ def test_heartbeat_state_fingerprint_deterministic() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 9. Chain appender stop-signal halts run
+# 1.9 Chain appender stop-signal halts run
 # ---------------------------------------------------------------------------
 
 
@@ -298,7 +396,10 @@ def test_chain_appender_empty_string_halts() -> None:
     cfg = HeartbeatConfig()
     counter = {"n": 0}
 
-    def appender(_s: HeartbeatState, _g: np.ndarray) -> str:
+    def appender(
+        s: HeartbeatState, g: NDArray[np.float64]
+    ) -> str:
+        del s, g
         counter["n"] += 1
         if counter["n"] >= 3:
             return ""  # stop signal
@@ -311,3 +412,74 @@ def test_chain_appender_empty_string_halts() -> None:
     )
     # Stopped after 3 ticks (initial + 3 appended).
     assert len(traj) == 4
+
+
+# ===========================================================================
+# 2. Private reference plumbing — requires @pytest.mark.private.
+# ===========================================================================
+
+
+@private_required
+def test_private_reference_is_reachable(admin_unlocked: bool) -> None:
+    """With admin unlocked, heartbeat() must route through the private impl.
+
+    Verifies the admin-gate seam: ``_load_private_impl`` returns the
+    private module, and the façade's ``heartbeat()`` delegates to
+    ``reference_heartbeat`` instead of the pedagogical fallback.
+    """
+    _maybe_skip_private(admin_unlocked)
+    # The carl_core package re-exports ``heartbeat`` as a function at the
+    # top level, so we can't bind the module via `import carl_core.heartbeat
+    # as hb_mod`. Reach it via importlib.
+    import importlib
+
+    hb_mod = importlib.import_module("carl_core.heartbeat")
+    mod = hb_mod._load_private_impl()
+    assert mod is not None
+    assert hasattr(mod, "reference_heartbeat")
+    assert hasattr(mod, "reference_run_heartbeat")
+
+
+@private_required
+def test_private_reference_matches_pedagogical_shape(
+    admin_unlocked: bool,
+) -> None:
+    """Private ref + pedagogical path agree on state **shape** (fields, ranges).
+
+    The calibrated observer values are allowed to differ — that's the
+    moat — but the dataclass shape, field ranges (phi ∈ (0, 1], R ∈ [0, 1],
+    step monotonicity, weight-dim preservation) are a public contract.
+    """
+    _maybe_skip_private(admin_unlocked)
+    cfg = HeartbeatConfig(lr=1e-2)
+    w = np.array([0.5, -0.3, 0.1], dtype=np.float64)
+    state = initial_state(w, chain_head_hash="h0")
+    traj = run_heartbeat(
+        state, cfg, _flat_grad, _trivial_chain, max_ticks=10, halt_on_collapse=False
+    )
+    assert len(traj) == 11
+    for s in traj:
+        assert 0.0 < s.phi_mean <= 1.0
+        assert 0.0 <= s.kuramoto_R <= 1.0
+        assert s.weights.shape == w.shape
+    # Monotonic step counter.
+    assert [s.step for s in traj] == list(range(11))
+
+
+@private_required
+def test_private_reference_passes_edge_of_chaos_oscillation(
+    admin_unlocked: bool,
+) -> None:
+    """The benchmark-tuned reference must still pass the bounded-oscillation
+    witness the paper documents (sign-flips on harmonic gradient)."""
+    _maybe_skip_private(admin_unlocked)
+    cfg = HeartbeatConfig(lr=5e-2, R_threshold=0.0, edge_band=10.0)
+    _, grad_fn = _edge_oscillator_grad_factory()
+    w = np.array([1.0, 0.0], dtype=np.float64)
+    state = initial_state(w, chain_head_hash="h0")
+    traj = run_heartbeat(
+        state, cfg, grad_fn, _trivial_chain, max_ticks=400, halt_on_collapse=False
+    )
+    xs = np.array([s.weights[0] for s in traj])
+    assert (xs > 0).any() and (xs < 0).any()
+    assert float(np.max(np.abs(xs))) < 100.0
