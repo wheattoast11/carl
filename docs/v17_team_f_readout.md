@@ -13,8 +13,8 @@ All six extraction + enforcement tasks delivered:
 
 - **F1 (6f7ca85):** Constitutional ledger → `resonance/signals/constitutional.py` (556 LOC moved). Thin `ConstitutionalLedgerClient` stub in carl-core; public data-surface (`LedgerBlock`, `encode_action_features`, `signing_bytes`/`block_hash`, `LedgerBlock.verify`) preserved for `@terminals-tech/emlt-codec` npm parity. The moat is the genesis/append/sign lifecycle, not the wire format.
 - **F2 (b3b1f12):** Heartbeat pinned-coefficient reference → `resonance/signals/heartbeat.py` (~300 LOC moved). Standing Wave Theorem docstring + API + pedagogical simple-reference fallback preserved public. `HeartbeatConfig` hyperparameter defaults intentionally stay public — they're theorem-referenced, not calibration constants.
-- **F3 (pending):** Resonant `joint`-mode cognize path → `resonance/geometry/joint_cognize.py` (~80 LOC). `per_dim` mode + `Resonant` container + canonical encoding + identity hash stay public.
-- **F4 (pending):** EML reward trained 7-param coefficients + initialization heuristics → `resonance/rewards/eml_weights.py` (~150 LOC). Structure (depth-3 tree, composition rules, `score_from_trace` interface) stays public; random-init fallback when private unavailable.
+- **F3 (50da47f):** Resonant `joint`-mode cognize → `resonance/geometry/joint_cognize.py`. `per_dim` mode + `Resonant` container + canonical encoding + identity hash stay public. Joint-mode attempts without admin unlock raise `ResonantError(code="carl.resonant.private_required")` — no pedagogical fallback (the math IS the commercial differentiator). `carl resonant eval` CLI surfaces this cleanly with exit code 2.
+- **F4 (50da47f):** EML reward trained 7-param coefficients + init heuristics → `resonance/rewards/eml_weights.py`. Structure (depth-3 tree, composition rules, `score_from_trace` interface) stays public. `_random_init_weights()` fallback produces structurally sound but benchmark-inaccurate coefficients when admin gate is locked.
 - **F5 (rolled into A-Day-4 ecd7174):** `admin.py::load_private` now tries `importlib.import_module(f"resonance.{module_name}")` first before the HuggingFace dataset fallback. Supports dotted submodule paths (`signals.constitutional`, `geometry.joint_cognize`, etc.) via the local fast path only.
 - **F6 (this commit):** CI moat-boundary enforcement. `scripts/check_moat_boundary.py` walks every `.py` in `packages/carl-core/src/` + `src/carl_studio/` and parses ASTs; reports any module-level `import resonance` / `from resonance.X import Y` / `import terminals_runtime` / `from terminals_runtime.X import Y` as a violation. Lazy imports inside function bodies (the canonical admin-gate pattern) pass clean. GitHub Action at `.github/workflows/moat-boundary-check.yml` runs on every PR + push to main. 8 regression tests in `tests/test_moat_boundary.py` pin the behavior.
 
@@ -28,11 +28,11 @@ All six extraction + enforcement tasks delivered:
 
 | Metric | Value |
 |---|---:|
-| Private LOC extracted to `resonance/` | ~1,086 |
+| Private LOC extracted to `resonance/` | ~1,166 (F1 556 + F2 ~300 + F3 ~80 + F4 ~230 incl. client stub + test scaffolding) |
 | Public surface LOC delta | +~150 (client stubs + pedagogical fallbacks) |
 | Moat-check script | 1 script + 1 workflow + 8 tests |
 | Files changed in carl-studio | ~14 |
-| Full-suite baseline preserved | 3,698+ pass (up from 3,599 pre-v0.17) |
+| Full-suite baseline | 3,707 pass, 3 skip, 0 fail (up from 3,599 pre-v0.17; +108 net new tests across Teams A + F) |
 | Pyright strict errors on new/modified files | **0** |
 | Ruff warnings on new/modified files | **0** |
 
@@ -42,8 +42,8 @@ All six extraction + enforcement tasks delivered:
 |---|---:|---:|---:|
 | F1 constitutional | 556 | 556 | 0 in production (fsm_ledger.py's imports stayed stable via facade) |
 | F2 heartbeat | ~300 | ~300 (public facade 553, private 231 = 784 total, 448 of the original was pedagogical docstring + API; 300 of the pinned numerics moved) | 0 (`__init__.py` re-exports unchanged) |
-| F3 joint cognize | ~80 | pending | pending |
-| F4 EML reward weights | ~150 | pending | pending |
+| F3 joint cognize | ~80 | ~80 (private-side cognize_joint callable) + ~90 public-side delegate scaffolding | `cli/resonant.py` got 7 LOC to surface `ResonantError` on `carl resonant eval` |
+| F4 EML reward weights | ~150 | numeric constants + init heuristic moved; structure preserved public | `training/rewards/eml.py` delegates via `admin.load_private('rewards.eml_weights')`; random-init fallback added |
 
 ## Decisions made
 
