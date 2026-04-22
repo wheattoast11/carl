@@ -66,6 +66,18 @@ class ActionType(str, Enum):
     SECRET_RESOLVE = "secret_resolve"   # privileged deref of a handle
     SECRET_REVOKE = "secret_revoke"     # handle invalidated
     CLIPBOARD_WRITE = "clipboard_write" # scoped clipboard bridge emit
+    # v0.16.1 (Stage C) data-handle runtime — the agent moves DataRefs across
+    # tool boundaries; reads go through the vault and land here as audit
+    # trail. See packages/carl-core/src/carl_core/data_handles.py.
+    DATA_OPEN = "data_open"             # vault registered a new DataRef (bytes/file/stream/...)
+    DATA_READ = "data_read"             # vault served bytes for a ref (offset+length recorded, NOT bytes)
+    DATA_TRANSFORM = "data_transform"   # toolkit produced a derived DataRef (head/tail/gzip/hash/...)
+    DATA_PUBLISH = "data_publish"       # toolkit emitted ref contents to an external destination
+    # v0.16.1 resource-handle runtime — long-lived external resources
+    # (browser pages, subprocess groups) addressed by ResourceRef. Stage C-2.
+    RESOURCE_OPEN = "resource_open"     # resource registered (browser page, subprocess)
+    RESOURCE_ACT = "resource_act"       # action dispatched against a resource ref
+    RESOURCE_CLOSE = "resource_close"   # resource released
 
 
 # v0.10 W10: actions eligible for coherence auto-attach via a registered

@@ -127,6 +127,17 @@ FEATURE_TIERS: dict[str, Tier] = {
     "secrets.resolve": Tier.FREE,
     "secrets.clipboard": Tier.FREE,
     "secrets.audit": Tier.FREE,
+    # v0.16.1 (Stage C) handle runtime — capability, not autonomy. Same
+    # tier-model reasoning as secrets: the handle runtime IS how Carl
+    # reasons about values it shouldn't see. Gating it would break Carl
+    # as a viable agent, not just pay-walled convenience.
+    "data.open": Tier.FREE,
+    "data.read": Tier.FREE,
+    "data.transform": Tier.FREE,
+    "data.publish": Tier.FREE,
+    "resource.open": Tier.FREE,
+    "resource.act": Tier.FREE,
+    "resource.close": Tier.FREE,
     # ---------------------------------------------------------------
     # PAID ($29/mo) — Autonomy + Discovery + Resonance + Platform.
     # Everything that runs without human in the loop.

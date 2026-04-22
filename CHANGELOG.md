@@ -44,6 +44,89 @@
   `SlimeAdapter.available()` returns False until the user finishes the
   source-build steps.
 
+### Added (v0.16.1 — handle-runtime Stage C)
+
+- **`carl_core.data_handles`** (new module) — `DataRef`, `DataVault`,
+  `DataKind`, `DataError`. Zero-dep primitives mirroring the `SecretRef`
+  / `SecretVault` shape for arbitrary payloads (bytes / file / stream /
+  query / url / derived). Lazy fingerprinting + sha256 on file-backed
+  refs; offset+length addressable reads; TTL self-revoke at resolve time.
+- **`carl_core.resource_handles`** (new module) — `ResourceRef`,
+  `ResourceVault`, `ResourceError`. The handle runtime for long-lived
+  external resources (browser pages, subprocesses, MCP sessions,
+  rollout engines). Caller-supplied `closer(backend)` runs at revoke,
+  so lifecycles stay local to the toolkit that owns the backend type.
+- **`carl_studio.handles.data.DataToolkit`** — agent-callable layer
+  wrapping `DataVault` with audit emission (DATA_OPEN / DATA_READ /
+  DATA_TRANSFORM / DATA_PUBLISH). Methods: `open_file`, `open_bytes`,
+  `open_url`, `read`, `read_text`, `read_json`, `transform`
+  (head / tail / gzip / gunzip / digest), `publish_to_file`,
+  `fingerprint`, `sha256`, `describe`, `list_handles`. Preview cap
+  (default 64 KB) + hard upper bound (default 16 MB) keep accidental
+  whole-file slurps visible in the audit trail.
+- **`carl_studio.cu.browser.BrowserToolkit`** — Playwright automation
+  with vault-mediated pages. Agent gets `ResourceRef` ref_ids; pages
+  never cross a tool-call boundary. Methods: `open_page`, `navigate`,
+  `click`, `type_text`, `type_from_secret` (value resolved inside the
+  toolkit), `press_key`, `scroll`, `screenshot` + `extract_text` (both
+  route output through the shared `DataToolkit`), `close_page`,
+  `list_pages`. Playwright lazy-imported; `available()` reports honestly.
+- **`carl_studio.cu.anthropic_compat.CUDispatcher` + `COMPUTER_USE_TOOL_SCHEMA`** —
+  Anthropic `computer_20250124` tool schema mapping. `bind_page(ref_id)`
+  + `dispatch({"action": "left_click", "coordinate": [x, y]})` → routes
+  to `BrowserToolkit.page_from_id(...)` + the page's low-level mouse
+  API. Screenshots return a `DataRef` descriptor; drag / mouse-up-down
+  / hold-key are documented in the schema but rejected with
+  `carl.cu.unsupported_action` (agent should fall back to selector-level
+  browser methods).
+- **`carl_studio.cu.privacy`** — regex-based content redaction
+  (`redact_text`, `redact_preview_spans`) for email / phone / SSN /
+  credit-card / IPv4 / DOB. Conservative defaults; openadapt's
+  ML-assisted redactor can plug in later.
+- **Ten new `ActionType` values** in `carl_core.interaction`:
+  `DATA_OPEN`, `DATA_READ`, `DATA_TRANSFORM`, `DATA_PUBLISH`,
+  `RESOURCE_OPEN`, `RESOURCE_ACT`, `RESOURCE_CLOSE`, plus the four
+  secret-op types (`SECRET_MINT`, `SECRET_RESOLVE`, `SECRET_REVOKE`,
+  `CLIPBOARD_WRITE`) from the v0.16 secrets toolkit.
+- **Seven new `FEATURE_TIERS` keys** — `data.open`, `data.read`,
+  `data.transform`, `data.publish`, `resource.open`, `resource.act`,
+  `resource.close`. All **FREE**: the handle runtime is how Carl
+  reasons about values it shouldn't see — gating it would break
+  Carl as a viable agent (gate on autonomy, not capability).
+- **`docs/v16_handle_runtime.md`** — unifying doctrine. One grammar
+  across secrets / data / resource / computer-use; capability-security
+  rationale; CARLAgent wiring example; end-to-end "Carl logs in
+  without seeing the password" walkthrough.
+- **`docs/v16_utils_inventory.md`** — best-in-class Python utility
+  picks with version + license + handle-fit rationale (15 categories +
+  skip list). Backs future toolkit extensions.
+- **`carl_studio.handles.subprocess.SubprocessToolkit`** — capability-
+  constrained subprocess lifecycle. `spawn(argv: list[str])` (argv-only,
+  shell strings rejected at the type level) / `poll` / `wait` /
+  `terminate` / `read_stdout` / `read_stderr` / `list_processes`.
+  Default TTL 300s prevents orphan processes. stdout / stderr captured
+  into `DataVault` so byte payloads never stream through agent context.
+  Error codes under `carl.subprocess.*`.
+- **`carl_studio.handles.bundle.HandleRuntimeBundle`** — one-call
+  construction of the full handle runtime. `build(chain)` wires every
+  vault + toolkit against the supplied `InteractionChain`;
+  `register_all(dispatcher)` registers 25 agent-callable tools (data
+  toolkit × 6, browser × 11, subprocess × 7, `computer`) via a
+  `make_handler()` shim that converts toolkit methods (kwargs → dict)
+  to the `ToolDispatcher` `(dict → (str, bool))` contract.
+  `anthropic_tools()` returns the flat schema list for the Anthropic
+  `tools=` API param. `tool_catalog()` describes the full surface for
+  a "what can you do?" meta-tool.
+- **Tests** (~148 new cases total — the v0.16.1 line closes with):
+  - `packages/carl-core/tests/test_data_handles.py` (21)
+  - `packages/carl-core/tests/test_resource_handles.py` (11)
+  - `tests/test_data_toolkit.py` (25)
+  - `tests/test_browser_toolkit.py` (10, incl. fake-Playwright fixture)
+  - `tests/test_cu_dispatcher.py` (11)
+  - `tests/test_cu_privacy.py` (11)
+  - `tests/test_subprocess_toolkit.py` (14 — real Popen against trivial Python children)
+  - `tests/test_handle_bundle.py` (10)
+
 ## [0.15.0] — 2026-04-20
 
 Tool-loop extraction release. `chat_agent.py`'s tool-use loop body

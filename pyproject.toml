@@ -151,7 +151,10 @@ conflicts = [
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages/carl-core/tests"]
 addopts = "--import-mode=importlib"
-pythonpath = [".", "src", "packages/carl-core/src"]
+# ``tests`` on the path lets test files share helper modules such as
+# ``tests/_playwright_stub.py`` without needing an ``__init__.py`` that
+# would conflict with the importlib import mode.
+pythonpath = [".", "src", "packages/carl-core/src", "tests"]
 
 [tool.pyright]
 include = ["src", "packages/*/src", "packages/*/tests", "tests"]

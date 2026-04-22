@@ -91,6 +91,62 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
   `EMLCompositeReward` / `PhaseAdaptiveCARLReward` / `CARLReward`
   run unchanged. `bridge.as_slime_reward()` returns the slime-shaped
   reward callable for `--custom-reward-fn`.
+- **v0.16.1 handle-runtime Stage C** — capability-constrained handle
+  runtime generalized beyond secrets. Core invariant: Carl moves refs,
+  not values. Canonical doctrine: `docs/v16_handle_runtime.md`.
+  - `packages/carl-core/src/carl_core/data_handles.py` — `DataRef`,
+    `DataVault`, `DataKind`. Payload-agnostic handle registry
+    (bytes / file / stream / query / url / derived). Lazy hashing
+    on file-backed refs; offset+length reads; TTL self-revoke.
+  - `packages/carl-core/src/carl_core/resource_handles.py` —
+    `ResourceRef`, `ResourceVault`. Long-lived resources with
+    caller-supplied `closer(backend)` on revoke. Generalizes to
+    browser pages, subprocesses, MCP sessions, rollout engines.
+  - `src/carl_studio/handles/data.py` — `DataToolkit`. Agent-callable
+    surface with audit emission (DATA_OPEN / DATA_READ / DATA_TRANSFORM /
+    DATA_PUBLISH). Methods: `open_file` / `open_bytes` / `open_url` /
+    `read` / `read_text` / `read_json` / `transform` (head / tail / gzip
+    / gunzip / digest) / `publish_to_file`. Preview cap 64 KB,
+    hard ceiling 16 MB.
+  - `src/carl_studio/cu/browser.py` — `BrowserToolkit`. Playwright
+    wrapper; pages in `ResourceVault`, screenshots + text in
+    `DataVault`, secret-backed typing via `type_from_secret()` (value
+    never leaves the toolkit).
+  - `src/carl_studio/cu/anthropic_compat.py` — `CUDispatcher` +
+    `COMPUTER_USE_TOOL_SCHEMA`. Anthropic `computer_20250124` schema
+    compat. `bind_page(ref_id)` + `dispatch({"action":...,"coordinate":[x,y]})`
+    routes to `BrowserToolkit.page_from_id` + mouse API. Drag and
+    mouse-up-down rejected as `carl.cu.unsupported_action` (selector-level
+    browser methods are the fallback).
+  - `src/carl_studio/cu/privacy.py` — `redact_text`,
+    `redact_preview_spans`. Regex PII scrub (email/phone/SSN/CC/IPv4/DOB).
+  - **10 new `ActionType` values** in `carl_core.interaction`:
+    `DATA_OPEN`, `DATA_READ`, `DATA_TRANSFORM`, `DATA_PUBLISH`,
+    `RESOURCE_OPEN`, `RESOURCE_ACT`, `RESOURCE_CLOSE` (plus the
+    existing `SECRET_*` / `CLIPBOARD_WRITE`).
+  - **7 new `FEATURE_TIERS` keys** (all **FREE**): `data.open`,
+    `data.read`, `data.transform`, `data.publish`, `resource.open`,
+    `resource.act`, `resource.close`. Capability, not autonomy —
+    gating the handle runtime would break Carl's ability to reason
+    about values it shouldn't see.
+  - **Utils inventory** at `docs/v16_utils_inventory.md` — 15
+    best-in-class Python libs (httpx, blake3, msgspec, zstandard,
+    pypdfium2, duckdb, psutil, watchfiles, polars, rapidfuzz, stamina,
+    py7zr, pillow, anyio, whenever) + skip list. Guide for future
+    toolkit extensions.
+  - `src/carl_studio/handles/subprocess.py` — `SubprocessToolkit`.
+    `spawn(argv: list[str])` only — shell strings rejected by design
+    (defence in depth: shell injection is an expressibility problem,
+    not a runtime one). Default TTL 300s. stdout / stderr land in
+    `DataVault` via `read_stdout` / `read_stderr` / `wait` so byte
+    payloads never stream through agent context.
+  - `src/carl_studio/handles/bundle.py` — `HandleRuntimeBundle`.
+    One-call construction of every vault + toolkit against a shared
+    chain. `register_all(dispatcher)` registers 25 agent-callable
+    tools via a `make_handler` shim (toolkit method kwargs → dict →
+    JSON string → `(str, bool)` ToolCallable). `anthropic_tools()`
+    returns flat schemas for the API `tools=` param.
+    `tool_catalog()` is the "what can you do?" meta surface.
 - `src/carl_studio/compute/` — backend registry and compute backends.
 - `src/carl_studio/cli/` — modular Typer CLI package entrypoint.
 - `src/carl_studio/cli/init.py` — `carl init` / `carl camp init` one-shot wizard. First-run marker `~/.carl/.initialized`.
@@ -210,15 +266,19 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - `python -m build` works.
 - Single pytest node IDs work from the repo root.
 - Repo-wide Ruff and Pyright currently have pre-existing noise; validate touched files first.
-- Test baseline (as of `9e4eaab` / slime adapter merge, 2026-04-21):
-  **3623 tests pass; 16 pre-existing `test_heartbeat.py` fixture-
+- Test baseline (post v0.16.1 handle-runtime Stage C complete, 2026-04-21):
+  **~3770 tests pass; 16 pre-existing `test_heartbeat.py` fixture-
   collision errors surface ONLY in full-suite runs.** Running
   `pytest packages/carl-core/tests/test_heartbeat.py tests/test_heartbeat.py`
   in isolation passes (24/24) — the collision is cross-suite, NOT a
-  regression. Full suite ~67s with `--timeout-method=thread`.
+  regression. Full suite ~70s with `--timeout-method=thread`.
   `tests/test_uat_e2e.py` + `tests/test_uat.py` are the UAT suites
   (skip by default in targeted runs via `--ignore=...`). Slime adapter
-  adds 31 tests (22 adapter + 9 bridge).
+  adds 31 tests (22 adapter + 9 bridge). Handle runtime adds ~113 tests:
+  `test_data_handles.py` (21) + `test_resource_handles.py` (11) +
+  `test_data_toolkit.py` (25) + `test_browser_toolkit.py` (10) +
+  `test_cu_dispatcher.py` (11) + `test_cu_privacy.py` (11) +
+  `test_subprocess_toolkit.py` (14) + `test_handle_bundle.py` (10).
 - Pytest uses `importlib` import mode; `tests/` and `packages/carl-core/tests/` coexist without `__init__.py` collisions.
 - Use `--timeout-method=thread` (not default signal-based) when running the full suite — macOS signal-based timeout can wedge on some tests; thread-based is clean.
 
@@ -342,6 +402,28 @@ All items in this arc are live on `main`. See `CHANGELOG.md` for details.
 
 `docs/v10_master_plan.md` remains the historical Fano-consensus record.
 `docs/v10_agent_card_supabase_spec.md` is implementation-complete.
+
+## Handle runtime grammar (v0.16.1)
+
+The unifying abstraction behind secrets / data / resource / computer-use
+toolkits. Same shape, different risk profiles.
+
+- **Shape.** `(Ref, Vault, Toolkit)` triple per layer. `Ref` is frozen
+  Pydantic with `ref_id: UUID`, `kind`, `uri`, `ttl_s`. `Vault` is
+  thread-safe (RLock); `resolve(ref, privileged=True)` is the only
+  value-access. `Toolkit` is the agent-callable surface — every method
+  emits an audit step.
+- **Canonical doc.** `docs/v16_handle_runtime.md`.
+- **Risk profiles.** Secrets = zero-knowledge (privileged-only resolve);
+  Data = size-capped reads (default 64 KB preview); Resource = stateful
+  with closer callback; CU = Anthropic schema reshape over Browser.
+- **Carl's mental model.** "I have a `ref_id`. To act on the value I
+  call a toolkit method that accepts `ref_id`. Transforms yield new
+  handles — I never need to see the raw bytes."
+- **Wiring into CARLAgent.** Each toolkit exposes
+  `tool_schemas() -> list[dict]` in Anthropic-tool shape; register via
+  `agent.register_tool(...)` in a loop. CUDispatcher is the single
+  `computer` tool; schema at `COMPUTER_USE_TOOL_SCHEMA`.
 
 ## Anti-pattern catalog (confirmed via vanilla-context peer review)
 
