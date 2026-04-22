@@ -186,6 +186,7 @@ def eval_cmd(
     before publishing to the marketplace.
     """
     from carl_core.errors import ValidationError
+    from carl_core.resonant import ResonantError
 
     from carl_studio.resonant_store import load_resonant
 
@@ -210,6 +211,12 @@ def eval_cmd(
     except ValidationError as exc:
         typer.echo(f"eval failed: {exc}", err=True)
         raise typer.Exit(1) from exc
+    except ResonantError as exc:
+        # Joint-mode Resonant + admin-locked host: surface the private-required
+        # message instead of a bare traceback. Exit code 2 distinguishes the
+        # gated-feature case from ValidationError shape/decode failures (1).
+        typer.echo(f"eval blocked: {exc}", err=True)
+        raise typer.Exit(2) from exc
 
     latent = resonant.perceive(obs)
     action_list = [float(x) for x in np.asarray(action).ravel()]

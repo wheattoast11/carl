@@ -12,12 +12,32 @@ signature used by ``CARLReward`` / ``PhaseAdaptiveCARLReward`` so the same
 
 Built on top of ``carl_core.eml`` (Odrzywolek 2026): EMLTree, EMLNode, EMLOp,
 ``eml``, ``eml_scalar_reward``, MAX_DEPTH.
+
+**Public / private split (v0.17 moat extraction).**
+
+The depth-3 tree structure, composition rules, and ``score_from_trace``
+interface are public (this file). The benchmark-tuned topology + pre-squash
+calibration constants + feature-floor threshold — the 7 trained parameters
+that yielded the +0.972 correlation with PhaseAdaptive on the 100-trace
+benchmark (``scripts/eml_reward_benchmark.md``) — moved to
+``resonance.rewards.eml_weights`` for v0.17. When the admin gate unlocks
+and the private runtime resolves, :class:`EMLCompositeReward` pulls the
+tuned coefficients through :func:`admin.load_private`. Without admin
+unlock, it falls through to a PEDAGOGICAL random initialization whose
+tree shape + calibration constants are sufficient to run the reward head
+end-to-end with bounded output but whose coefficients are **not tuned**
+against the paper's benchmark suite.
+
+Simple-reference callers get a working reward head. Competitor
+reproductions built on the random-init path will not match the
+benchmarked +0.972 correlation — production dynamics live in the private
+runtime.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -31,7 +51,7 @@ from carl_core.eml import (
 
 
 # ---------------------------------------------------------------------------
-# Module constants
+# Module constants — public, structural (not tuned against benchmark).
 # ---------------------------------------------------------------------------
 
 _REWARD_CLAMP_DEFAULT: float = 5.0
@@ -47,25 +67,93 @@ _GRAD_FD_EPS: float = 1e-4
 """Finite-difference step for leaf_params gradients. Matches carl_core.eml
 convention; leaf constants are O(1) so this is stable."""
 
-# Pre-squash calibration. Derived empirically (see scripts/benchmark_eml_reward.py)
-# by sweeping 100 random traces through the default tree and linear-regressing
-# the raw EML output against CARLReward.score_from_trace. These constants
-# bring the init-time output into the "drop-in" range (within ~0.3 abs of
-# CARLReward for typical traces) AND preserve the sign of the correlation so
-# that a "good" CARL trace stays "good" under EML scoring. Adam can then
-# fine-tune the leaf CONSTs from there.
-#
-# Note the NEGATIVE scale: the default tree's raw output is anti-correlated
-# with the linear CARL reward because exp(ms) in the inner position rewards
-# disorder not order. The calibration flips the sign so downstream consumers
-# see the conventional "higher = better" monotonicity.
-_RAW_TO_LINEAR_SCALE: float = -0.035
-_RAW_TO_LINEAR_SHIFT: float = 0.74
 
-# Lower-bound for features entering the ``ln`` slot of an EML node. Without
-# this floor, cq or defect values near 0 produce huge -ln() terms that blow
-# up the tree's exp() arg and lose all numerical sanity.
-_FEATURE_LN_FLOOR: float = 0.05
+# ---------------------------------------------------------------------------
+# Pedagogical random-init fallback — coefficients un-tuned.
+#
+# These preserve the public tree's structural contract (depth 3, 3 trainable
+# CONST leaves, input_dim = 3) and keep the reward output bounded so the
+# public API delivers a working head out-of-the-box. They are INTENTIONALLY
+# un-tuned — callers wanting the benchmark-accurate +0.972 correlation with
+# PhaseAdaptive unlock the admin gate to route through
+# ``resonance.rewards.eml_weights.initialize_weights()``.
+# ---------------------------------------------------------------------------
+
+
+def _random_init_tree() -> EMLTree:
+    """Pedagogical reference tree — topology un-tuned.
+
+    Builds the same depth-3 shape the benchmarked tree uses (so the Adam
+    fit-step and serialization round-trip work byte-identical), but with
+    CONST leaves at zero and no topology sweep. This is sufficient to
+    exercise the tree geometry and let Adam learn from scratch; it is
+    NOT the topology the paper's benchmark chose. For production
+    dynamics install the private runtime.
+    """
+    ms_shift = EMLNode(
+        op=EMLOp.EML,
+        left=EMLNode(op=EMLOp.CONST, const=0.0),
+        right=EMLNode(op=EMLOp.VAR_X, var_idx=0),
+    )
+    cq_shift = EMLNode(
+        op=EMLOp.EML,
+        left=EMLNode(op=EMLOp.CONST, const=0.0),
+        right=EMLNode(op=EMLOp.VAR_X, var_idx=1),
+    )
+    def_shift = EMLNode(
+        op=EMLOp.EML,
+        left=EMLNode(op=EMLOp.CONST, const=0.0),
+        right=EMLNode(op=EMLOp.VAR_X, var_idx=2),
+    )
+    inner = EMLNode(op=EMLOp.EML, left=ms_shift, right=cq_shift)
+    root = EMLNode(op=EMLOp.EML, left=inner, right=def_shift)
+    return EMLTree(root=root, input_dim=_FEATURE_DIM)
+
+
+def _random_init_weights() -> dict[str, Any]:
+    """Pedagogical reference init — coefficients un-tuned.
+
+    Returns the same dict shape as
+    :func:`resonance.rewards.eml_weights.initialize_weights` but with
+    structurally-correct placeholders instead of benchmark-tuned numbers.
+    The calibration constants are set to an identity-ish affine
+    ``(scale=1.0, shift=0.0)`` so the raw EML output passes through
+    unchanged before the tanh clamp — callers get a bounded output but
+    lose the drop-in-CARL alignment property.
+
+    For production dynamics install the private runtime.
+    """
+    return {
+        "tree": _random_init_tree(),
+        "raw_to_linear_scale": 1.0,
+        "raw_to_linear_shift": 0.0,
+        "feature_ln_floor": 0.05,
+        "feature_dim": _FEATURE_DIM,
+    }
+
+
+def _load_init_weights() -> dict[str, Any]:
+    """Resolve initialization weights via admin gate, falling back to random.
+
+    Delegates to :func:`resonance.rewards.eml_weights.initialize_weights`
+    when the admin gate unlocks (returns the benchmark-tuned coefficients).
+    Falls through to :func:`_random_init_weights` when the resonance
+    runtime is unavailable — the public module still returns a working
+    :class:`EMLCompositeReward`, just not one that matches the
+    benchmarked +0.972 correlation.
+    """
+    try:
+        from carl_studio.admin import is_admin, load_private
+
+        if is_admin():
+            weights_mod = load_private("rewards.eml_weights")
+            result = weights_mod.initialize_weights()
+            if not isinstance(result, dict):
+                return _random_init_weights()
+            return cast(dict[str, Any], result)
+    except ImportError:
+        pass
+    return _random_init_weights()
 
 
 # ---------------------------------------------------------------------------
@@ -89,60 +177,6 @@ def eml_reward_from_trace(trace: Any) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Default tree builder
-# ---------------------------------------------------------------------------
-
-
-def _default_tree() -> EMLTree:
-    """Default tree approximating the CARL composite reward at depth 3.
-
-    Topology (depth 3, 3 CONST + 3 VAR_X leaves -> 3 trainable params):
-
-        root = eml(
-            inner = eml(
-                ms_shift  = eml(CONST_a, VAR_X[0]),   # ~= exp(a) - ln(ms)
-                cq_shift  = eml(CONST_b, VAR_X[1]),   # ~= exp(b) - ln(cq)
-            ),
-            def_shift = eml(CONST_c, VAR_X[2]),        # exp(c) - ln(defect)
-        )
-
-    Depth accounting:
-      ``eml(CONST, VAR)`` -> depth 1 (leaves at depth 0)
-      ``eml(leaf1, leaf1)`` (inner) -> depth 2
-      ``eml(inner, leaf1)`` (root) -> depth 3
-
-    Which matches ``MAX_DEPTH - 1`` so there is headroom for one more level.
-    The CONST leaves are Adam-trainable via ``leaf_params``. Initial values
-    are zero so the tree reduces to pure feature transformation at init time;
-    the ``_squash`` affine calibration handles the drop-in matching against
-    the linear CARL reward, and Adam can learn per-feature shifts from there.
-    """
-    # ms_shift = eml(CONST_a, VAR_X[0]) = exp(a) - ln(ms)
-    ms_shift = EMLNode(
-        op=EMLOp.EML,
-        left=EMLNode(op=EMLOp.CONST, const=0.0),
-        right=EMLNode(op=EMLOp.VAR_X, var_idx=0),
-    )
-    # cq_shift = eml(CONST_b, VAR_X[1]) = exp(b) - ln(cq)
-    cq_shift = EMLNode(
-        op=EMLOp.EML,
-        left=EMLNode(op=EMLOp.CONST, const=0.0),
-        right=EMLNode(op=EMLOp.VAR_X, var_idx=1),
-    )
-    # def_shift = eml(CONST_c, VAR_X[2]) = exp(c) - ln(defect)
-    def_shift = EMLNode(
-        op=EMLOp.EML,
-        left=EMLNode(op=EMLOp.CONST, const=0.0),
-        right=EMLNode(op=EMLOp.VAR_X, var_idx=2),
-    )
-    # inner = eml(ms_shift, cq_shift)
-    inner = EMLNode(op=EMLOp.EML, left=ms_shift, right=cq_shift)
-    # root = eml(inner, def_shift)
-    root = EMLNode(op=EMLOp.EML, left=inner, right=def_shift)
-    return EMLTree(root=root, input_dim=_FEATURE_DIM)
-
-
-# ---------------------------------------------------------------------------
 # EMLCompositeReward — depth-3 learnable tree, drop-in for CARLReward
 # ---------------------------------------------------------------------------
 
@@ -160,6 +194,14 @@ class EMLCompositeReward:
     The reward object is duck-compatible with ``CARLReward`` and
     ``PhaseAdaptiveCARLReward`` -- the same ``score_from_trace(trace) ->
     (reward, meta)`` signature.
+
+    Initialization path:
+      * Caller passes an explicit ``tree`` -> use it; calibration still
+        pulls from :func:`_load_init_weights` so benchmark-tuned callers
+        get tuned squash constants even with a custom tree.
+      * Caller leaves ``tree=None`` -> :func:`_load_init_weights` resolves
+        the tree AND calibration from the private runtime when admin
+        unlocks, else from :func:`_random_init_weights`.
     """
 
     def __init__(
@@ -173,7 +215,11 @@ class EMLCompositeReward:
                 f"max_depth {max_depth} exceeds EML MAX_DEPTH={MAX_DEPTH}"
             )
         self.max_depth: int = int(max_depth)
-        self.tree: EMLTree = tree if tree is not None else _default_tree()
+        init = _load_init_weights()
+        self._raw_to_linear_scale: float = float(init["raw_to_linear_scale"])
+        self._raw_to_linear_shift: float = float(init["raw_to_linear_shift"])
+        self._feature_ln_floor: float = float(init["feature_ln_floor"])
+        self.tree: EMLTree = tree if tree is not None else init["tree"]
         actual_depth = self.tree.depth()
         if actual_depth > self.max_depth:
             raise ValueError(
@@ -205,10 +251,17 @@ class EMLCompositeReward:
         """Calibrate raw EML output to CARL's [0, 1]-ish range, then tanh-clamp.
 
         Two-stage pipeline:
-          1. Affine calibration: linearized = RAW_TO_LINEAR_SCALE * raw + SHIFT
-             (so the init-time output is a drop-in CARL approximation).
+          1. Affine calibration: linearized = raw_to_linear_scale * raw + shift
+             (so the init-time output is a drop-in CARL approximation
+             WHEN the private runtime's tuned constants are in use).
           2. Tanh squash into the configured clamp window so the reward can
              never runaway during training even if leaf_params drift.
+
+        The affine constants are populated from
+        :func:`_load_init_weights` at construction time — they resolve to
+        the benchmark-tuned values from the private runtime when admin
+        unlocks, else to identity-like defaults from
+        :func:`_random_init_weights`.
         """
         lo, hi = self.clamp
         half = (hi - lo) / 2.0
@@ -217,7 +270,7 @@ class EMLCompositeReward:
             return float(mid)
         if half <= 0:
             return float(mid)
-        linearized = _RAW_TO_LINEAR_SCALE * raw + _RAW_TO_LINEAR_SHIFT
+        linearized = self._raw_to_linear_scale * raw + self._raw_to_linear_shift
         # Center around the clamp midpoint before tanh. For the default clamp
         # (-5, 5) this is 0; users with shifted clamps still get a sensible
         # output.
@@ -234,9 +287,9 @@ class EMLCompositeReward:
         if feats.shape[0] >= 1:
             feats[0] = max(feats[0], 0.0)
         if feats.shape[0] >= 2:
-            feats[1] = max(feats[1], _FEATURE_LN_FLOOR)
+            feats[1] = max(feats[1], self._feature_ln_floor)
         if feats.shape[0] >= 3:
-            feats[2] = max(feats[2], _FEATURE_LN_FLOOR)
+            feats[2] = max(feats[2], self._feature_ln_floor)
         feats = np.clip(feats, 0.0, 1e6)
         raw = self.tree.forward(feats)
         return self._squash(raw)
@@ -293,9 +346,9 @@ class EMLCompositeReward:
         if feats.shape[0] >= 1:
             feats[0] = max(feats[0], 0.0)
         if feats.shape[0] >= 2:
-            feats[1] = max(feats[1], _FEATURE_LN_FLOOR)
+            feats[1] = max(feats[1], self._feature_ln_floor)
         if feats.shape[0] >= 3:
-            feats[2] = max(feats[2], _FEATURE_LN_FLOOR)
+            feats[2] = max(feats[2], self._feature_ln_floor)
         feats = np.clip(feats, 0.0, 1e6)
         target = float(target)
         params = self.tree.leaf_params
@@ -363,11 +416,21 @@ class EMLCompositeReward:
             "adam_m": [float(v) for v in self._adam_m],
             "adam_v": [float(v) for v in self._adam_v],
             "adam_t": self._adam_t,
+            "raw_to_linear_scale": self._raw_to_linear_scale,
+            "raw_to_linear_shift": self._raw_to_linear_shift,
+            "feature_ln_floor": self._feature_ln_floor,
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "EMLCompositeReward":
-        """Reconstruct from ``to_dict`` output. Preserves reward output exactly."""
+        """Reconstruct from ``to_dict`` output. Preserves reward output exactly.
+
+        Legacy dicts (pre-v0.17, without ``raw_to_linear_scale`` etc) fall
+        through to the current init path — their reward output will match
+        only under the runtime that produced them. Current dicts round-trip
+        byte-identical regardless of whether the admin gate is unlocked on
+        the loading machine.
+        """
         root_dict = d.get("root")
         if root_dict is None:
             raise ValueError("EMLCompositeReward.from_dict: missing root")
@@ -390,6 +453,15 @@ class EMLCompositeReward:
             max_depth=int(d.get("max_depth", 3)),
             clamp=(clamp_lo, clamp_hi),
         )
+        # Restore calibration constants from the serialized dict when
+        # present — this guarantees to_dict/from_dict round-trips to an
+        # identical reward output regardless of the host's admin state.
+        if "raw_to_linear_scale" in d:
+            obj._raw_to_linear_scale = float(d["raw_to_linear_scale"])
+        if "raw_to_linear_shift" in d:
+            obj._raw_to_linear_shift = float(d["raw_to_linear_shift"])
+        if "feature_ln_floor" in d:
+            obj._feature_ln_floor = float(d["feature_ln_floor"])
         adam_m = np.asarray(d.get("adam_m", []), dtype=np.float64)
         adam_v = np.asarray(d.get("adam_v", []), dtype=np.float64)
         # Only adopt moments when they match the current param count — this

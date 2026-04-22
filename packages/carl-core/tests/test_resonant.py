@@ -1,7 +1,29 @@
-"""Tests for carl_core.resonant — perceive/cognize/act triple built on EML."""
+"""Tests for carl_core.resonant — perceive/cognize/act triple built on EML.
+
+Test taxonomy (post-v0.17 moat extraction):
+
+1. **Always-on** — structural tests: factory construction, matrix shapes,
+   identity hash stability, canonical wire format, ``per_dim`` cognize,
+   composition, equality. These operate entirely on the public Resonant
+   container + ``per_dim`` path; they stay green with or without the
+   private ``resonance`` runtime.
+2. **``@pytest.mark.private``** — joint-mode cognize integration tests.
+   ``Resonant._cognize_joint`` delegates to
+   ``resonance.geometry.joint_cognize``; without admin unlock (or the
+   local ``resonance`` package on ``sys.path``) those tests skip cleanly
+   via the shared ``admin_unlocked`` fixture + ``skip_if_private_unavailable``
+   helper registered in ``tests/conftest.py``.
+
+Factory-only tests for ``make_reward_resonant`` (which constructs a joint-
+mode Resonant but does not call ``.cognize()``) stay always-on — the
+envelope is public, only the computation is private.
+"""
 from __future__ import annotations
 
 import math
+import sys
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -10,10 +32,74 @@ from carl_core.eml import MAX_DEPTH, EMLTree
 from carl_core.errors import ValidationError
 from carl_core.resonant import (
     Resonant,
+    ResonantError,
     compose_resonants,
     make_resonant,
     make_reward_resonant,
 )
+
+
+# ---------------------------------------------------------------------------
+# Private-runtime resolution — helpers for @pytest.mark.private tests.
+# Mirrors the conftest.admin_unlocked pattern F1/F2 registered so this test
+# file stays self-sufficient when the repo-wide conftest is not discovered
+# (carl-core/tests runs independently under its own pytest node).
+# ---------------------------------------------------------------------------
+
+
+_RESONANCE_LOCAL_SRC = (
+    Path(__file__).resolve().parents[3] / ".." / "resonance" / "src"
+).resolve()
+
+
+def _try_load_resonance() -> bool:
+    """True if ``resonance.geometry.joint_cognize`` is importable right now."""
+    try:
+        import resonance.geometry.joint_cognize  # type: ignore[import-not-found]  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
+@pytest.fixture
+def admin_unlocked(monkeypatch: pytest.MonkeyPatch) -> bool:
+    """Simulate an admin-unlocked host; returns True iff resolution succeeds.
+
+    Patches ``carl_studio.admin.is_admin`` + ``load_private`` so the
+    ``_cognize_joint`` façade routes to the private
+    ``resonance.geometry.joint_cognize`` implementation without needing a
+    real admin key. Returns ``False`` when the resonance package is
+    unreachable (CI / contributor machines without the private repo).
+    """
+    if _RESONANCE_LOCAL_SRC.is_dir() and str(_RESONANCE_LOCAL_SRC) not in sys.path:
+        sys.path.insert(0, str(_RESONANCE_LOCAL_SRC))
+
+    if not _try_load_resonance():
+        return False
+
+    try:
+        from carl_studio import admin as admin_mod
+    except ImportError:
+        return False
+
+    monkeypatch.setattr(admin_mod, "is_admin", lambda: True)
+
+    def _fake_load_private(name: str) -> Any:
+        import importlib
+
+        return importlib.import_module(f"resonance.{name}")
+
+    monkeypatch.setattr(admin_mod, "load_private", _fake_load_private)
+    return True
+
+
+private_required = pytest.mark.private
+
+
+def _maybe_skip_private(unlocked: bool) -> None:
+    if not unlocked:
+        pytest.skip("resonance private runtime not available")
 
 
 # ---------------------------------------------------------------------------
@@ -375,7 +461,9 @@ def test_joint_mode_requires_projection_rows_match_tree_input_dim() -> None:
     assert excinfo.value.code == "carl.eml.domain_error"
 
 
-def test_joint_cognize_returns_scalar_shape() -> None:
+@private_required
+def test_joint_cognize_returns_scalar_shape(admin_unlocked: bool) -> None:
+    _maybe_skip_private(admin_unlocked)
     tree = EMLTree.exp_single()
     r = make_resonant(
         tree,
@@ -393,7 +481,11 @@ def test_joint_cognize_returns_scalar_shape() -> None:
     assert np.isfinite(out[0])
 
 
-def test_joint_cognize_batch_returns_batch_x_one_shape() -> None:
+@private_required
+def test_joint_cognize_batch_returns_batch_x_one_shape(
+    admin_unlocked: bool,
+) -> None:
+    _maybe_skip_private(admin_unlocked)
     tree = EMLTree.exp_single()
     r = make_resonant(
         tree,
@@ -404,6 +496,34 @@ def test_joint_cognize_batch_returns_batch_x_one_shape() -> None:
     batch = np.random.default_rng(0).standard_normal((5, 3))
     out = r.forward(batch)
     assert out.shape == (5, 1)
+
+
+def test_joint_cognize_without_admin_unlock_raises_resonant_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Joint mode without admin unlock must raise ResonantError with the
+    canonical ``carl.resonant.private_required`` code — no silent fallback.
+    """
+    # Simulate admin-locked state even when the resonance package is on
+    # sys.path: patch is_admin -> False so ``_load_private_impl`` short-
+    # circuits to None before it ever consults load_private.
+    try:
+        from carl_studio import admin as admin_mod
+    except ImportError:
+        pytest.skip("carl_studio.admin unavailable in this environment")
+
+    monkeypatch.setattr(admin_mod, "is_admin", lambda: False)
+
+    tree = EMLTree.exp_single()
+    r = make_resonant(
+        tree,
+        np.eye(tree.input_dim, 3),
+        np.ones((1, 1)),
+        cognition_mode="joint",
+    )
+    with pytest.raises(ResonantError) as excinfo:
+        r.cognize(np.ones(3))
+    assert excinfo.value.code == "carl.resonant.private_required"
 
 
 def test_make_reward_resonant_happy_path() -> None:

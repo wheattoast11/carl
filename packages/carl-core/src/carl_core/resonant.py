@@ -10,12 +10,40 @@ Cognition modes
 
 * ``per_dim`` (default, v0.9.0 behavior) — the tree is applied *per latent
   dimension* with only ``vec[0] = latent[i]`` populated. Preserves backwards
-  compatibility with every Resonant created before v0.16.
+  compatibility with every Resonant created before v0.16. Implementation
+  stays public — pedagogically complete, fully functional offline.
 * ``joint`` (v0.16) — the tree runs *once* over the full latent vector,
   producing a scalar. Required for trees where the multi-input structure
   matters (e.g., ``EMLCompositeReward``'s 3-feature reward tree). In joint
   mode the readout shape is ``(action_dim, 1)`` since cognize collapses the
-  latent to a scalar.
+  latent to a scalar. After v0.17 the joint-mode math lives in the private
+  ``resonance.geometry.joint_cognize`` module; calling ``cognize`` on a
+  joint-mode Resonant without admin unlock raises ``ResonantError`` with
+  code ``carl.resonant.private_required``. Unlike heartbeat, there is **no
+  pedagogical fallback** for joint cognition: the latent-vector → scalar
+  readout math IS the commercial differentiator, and silent substitutes
+  would blur the line.
+
+Public / private split (v0.17 moat extraction)
+----------------------------------------------
+
+Public (MIT, stays in ``carl_core.resonant``):
+
+* The ``Resonant`` Pydantic-style dataclass container.
+* ``per_dim`` cognize — pedagogical reference.
+* ``make_resonant`` + ``make_reward_resonant`` factories. Both accept
+  ``cognition_mode="joint"`` and produce a fully-constructible Resonant
+  with a valid ``identity`` — calling ``cognize`` / ``forward`` on that
+  Resonant later is what requires admin unlock.
+* ``compose_resonants`` — EML-magma closure, depth-bounded.
+* ``to_dict`` / ``from_dict`` wire format — mirrored by the TypeScript
+  sibling ``@terminals-tech/emlt-codec``. Pre-v0.16 envelopes default to
+  ``cognition_mode = "per_dim"`` on decode.
+* ``_compute_identity`` — sha256 fold of tree hash + matrix bytes + mode.
+
+Private (``resonance.geometry.joint_cognize``, admin-gated):
+
+* Full ``joint``-mode cognize implementation.
 
 Closure under composition: `compose_resonants(r1, r2)` yields a new Resonant
 whose cognition is `eml(r1.tree, r2.tree)`, provided the shape contract
@@ -24,14 +52,26 @@ holds. This preserves the EML magma structure at the Resonant level.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib import import_module
+from types import ModuleType
 from typing import Any, Literal, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
 from carl_core.eml import EMLNode, EMLOp, EMLTree, MAX_DEPTH
-from carl_core.errors import ValidationError
+from carl_core.errors import CARLError, ValidationError
 from carl_core.hashing import content_hash_bytes
+
+
+class ResonantError(CARLError):
+    """Error surfacing Resonant-specific failures.
+
+    Notably: raised when ``joint``-mode cognize is attempted without the
+    private resonance runtime available (admin locked).
+    """
+
+    code = "carl.resonant.private_required"
 
 
 # Public literal for the cognition mode. Kept as a narrow string literal so
@@ -165,32 +205,50 @@ class Resonant:
         raise _shape_error(f"cognize expects 1D or 2D input, got ndim={lat.ndim}")
 
     def _cognize_joint(self, lat: NDArray[np.float64]) -> NDArray[np.float64]:
-        """Joint-mode cognize: tree runs once on the full latent vector.
+        """Joint-mode cognize — delegates to the private resonance runtime.
 
         The tree's ``input_dim`` must match ``self.latent_dim`` (enforced at
         construction by :func:`make_resonant` / :func:`make_reward_resonant`).
         Returns shape ``(1,)`` for 1D input, ``(B, 1)`` for 2D.
+
+        After v0.17 the joint-mode math moved to
+        ``resonance.geometry.joint_cognize.cognize_joint``. When the admin
+        gate unlocks, this method resolves the private module and delegates.
+        Without admin unlock, raises :class:`ResonantError` with code
+        ``carl.resonant.private_required`` — there is no pedagogical
+        fallback for joint cognition because the latent-vector → scalar
+        readout IS the commercial differentiator; a silent substitute would
+        blur the line.
+
+        The public ``per_dim`` cognize path remains fully functional for
+        consumers without admin unlock; they can continue to build, hash,
+        serialize, and compose Resonants without touching the private
+        runtime — the gate fires only when ``.cognize()`` or ``.forward()``
+        is called on a joint-mode instance.
         """
-        if lat.ndim == 1:
-            if lat.shape[0] != self.latent_dim:
-                raise _shape_error(
-                    f"joint latent dim {lat.shape[0]} != expected {self.latent_dim}",
-                    got=int(lat.shape[0]),
-                    expected=self.latent_dim,
-                )
-            return np.array([float(self.tree.forward(lat))], dtype=np.float64)
-        if lat.ndim == 2:
-            if lat.shape[1] != self.latent_dim:
-                raise _shape_error(
-                    f"joint latent dim {lat.shape[1]} != expected {self.latent_dim}",
-                    got=int(lat.shape[1]),
-                    expected=self.latent_dim,
-                )
-            out = np.empty((lat.shape[0], 1), dtype=np.float64)
-            for b in range(lat.shape[0]):
-                out[b, 0] = float(self.tree.forward(lat[b]))
-            return out
-        raise _shape_error(f"joint cognize expects 1D or 2D input, got ndim={lat.ndim}")
+        priv = _load_private_impl()
+        if priv is None:
+            raise ResonantError(
+                "Joint-mode cognize requires the private resonance runtime. "
+                "Unlock admin mode ('carl admin unlock') or install the "
+                "resonance package. The public 'per_dim' cognition mode "
+                "remains fully available for offline use.",
+                code="carl.resonant.private_required",
+                context={
+                    "cognition_mode": self.cognition_mode,
+                    "latent_dim": self.latent_dim,
+                    "resonant_identity": self.identity,
+                },
+            )
+        cognize_fn = getattr(priv, "cognize_joint", None)
+        if not callable(cognize_fn):
+            raise ResonantError(
+                "private resonance.geometry.joint_cognize module is missing "
+                "the 'cognize_joint' callable — runtime is out of date.",
+                code="carl.resonant.private_required",
+                context={"resonant_identity": self.identity},
+            )
+        return cast(NDArray[np.float64], cognize_fn(self, lat))
 
     def act(self, latent: NDArray[np.floating[Any]]) -> NDArray[np.float64]:
         """Project a (post-cognition) latent through the readout matrix."""
@@ -495,9 +553,46 @@ def compose_resonants(r1: Resonant, r2: Resonant) -> Resonant:
     )
 
 
+# ---------------------------------------------------------------------------
+# Private-runtime resolution — lazy, admin-gated.
+# ---------------------------------------------------------------------------
+
+
+def _load_private_impl() -> ModuleType | None:
+    """Resolve the private ``resonance.geometry.joint_cognize`` implementation.
+
+    Uses a runtime import of ``carl_studio.admin`` to invoke ``load_private``.
+    carl-core cannot import carl-studio at module-load time (carl-core is
+    upstream), so this dance stays inside a function body.
+
+    Returns the private module on admin unlock, or ``None`` when the gate
+    is locked. Any underlying ImportError is caught — the caller
+    (``Resonant._cognize_joint``) surfaces the locked state by raising
+    :class:`ResonantError`.
+    """
+    try:
+        admin = import_module("carl_studio.admin")
+    except ImportError:
+        return None
+    try:
+        is_admin_fn = getattr(admin, "is_admin", None)
+        load_private_fn = getattr(admin, "load_private", None)
+        if is_admin_fn is None or load_private_fn is None:
+            return None
+        if not is_admin_fn():
+            return None
+        mod = load_private_fn("geometry.joint_cognize")
+        return cast(ModuleType, mod)
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+
 __all__ = [
     "CognitionMode",
     "Resonant",
+    "ResonantError",
     "compose_resonants",
     "make_resonant",
     "make_reward_resonant",

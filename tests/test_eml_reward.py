@@ -2,12 +2,20 @@
 
 Covers:
   1. Drop-in initialization (output close to CARLReward on same trace)
-  2. Gradient sanity (loss decreases under fit_step)
-  3. Serialization round-trip preserves reward output exactly
-  4. Depth enforcement (max_depth > MAX_DEPTH raises)
-  5. Factory dispatch via make_carl_reward(reward_class="eml")
-  6. Integration shape (matches PhaseAdaptiveCARLReward signature)
-  7. Determinism (same tree + same trace -> same reward)
+     — requires the benchmark-tuned coefficients, so marked ``@pytest.mark.private``
+     (skips cleanly when the resonance runtime is unavailable).
+  2. Gradient sanity (loss decreases under fit_step) — structural, always-on.
+  3. Serialization round-trip preserves reward output exactly — structural.
+  4. Depth enforcement (max_depth > MAX_DEPTH raises) — structural.
+  5. Factory dispatch via make_carl_reward(reward_class="eml") — structural.
+  6. Integration shape (matches PhaseAdaptiveCARLReward signature) — structural.
+  7. Determinism (same tree + same trace -> same reward) — structural.
+
+Post-v0.17 moat extraction: the +0.972 benchmark correlation with
+PhaseAdaptive + drop-in CARL approximation property belong to the private
+runtime (``resonance.rewards.eml_weights``). Public random-init fallback
+produces a working but un-tuned reward, so the drop-in assertions live
+under ``@pytest.mark.private`` and exercise the ``admin_unlocked`` fixture.
 """
 from __future__ import annotations
 
@@ -26,6 +34,8 @@ from carl_studio.training.rewards.eml import (
     EMLCompositeReward,
     eml_reward_from_trace,
 )
+
+from tests.conftest import skip_if_private_unavailable
 
 
 # ---------------------------------------------------------------------------
@@ -52,12 +62,30 @@ def reward() -> EMLCompositeReward:
 
 # ---------------------------------------------------------------------------
 # 1. Initialization — drop-in close to CARLReward
+#
+# Drop-in parity with CARLReward requires the benchmark-tuned calibration
+# constants + tuned tree topology shipped in the private runtime
+# (``resonance.rewards.eml_weights``). Tests that assert on the
+# benchmark-accurate +0.972 correlation live under ``@pytest.mark.private``
+# and exercise the ``admin_unlocked`` fixture. Structural tests
+# (metadata shape, bounded output, finite output) stay always-on because
+# the public random-init fallback preserves those invariants.
 # ---------------------------------------------------------------------------
 
 
 class TestDropInInit:
-    def test_output_close_to_carl_reward(self, trace: CoherenceTrace) -> None:
-        """On the same trace, EML reward must land within 0.3 abs of CARL."""
+    @pytest.mark.private
+    def test_output_close_to_carl_reward(
+        self,
+        admin_unlocked: bool,
+        trace: CoherenceTrace,
+    ) -> None:
+        """On the same trace, EML reward must land within 0.3 abs of CARL.
+
+        Benchmark-tuned property — requires the private runtime's
+        calibration constants.
+        """
+        skip_if_private_unavailable(admin_unlocked)
         carl = CARLReward()
         eml = make_eml_reward()
         s_carl, _ = carl.score_from_trace(trace)
@@ -67,8 +95,14 @@ class TestDropInInit:
             f"diff={abs(s_carl - s_eml):.4f}"
         )
 
-    def test_output_close_across_many_traces(self) -> None:
-        """Drop-in property must hold on a distribution of traces, not one."""
+    @pytest.mark.private
+    def test_output_close_across_many_traces(self, admin_unlocked: bool) -> None:
+        """Drop-in property must hold on a distribution of traces, not one.
+
+        Benchmark-tuned property — requires the private runtime's
+        calibration constants.
+        """
+        skip_if_private_unavailable(admin_unlocked)
         carl = CARLReward()
         eml = make_eml_reward()
         diffs = []
