@@ -1,0 +1,26 @@
+name: Moat boundary check
+
+# Enforces the public/private import seam: packages/carl-core/ and
+# src/carl_studio/ MUST NOT import `resonance` or `terminals_runtime` at
+# module load. Private-runtime modules load lazily via
+# `carl_studio.admin.load_private(...)` inside function bodies.
+#
+# See docs/v17_admin_gate_pattern.md for the full policy.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  moat-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run moat boundary check
+        run: python scripts/check_moat_boundary.py
