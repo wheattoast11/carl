@@ -175,30 +175,35 @@ def setup() -> None:
     c.header("Welcome to Camp CARL", "Coherence-Aware RL  --  carl.camp")
     c.blank()
 
+    from carl_studio.cli import ui
+
     if THEME_FILE.exists():
         current = load_theme()
         c.info(f"Current director: {current.persona.value.upper()}")
-        if not typer.confirm("  Reconfigure?", default=False):
+        if not ui.confirm("  Reconfigure?", default=False):
             raise typer.Exit(0)
 
-    c.print("\n  Pick your camp director:\n")
-    c.print("  [camp.primary][1][/] CARL  -- Methodical, precise, dry humor.")
-    c.print('  [camp.muted]    "Welcome to Camp CARL."[/]')
-    c.blank()
-    c.print("  [camp.accent][2][/] CARLI -- Warm, encouraging, high energy.")
-    c.print('  [camp.muted]    "Hey! Welcome to camp!"[/]')
-    c.blank()
-
-    choice = typer.prompt("  Your pick", default="1")
-    persona = Persona.CARLI if choice.strip() in ("2", "carli", "CARLI") else Persona.CARL
+    persona_choice = ui.select(
+        "Pick your camp director",
+        [
+            ui.Choice(value="carl", label="CARL", hint="Methodical, precise, dry humor"),
+            ui.Choice(value="carli", label="CARLI", hint="Warm, encouraging, high energy"),
+        ],
+        default=0,
+    )
+    persona = Persona.CARLI if persona_choice == "carli" else Persona.CARL
     theme = CampTheme.carl() if persona == Persona.CARL else CampTheme.carli()
 
-    c.print("\n  Output style:")
-    c.print("  [camp.primary][1][/] Normal   -- balanced spacing")
-    c.print("  [camp.primary][2][/] Chill    -- spacious, breathing room")
-    c.print("  [camp.primary][3][/] Focused  -- compact, info-dense")
-    density_choice = typer.prompt("  Style", default="1")
-    theme.density = {"2": "chill", "3": "focused"}.get(density_choice.strip(), "normal")
+    density_choice = ui.select(
+        "Output style",
+        [
+            ui.Choice(value="normal", label="Normal", hint="balanced spacing"),
+            ui.Choice(value="chill", label="Chill", hint="spacious, breathing room"),
+            ui.Choice(value="focused", label="Focused", hint="compact, info-dense"),
+        ],
+        default=0,
+    )
+    theme.density = density_choice
 
     save_theme(theme)
     c.blank()
@@ -242,28 +247,44 @@ def project_init(
     default_compute = compute or settings.default_compute.value
 
     if interactive:
+        from carl_studio.cli import ui
+
         c = get_console()
         c.blank()
         c.header("CARL Project Init")
-        name = typer.prompt("Project name", default=name)
-        description = typer.prompt("What this project trains", default=description)
+        name = ui.text("Project name", default=name)
+        description = ui.text("What this project trains", default=description)
         default_repo = output_repo or (
             f"{settings.hub_namespace}/{_slugify_identifier(name)}"
             if settings.hub_namespace
             else ""
         )
-        model = typer.prompt(
+        model = ui.text(
             "Base model ID (e.g. your-org/your-model)",
             default=default_model,
         )
-        method = typer.prompt("Training method (sft/grpo/dpo)", default=method)
-        dataset = typer.prompt("Dataset repo (HF ID or local path)", default=dataset)
-        output_repo = typer.prompt("Output repo (HF ID)", default=default_repo)
-        compute = typer.prompt(
-            "Compute target (l4x1/l40sx1/a100-largex8/local)",
-            default=default_compute,
+        method = ui.select(
+            "Training method",
+            [
+                ui.Choice(value="grpo", label="GRPO", badge="recommended", hint="RL with reward shaping"),
+                ui.Choice(value="sft", label="SFT", hint="supervised fine-tuning"),
+                ui.Choice(value="dpo", label="DPO", hint="direct preference optimization"),
+            ],
+            default=0,
         )
-        use_case = typer.prompt("Describe the training goal (optional)", default=use_case)
+        dataset = ui.text("Dataset repo (HF ID or local path)", default=dataset)
+        output_repo = ui.text("Output repo (HF ID)", default=default_repo)
+        compute = ui.select(
+            "Compute target",
+            [
+                ui.Choice(value="local", label="local", badge="recommended", hint="your own hardware"),
+                ui.Choice(value="l4x1", label="l4x1", hint="1× L4 GPU (cheap)"),
+                ui.Choice(value="l40sx1", label="l40sx1", hint="1× L40S GPU"),
+                ui.Choice(value="a100-largex8", label="a100-largex8", hint="8× A100 (big jobs)"),
+            ],
+            default=0,
+        )
+        use_case = ui.text("Describe the training goal (optional)", default=use_case)
     else:
         model = default_model
         compute = default_compute

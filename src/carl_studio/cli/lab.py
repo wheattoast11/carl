@@ -185,7 +185,9 @@ def dev(
         for hint in phase_hints.get(p, []):
             c.print(f"    [camp.muted]{hint}[/]")
 
-        if not typer.confirm("    Gate: proceed?", default=True):
+        from carl_studio.cli import ui
+
+        if not ui.confirm("    Gate: proceed?", default=True):
             c.warn(f"Stopped at {p} phase.")
             raise typer.Exit(0)
         c.blank()
@@ -393,7 +395,9 @@ def learn_cmd(
                 title="Interpreted Plan",
             )
             c.info(plan.explanation)
-            if not typer.confirm("Proceed?"):
+            from carl_studio.cli import ui
+
+            if not ui.confirm("Proceed?", default=True):
                 raise typer.Exit(0)
             # Apply interpreted plan to local vars
             source = plan.sources[0] if plan.sources else source
@@ -643,7 +647,9 @@ def admin_clear() -> None:
     if not _ADMIN_KEY_PATH.exists():
         c.info("Admin key not present. Already locked.")
         raise typer.Exit(0)
-    if not typer.confirm("  Remove admin key and lock admin mode?", default=False):
+    from carl_studio.cli import ui
+
+    if not ui.confirm("  Remove admin key and lock admin mode?", default=False):
         raise typer.Exit(0)
     clear_admin_key()
     c.ok("Admin key removed. Admin mode locked.")

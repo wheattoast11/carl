@@ -250,6 +250,29 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
   resolved" diagnostics. Trust a direct `pyright <file>` CLI run
   over inline harness reports.
 
+## CLI UX + dep-probe doctrine (v0.17.1)
+
+Two doctrines land in this release; every future prompt / optional-dep
+check obeys them:
+
+- **`docs/v17_cli_ux_doctrine.md`** — first-is-default, arrow-key
+  everywhere, no auto-advance on digit, non-TTY fallback mandatory,
+  all prompts route through `src/carl_studio/cli/ui.py` (the
+  `select` / `confirm` / `text` / `path` facade). No new
+  `typer.prompt` / `typer.confirm` calls in the tree. Backed by
+  `questionary` via the `[cli]` extra.
+- **`docs/v17_dep_probe_doctrine.md`** — every optional-dep check
+  uses `carl_core.dependency_probe.probe()`. The 7-state classifier
+  distinguishes `missing` / `import_error` / `import_value_error` /
+  `metadata_missing` / `metadata_corrupt` / `version_mismatch` / `ok`
+  so the `carl init` wizard can offer consent-gated auto-heal for
+  the HF-style sibling-dep-corruption class of failure that used to
+  kill the wizard. `carl doctor` surfaces `carl.freshness.dep_corrupt`
+  as an error with the exact `pip install --force-reinstall --no-deps`
+  remediation pre-filled.
+
+The plan that drove the implementation: `docs/v17_cli_ux_and_dep_probe_plan.md`.
+
 ## Current repo truths
 
 - There are no Cursor rules or Copilot instruction files in this repo.

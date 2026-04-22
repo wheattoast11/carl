@@ -115,8 +115,14 @@ secrets = [
     "keyring>=24.0.0",
     "pyperclip>=1.9.0",
 ]
+# Interactive CLI UX (v0.17.1). Pulls questionary for arrow-key select /
+# confirm / password / path flows. `cli/ui.py` lazy-imports it and falls
+# back to `typer.prompt` when absent or on non-TTY stdin — the fallback
+# path is fully covered by tests. Industry-standard arrow-key UX (gh,
+# vite, claude-code, codex) without the prompt_toolkit Textual footprint.
+cli = ["questionary>=2.0,<3"]
 dev = ["pytest", "ruff", "pyright", "hypothesis>=6.100"]
-all = ["carl-studio[training,observe,hf,runpod,tinker,tui,mcp,research,a2a,x402,payments,metrics,constitutional,slime,secrets,dev]"]
+all = ["carl-studio[training,observe,hf,runpod,tinker,tui,mcp,research,a2a,x402,payments,metrics,constitutional,slime,secrets,cli,dev]"]
 
 [project.scripts]
 carl = "carl_studio.cli:app"

@@ -18,6 +18,7 @@ import typer
 
 from carl_core.interaction import ActionType, InteractionChain
 
+from carl_studio.cli import ui
 from carl_studio.console import get_console
 from carl_studio.settings import CARL_HOME, GLOBAL_CONFIG
 
@@ -162,9 +163,30 @@ def _ensure_camp_account(chain: InteractionChain) -> bool:
         return True
 
     c.print("  [camp.primary]carl.camp account[/]")
-    has_account = typer.confirm("  Already have one?", default=False)
+    action = ui.select(
+        "How do you want to sign in?",
+        [
+            ui.Choice(value="sign_in", label="Sign in with browser", badge="recommended"),
+            ui.Choice(
+                value="create_account",
+                label="Create an account",
+                hint="opens carl.camp/auth/signup",
+            ),
+            ui.Choice(value="skip", label="Skip — configure later"),
+        ],
+        default=0,
+    )
 
-    if not has_account:
+    if action == "skip":
+        chain.record(
+            ActionType.GATE,
+            "camp_login",
+            input={"resolved_via": "skipped"},
+            success=True,
+        )
+        return False
+
+    if action == "create_account":
         c.info("Opening carl.camp signup in your browser.")
         try:
             webbrowser.open("https://carl.camp/auth/signup")
@@ -242,11 +264,16 @@ def _ensure_llm_provider(chain: InteractionChain) -> tuple[bool, str | None]:
         return True, detected
 
     c.print("  [camp.primary]LLM provider[/]")
-    c.print("  [1] Anthropic (Claude)")
-    c.print("  [2] OpenRouter (any model)")
-    c.print("  [3] OpenAI")
-    c.print("  [4] Skip — configure later")
-    choice = typer.prompt("  Pick one", default="1")
+    choice = ui.select(
+        "Which provider do you want Carl to use by default?",
+        [
+            ui.Choice(value="anthropic", label="Anthropic (Claude)", badge="recommended"),
+            ui.Choice(value="openrouter", label="OpenRouter", hint="any model, unified API"),
+            ui.Choice(value="openai", label="OpenAI"),
+            ui.Choice(value="skip", label="Skip — configure later"),
+        ],
+        default=0,
+    )
 
     try:
         from carl_studio.cli.prompt import require
@@ -255,13 +282,13 @@ def _ensure_llm_provider(chain: InteractionChain) -> tuple[bool, str | None]:
 
     provider_label: str | None
     try:
-        if choice == "1":
+        if choice == "anthropic":
             require("ANTHROPIC_API_KEY", chain=chain)
             provider_label = "Anthropic"
-        elif choice == "2":
+        elif choice == "openrouter":
             require("OPENROUTER_API_KEY", chain=chain)
             provider_label = "OpenRouter"
-        elif choice == "3":
+        elif choice == "openai":
             require("OPENAI_API_KEY", chain=chain)
             provider_label = "OpenAI"
         else:
@@ -359,18 +386,51 @@ def _persist_default_chat_model(provider_label: str | None, chain: InteractionCh
 # Step: training extras
 # ---------------------------------------------------------------------------
 
+# Packages the training extra pulls. Keep in sync with pyproject.toml's
+# [project.optional-dependencies].training list. `huggingface_hub` isn't
+# in that list directly but it's the #1 sibling-corruption source — we
+# probe it so we can surface + auto-heal corruption detected via the
+# transformers import_value_error path.
+_TRAINING_EXTRA_PACKAGES = (
+    ("torch", None),
+    ("transformers", None),
+    ("huggingface_hub", None),
+)
+
+
+def _probe_training_extras() -> list[Any]:
+    """Probe every training-extras package and return their DepProbeResults."""
+    from carl_core.dependency_probe import probe
+
+    return [probe(name, import_name=import_name) for name, import_name in _TRAINING_EXTRA_PACKAGES]
+
+
 def _training_extras_installed() -> bool:
-    try:
-        import torch  # noqa: F401
-        import transformers  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    """True iff every training-extras package is healthy.
+
+    Thin bool wrapper over :func:`_probe_training_extras` for callers that
+    only want a yes/no (e.g. ``carl doctor`` summary).
+    """
+    return all(r.healthy for r in _probe_training_extras())
 
 
 def _offer_extras(chain: InteractionChain) -> bool:
+    """Walk the user through fresh-install / auto-heal / skip branches.
+
+    Three states fan out from probing every training-extras package:
+
+    - All healthy → skip install; record + return ``True``.
+    - Any corrupt sibling (the HF scenario) → offer to run
+      ``pip install --force-reinstall --no-deps <pkg>`` per probe's
+      ``repair_command``. Never silent — user must consent. Re-probe after.
+    - Any package genuinely missing → offer the bulk
+      ``pip install 'carl-studio[training]'`` (current path).
+    """
     c = get_console()
-    if _training_extras_installed():
+    probes = _probe_training_extras()
+    unhealthy = [r for r in probes if not r.healthy]
+
+    if not unhealthy:
         c.ok("Training extras already installed.")
         chain.record(
             ActionType.CLI_CMD, "install_extras",
@@ -378,9 +438,135 @@ def _offer_extras(chain: InteractionChain) -> bool:
         )
         return True
 
+    # Auto-heal branch: any probe that needs_repair (installed-but-broken)
+    # is distinct from missing. We surface both, but offer the auto-heal
+    # first because it's the faster recovery path.
+    repair_targets = _collect_repair_targets(probes)
+    if repair_targets:
+        return _offer_auto_heal(chain, probes, repair_targets)
+
+    # Fresh-install branch — only truly missing packages.
+    return _offer_fresh_install(chain, probes)
+
+
+def _collect_repair_targets(probes: list[Any]) -> list[tuple[str, str]]:
+    """Return list of ``(target_name, repair_command)`` for corrupt deps.
+
+    For ``import_value_error`` results (the HF scenario), the probe's
+    own ``repair_command`` targets the wrong package — the sibling
+    named in the error is what's actually broken. We parse the sibling
+    out and substitute. Each ``(target_name, repair_command)`` appears
+    at most once even if multiple probes blame the same sibling.
+    """
+    from carl_core.dependency_probe import extract_corrupt_sibling, probe
+
+    seen: set[str] = set()
+    targets: list[tuple[str, str]] = []
+
+    for r in probes:
+        if r.healthy or r.is_missing:
+            continue
+
+        if r.status == "import_value_error" and r.import_error:
+            sibling = extract_corrupt_sibling(r.import_error)
+            if sibling:
+                sibling_probe = probe(sibling)
+                if sibling_probe.needs_repair and sibling_probe.normalized_name not in seen:
+                    seen.add(sibling_probe.normalized_name)
+                    targets.append(
+                        (sibling_probe.normalized_name, sibling_probe.repair_command)
+                    )
+                continue
+
+        # Other broken states: use the probe's own repair command.
+        if r.normalized_name not in seen:
+            seen.add(r.normalized_name)
+            targets.append((r.normalized_name, r.repair_command))
+
+    return targets
+
+
+def _offer_auto_heal(
+    chain: InteractionChain,
+    probes: list[Any],
+    targets: list[tuple[str, str]],
+) -> bool:
+    c = get_console()
+    c.print("  [camp.primary]Training extras[/]")
+    c.warn("One or more packages appear corrupt (stale dist-info or half-finished upgrade).")
+    for r in probes:
+        if r.healthy:
+            c.ok(f"  ✓ {r.normalized_name:24} {r.import_version or '?'}")
+        elif r.is_missing:
+            c.info(f"  · {r.normalized_name:24} (not installed)")
+        else:
+            detail = (r.import_error or r.metadata_error or r.status).splitlines()[0][:80]
+            c.warn(f"  ✗ {r.normalized_name:24} {detail}")
+
+    c.blank()
+    c.info("Suggested repair:")
+    for name, cmd in targets:
+        c.print(f"    [camp.primary]{cmd}[/]")
+
+    try:
+        run_repair = ui.confirm("  Run the repair now?", default=True)
+    except (typer.Abort, EOFError, OSError):
+        run_repair = False
+
+    if not run_repair:
+        c.info("Skipped. You can run the commands above manually.")
+        chain.record(
+            ActionType.CLI_CMD, "install_extras",
+            input={"action": "auto_heal_declined", "targets": [t[0] for t in targets]},
+            success=True,
+        )
+        return False
+
+    failed: list[str] = []
+    for name, cmd in targets:
+        c.info(f"Running: {cmd}")
+        try:
+            subprocess.run(cmd.split(), check=True)
+        except subprocess.CalledProcessError as exc:
+            c.warn(f"  failed (exit {exc.returncode}): {cmd}")
+            failed.append(name)
+
+    chain.record(
+        ActionType.EXTERNAL, "pip_auto_heal",
+        input={"targets": [t[0] for t in targets]},
+        output={"failed": failed},
+        success=not failed,
+    )
+
+    if failed:
+        c.warn(
+            "Some repairs failed. Try running the failing commands manually, "
+            "then re-run `carl init --force`."
+        )
+        return False
+
+    # Re-probe to confirm; if still unhealthy, fall through to fresh-install.
+    post = _probe_training_extras()
+    if all(r.healthy for r in post):
+        c.ok("Training extras healthy after repair.")
+        return True
+    # Still broken — more likely a missing package now; hand off.
+    return _offer_fresh_install(chain, post)
+
+
+def _offer_fresh_install(chain: InteractionChain, probes: list[Any]) -> bool:
+    c = get_console()
     c.print("  [camp.primary]Training extras[/]")
     c.print("  Torch, transformers, trl, peft — needed for `carl train`.")
-    if not typer.confirm("  Install now?", default=False):
+    missing = [r.normalized_name for r in probes if r.is_missing]
+    if missing:
+        c.info(f"  missing: {', '.join(missing)}")
+    try:
+        install = ui.confirm("  Install training extras now?", default=False)
+    except (typer.Abort, EOFError, OSError):
+        install = False
+
+    if not install:
         c.info("Skipped. Install later with: pip install 'carl-studio[training]'")
         chain.record(
             ActionType.CLI_CMD, "install_extras",
@@ -428,7 +614,7 @@ def _ensure_project(chain: InteractionChain) -> bool:
         )
         return True
 
-    if not typer.confirm("  Initialize carl.yaml in current directory?", default=True):
+    if not ui.confirm("  Initialize carl.yaml in current directory?", default=True):
         chain.record(
             ActionType.CLI_CMD, "project_init",
             input={"answer": "no"}, success=True,
@@ -605,7 +791,7 @@ def _offer_sample_project(chain: InteractionChain) -> bool:
     c.print("  [camp.primary]Sample project[/]")
     c.info("A tiny quickstart to try `carl train` immediately.")
     try:
-        wanted = typer.confirm("  Create a sample training project? (quickstart)", default=False)
+        wanted = ui.confirm("  Create a sample training project? (quickstart)", default=False)
     except (typer.Abort, EOFError, OSError):
         wanted = False
     if not wanted:
@@ -693,7 +879,7 @@ def _offer_context_gathering(chain: InteractionChain) -> bool:
         if existing.get("hf_model"):
             c.info(f"  hf_model:    {existing['hf_model']}")
         try:
-            keep = typer.confirm("  Keep current context?", default=True)
+            keep = ui.confirm("  Keep current context?", default=True)
         except (typer.Abort, EOFError, OSError):
             keep = True
         if keep:
@@ -705,7 +891,7 @@ def _offer_context_gathering(chain: InteractionChain) -> bool:
         # fallthrough: user wants to edit
 
     try:
-        wanted = typer.confirm(
+        wanted = ui.confirm(
             "  Have a GitHub repo or HF model you want to work with?",
             default=False,
         )
@@ -720,18 +906,16 @@ def _offer_context_gathering(chain: InteractionChain) -> bool:
         return False
 
     try:
-        github_repo = typer.prompt(
+        github_repo = ui.text(
             "  GitHub repo (user/repo or URL; blank to skip)",
             default="",
-            show_default=False,
         ).strip()
     except (typer.Abort, EOFError, OSError):
         github_repo = ""
     try:
-        hf_model = typer.prompt(
+        hf_model = ui.text(
             "  HF model (user/model or URL; blank to skip)",
             default="",
-            show_default=False,
         ).strip()
     except (typer.Abort, EOFError, OSError):
         hf_model = ""
@@ -838,5 +1022,8 @@ __all__ = [
     "_render_sample_project_yaml",
     "_celebrate_and_guide",
     "_load_context",
+    "_training_extras_installed",
+    "_probe_training_extras",
+    "_offer_extras",
     "_save_context",
 ]

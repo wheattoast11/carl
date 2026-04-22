@@ -330,8 +330,10 @@ def start(
 
     # Interactive Project Setup Handoff
     if not inventory and not project.get("path"):
+        from carl_studio.cli import ui as _ui
+
         c.info("No carl.yaml found in current directory.")
-        if typer.confirm("Would you like to initialize a new project now?", default=True):
+        if _ui.confirm("Would you like to initialize a new project now?", default=True):
             from carl_studio.cli.project_data import project_init
 
             # Execute the interactive wizard

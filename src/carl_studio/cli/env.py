@@ -20,20 +20,26 @@ _DEFAULT_OUTPUT = Path("carl.yaml")
 
 
 def _prompt_user(question: Any) -> str:
-    """Render a question via typer; return raw user answer.
+    """Render a question via ``cli/ui.py``; return the raw user answer.
 
-    Free-form questions prompt for text; choice questions list numbered
-    options and accept an index OR the literal value.
+    Free-form questions route to ``ui.text``; choice questions route to
+    ``ui.select`` (arrow-key UX with a typer-prompt fallback when the
+    ``questionary`` extra is missing or stdin is non-TTY). The first
+    choice is the default per the CLI UX doctrine.
     """
-    typer.echo("")
-    typer.secho(question.prompt, fg="cyan", bold=True)
+    from carl_studio.cli import ui
+
     if question.explainer:
         typer.secho(f"  {question.explainer}", fg="bright_black")
+
     if question.free_form:
-        return typer.prompt("  →").strip()
-    for c in question.choices:
-        typer.echo(f"  [{c.key}] {c.label}")
-    return typer.prompt("  →").strip()
+        return ui.text(f"  {question.prompt}").strip()
+
+    choices = [
+        ui.Choice(value=c.key, label=c.label)
+        for c in question.choices
+    ]
+    return ui.select(f"  {question.prompt}", choices, default=0).strip()
 
 
 def env_cmd(

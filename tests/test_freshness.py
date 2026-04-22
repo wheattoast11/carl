@@ -223,6 +223,26 @@ class TestCheckPackages:
             _check_packages(report)
         assert not report.issues
 
+    def test_hf_style_corruption_emits_dep_corrupt_error(self) -> None:
+        """The HF scenario: metadata.version() returns None for an importable package.
+
+        Regression test: before the dep-probe rewrite, ``_check_packages``
+        silently swallowed this via ``except (ValueError, AttributeError,
+        TypeError): continue``. Now it surfaces as a
+        ``carl.freshness.dep_corrupt`` error with a concrete repair command.
+        """
+        from carl_studio.freshness import CODE_DEP_CORRUPT, SEVERITY_ERROR
+
+        report = FreshnessReport()
+        with patch("importlib.metadata.version", return_value=None):
+            _check_packages(report)
+
+        corrupt_issues = [i for i in report.issues if i.code == CODE_DEP_CORRUPT]
+        assert corrupt_issues, "expected dep_corrupt issues for None-returning metadata"
+        for issue in corrupt_issues:
+            assert issue.severity == SEVERITY_ERROR
+            assert "pip install --force-reinstall --no-deps" in issue.remediation
+
 
 class TestCheckConfig:
     def test_deprecated_prefix(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

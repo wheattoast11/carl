@@ -75,9 +75,11 @@ def consent_reset(
     """Reset all consents to off (privacy-first defaults)."""
     from carl_studio.console import get_console
 
+    from carl_studio.cli import ui
+
     c = get_console()
     if not force:
-        if not typer.confirm("  Reset all consent flags to off?", default=False):
+        if not ui.confirm("  Reset all consent flags to off?", default=False):
             raise typer.Exit(0)
 
     mgr = ConsentManager()

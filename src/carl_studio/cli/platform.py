@@ -134,7 +134,9 @@ def config_reset(
         if not GLOBAL_CONFIG.is_file():
             c.info("No config file to reset.")
             raise typer.Exit(0)
-        if not typer.confirm("  Reset all settings to defaults?", default=False):
+        from carl_studio.cli import ui
+
+        if not ui.confirm("  Reset all settings to defaults?", default=False):
             raise typer.Exit(0)
 
     reset_settings()
@@ -157,9 +159,11 @@ def config_init(
 
     c = get_console()
 
+    from carl_studio.cli import ui
+
     if GLOBAL_CONFIG.is_file() and interactive:
         c.info(f"Config already exists at {GLOBAL_CONFIG}")
-        if not typer.confirm("  Overwrite?", default=False):
+        if not ui.confirm("  Overwrite?", default=False):
             raise typer.Exit(0)
 
     settings = CARLSettings()
@@ -177,27 +181,44 @@ def config_init(
         c.blank()
 
         # Preset
-        c.print("  Configuration preset:")
-        c.print("  [camp.primary][1][/] Research   -- verbose observe, debug logging, all metrics")
-        c.print("  [camp.primary][2][/] Production -- minimal logging, auto-push, eval gating")
-        c.print("  [camp.primary][3][/] Quick      -- fast defaults, L4 compute, 20 steps max")
-        c.print("  [camp.primary][4][/] Custom     -- configure everything manually")
-        preset_choice = typer.prompt("  Preset", default="4")
+        preset_choice = ui.select(
+            "Configuration preset",
+            [
+                ui.Choice(
+                    value="custom",
+                    label="Custom",
+                    badge="recommended",
+                    hint="configure everything manually",
+                ),
+                ui.Choice(
+                    value="research",
+                    label="Research",
+                    hint="verbose observe, debug logging, all metrics",
+                ),
+                ui.Choice(
+                    value="production",
+                    label="Production",
+                    hint="minimal logging, auto-push, eval gating",
+                ),
+                ui.Choice(
+                    value="quick",
+                    label="Quick",
+                    hint="fast defaults, L4 compute, 20 steps max",
+                ),
+            ],
+            default=0,
+        )
         preset_map = {
-            "1": Preset.RESEARCH,
-            "2": Preset.PRODUCTION,
-            "3": Preset.QUICK,
-            "4": Preset.CUSTOM,
             "research": Preset.RESEARCH,
             "production": Preset.PRODUCTION,
             "quick": Preset.QUICK,
             "custom": Preset.CUSTOM,
         }
-        settings.preset = preset_map.get(preset_choice.strip().lower(), Preset.CUSTOM)
+        settings.preset = preset_map.get(preset_choice, Preset.CUSTOM)
 
         # Model
         c.blank()
-        settings.default_model = typer.prompt(
+        settings.default_model = ui.text(
             "  Default base model",
             default=settings.default_model,
         )
@@ -206,41 +227,45 @@ def config_init(
         detected_ns = settings.hub_namespace
         if detected_ns:
             c.info(f"Detected HF namespace: {detected_ns}")
-        settings.hub_namespace = typer.prompt(
+        settings.hub_namespace = ui.text(
             "  Hub namespace",
             default=detected_ns or "",
         )
 
         # Naming prefix
-        settings.naming_prefix = typer.prompt(
+        settings.naming_prefix = ui.text(
             "  Naming prefix (for runs/repos)",
             default=settings.naming_prefix,
         )
 
         # Trackio
         c.blank()
-        trackio = typer.prompt("  Trackio dashboard URL (blank to skip)", default="")
+        trackio = ui.text("  Trackio dashboard URL (blank to skip)", default="")
         if trackio:
             settings.trackio_url = trackio
 
         # Tier preference comes last so the workbench stays local-first.
         c.blank()
-        c.print("  Preferred tier for upgrade prompts:")
-        c.print(
-            "  [camp.primary][1][/] Free -- Local-first workbench, BYOK compute, manual control"
+        tier_choice = ui.select(
+            "Preferred tier for upgrade prompts",
+            [
+                ui.Choice(
+                    value="free",
+                    label="Free",
+                    badge="recommended",
+                    hint="Local-first workbench, BYOK compute, manual control",
+                ),
+                ui.Choice(
+                    value="paid",
+                    label="Paid",
+                    hint="Sync, autonomy, marketplace, fleet, platform",
+                ),
+            ],
+            default=0,
+            help="You can stay free and upgrade later with `carl camp upgrade`",
         )
-        c.print(
-            "  [camp.accent][2][/]  Paid -- Sync, autonomy, marketplace, fleet, and platform surfaces"
-        )
-        c.print("  [camp.muted]    You can stay free and upgrade later with carl camp upgrade[/]")
-        tier_choice = typer.prompt("  Tier", default="1")
-        tier_map = {
-            "1": Tier.FREE,
-            "2": Tier.PAID,
-            "free": Tier.FREE,
-            "paid": Tier.PAID,
-        }
-        settings.tier = tier_map.get(tier_choice.strip().lower(), Tier.FREE)
+        tier_map = {"free": Tier.FREE, "paid": Tier.PAID}
+        settings.tier = tier_map.get(tier_choice, Tier.FREE)
 
     # Apply preset after interactive to merge
     settings = settings.model_validate(settings.model_dump())

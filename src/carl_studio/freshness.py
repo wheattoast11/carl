@@ -40,6 +40,10 @@ CHECK_INTERVAL_DAYS = 1  # TTL default: 24h (per spec).
 
 #: Installed package is older than the recommended floor.
 CODE_STALE_PKG = "carl.freshness.stale_pkg"
+#: Installed package's metadata is corrupt / unreadable — typically a stale
+#: ``*.dist-info`` left by an interrupted pip upgrade. The wizard can auto-
+#: heal via ``pip install --force-reinstall --no-deps <pkg>``.
+CODE_DEP_CORRUPT = "carl.freshness.dep_corrupt"
 #: ``carl.yaml`` references an internal-default value that should be overridden.
 CODE_CONFIG_INTERNAL_DEFAULT = "carl.freshness.config_internal_default"
 #: ``carl.yaml`` on disk failed to parse as YAML.
@@ -292,8 +296,18 @@ def run_freshness_check(*, force: bool = False) -> FreshnessReport:
 
 
 def _check_packages(report: FreshnessReport) -> None:
-    """Check installed packages against minimum recommended versions."""
-    import importlib.metadata as meta
+    """Check installed packages: stale versions AND corrupt metadata.
+
+    Uses :func:`carl_core.dependency_probe.probe` so we catch the
+    import-ok/metadata-corrupt class of failure that previously escaped
+    silent-swallow ``except (ValueError, AttributeError, TypeError): continue``.
+    The HF huggingface-hub stale-dist-info scenario surfaces here as a
+    ``dep_corrupt`` error with a concrete repair command; the wizard's
+    ``_offer_extras`` auto-heal path picks it up from there.
+    """
+    import re
+
+    from carl_core.dependency_probe import probe
 
     # Key packages with recommended minimums (kept aligned with pyproject floors).
     checks: dict[str, str] = {
@@ -305,16 +319,40 @@ def _check_packages(report: FreshnessReport) -> None:
     }
 
     for pkg, min_ver in checks.items():
-        try:
-            installed = meta.version(pkg)
-        except meta.PackageNotFoundError:
-            continue  # not installed -- not an issue
-        except (ValueError, AttributeError, TypeError):
+        result = probe(pkg)
+
+        # Not installed / not registered: silently skip. Install-missing is
+        # a separate surface handled by `_offer_extras` in `carl init`;
+        # metadata_missing often means intentional manual install.
+        if result.is_missing or result.status == "metadata_missing":
             continue
+
+        # Corruption we cannot recover a version from: emit dep_corrupt.
+        # ``version_mismatch`` falls through to the floor check below —
+        # it still has a readable metadata_version to compare.
+        if result.status in ("metadata_corrupt", "import_error", "import_value_error"):
+            detail_source = result.import_error or result.metadata_error
+            detail = (
+                detail_source.splitlines()[0][:160]
+                if detail_source
+                else "metadata unreadable"
+            )
+            report.add(
+                FreshnessIssue(
+                    code=CODE_DEP_CORRUPT,
+                    severity=SEVERITY_ERROR,
+                    category=CATEGORY_PACKAGE,
+                    subject=pkg,
+                    detail=f"{pkg}: {result.status} — {detail}",
+                    remediation=result.repair_command,
+                )
+            )
+            continue
+
+        # Healthy / version_mismatch: compare against recommended floor.
+        installed = result.metadata_version
         if not installed:
             continue
-        import re
-
         try:
             installed_parts = [
                 int(m.group())
@@ -459,6 +497,7 @@ __all__ = [
     "FRESHNESS_FILE",
     "CHECK_INTERVAL_DAYS",
     "CODE_STALE_PKG",
+    "CODE_DEP_CORRUPT",
     "CODE_CONFIG_INTERNAL_DEFAULT",
     "CODE_CONFIG_INVALID",
     "CODE_MISSING_HF_TOKEN",

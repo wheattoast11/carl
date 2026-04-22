@@ -26,6 +26,32 @@ from carl_studio.console import CampConsole, get_console
 __all__ = ["require", "RequireSpec", "known_keys"]
 
 
+def _default_prompt(
+    prompt: str,
+    *,
+    default: str = "",
+    hide_input: bool = False,
+    show_default: bool = True,
+) -> str:
+    """Adapter: route the default prompt through ``cli/ui.py``.
+
+    Keeps the signature ``typer.prompt`` compatible (``hide_input``,
+    ``show_default``) so ``require()`` callers + tests can keep injecting
+    ``prompt_fn=typer.prompt``-shaped lambdas. Lazy-imports to avoid a
+    cycle with ``cli/__init__``.
+    """
+    del show_default  # ui.text handles display itself
+    from carl_studio.cli import ui
+
+    return ui.text(prompt, default=default, secret=hide_input)
+
+
+def _default_confirm(prompt: str, *, default: bool = True) -> bool:
+    from carl_studio.cli import ui
+
+    return ui.confirm(prompt, default=default)
+
+
 class RequireSpec:
     """Configuration for a single credential prompt.
 
@@ -140,8 +166,8 @@ def require(
     resolved_login = via_login if via_login else (spec.via_login if spec else False)
     resolved_storage = storage or (spec.storage if spec else "config")
     c = console or get_console()
-    prompt_fn = prompt_fn or typer.prompt
-    confirm_fn = confirm_fn or typer.confirm
+    prompt_fn = prompt_fn or _default_prompt
+    confirm_fn = confirm_fn or _default_confirm
 
     started = monotonic()
 

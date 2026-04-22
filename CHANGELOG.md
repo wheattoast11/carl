@@ -4,6 +4,75 @@
 
 ### Added
 
+- **Dependency probe + auto-heal UX** (v0.17.1, 2026-04-22).
+  `carl init` no longer dies on sibling-dep metadata corruption (the
+  huggingface-hub / transformers `Unable to compare versions ...
+  found=None` class of failure). New `carl_core.dependency_probe` module
+  classifies every optional-dep into one of seven states (`ok`,
+  `missing`, `import_error`, `import_value_error`, `metadata_missing`,
+  `metadata_corrupt`, `version_mismatch`) with a concrete
+  `repair_command` hint. `_offer_extras` gains a consent-gated
+  auto-heal branch that runs `pip install --force-reinstall --no-deps
+  <target>` after user approval. Never silent. `extract_corrupt_sibling`
+  parses `dependency_versions_check`-style errors so when
+  `transformers` raises about `huggingface-hub`, auto-heal targets the
+  sibling, not the symptom package. Doctrine:
+  [`docs/v17_dep_probe_doctrine.md`](docs/v17_dep_probe_doctrine.md).
+- **Arrow-key CLI facade** (v0.17.1). New `src/carl_studio/cli/ui.py`
+  wraps `questionary` (industry-standard arrow-key UX matching `gh`,
+  `vite`, `claude-code`, `codex`) with `typer` fallback on non-TTY or
+  when the `[cli]` extra is absent. Four public functions:
+  `select` / `confirm` / `text` / `path`. `Choice` dataclass with
+  `value` / `label` / `hint` / `badge` / `disabled` fields. First
+  option is the default by convention; numeric keys jump focus but
+  never commit without Enter (eliminates the "pressed 1 meant 2"
+  mistype class). Doctrine:
+  [`docs/v17_cli_ux_doctrine.md`](docs/v17_cli_ux_doctrine.md).
+- **New `[cli]` extra** in `pyproject.toml` pulling `questionary>=2.0,<3`.
+  Included in `[all]` per the extras-coverage policy.
+- **`carl.freshness.dep_corrupt`** issue code in `freshness.py` —
+  emitted as a `SEVERITY_ERROR` by `_check_packages` whenever a probe
+  surfaces a corruption state. The remediation string carries the
+  probe's exact `repair_command`. Surfaced automatically in
+  `carl doctor` output (red-highlighted, top of report).
+- **20 new tests** (~90 LOC of regression coverage): 15 unit tests in
+  `test_dependency_probe.py` (every status + normalization + sibling
+  parsing + never-raises), 4 integration tests in
+  `test_init_auto_heal.py` (fast path, auto-heal fan-out, decline,
+  fresh-install), 15 tests in `test_cli_ui.py` (fallback + modern +
+  Ctrl-C + validation loops + password masking), 1 regression in
+  `test_freshness.py` for the HF scenario end-to-end.
+
+### Changed
+
+- `carl init`'s LLM-provider menu + carl.camp-sign-in prompt now use
+  arrow-key selection with first-is-default. The sign-in flow menu
+  ([sign in with browser] / [create account] / [skip]) routes to the
+  existing `login_cmd` gh-style local-callback flow.
+- `carl env`'s 7-question wizard routes every choice question through
+  `ui.select` (arrow-keys); free-text questions route through
+  `ui.text`. Sequential progression preserved — each question is an
+  arrow-key prompt, not a numbered list.
+- `carl camp config init` migrates preset + tier menus + all text
+  prompts to the `ui.*` facade.
+- `carl project init` migrates method + compute menus (now with
+  descriptive hints per option) and all free-text prompts.
+- Remaining prompts in `cli/lab.py`, `cli/consent.py`, `cli/startup.py`,
+  `cli/chat.py`, `cli/prompt.py` migrated to `ui.*`.
+
+### Fixed
+
+- **CLI crash on `carl init` when `huggingface_hub` has stale dist-info**
+  (the root trigger for v0.17.1). The naive `except ImportError:`
+  probe in `_training_extras_installed()` missed the
+  `ValueError`-class failure that `transformers.dependency_versions_check`
+  raises when `importlib.metadata.version("huggingface-hub")` returns
+  `None` (corrupt/empty METADATA file). Fixed by routing through
+  `dependency_probe.probe()` which catches the full exception surface
+  and classifies for user-consumable remediation.
+
+
+
 - **`slime` training adapter** (`src/carl_studio/adapters/slime_adapter.py`,
   `src/carl_studio/adapters/slime_translator.py`). Routes
   `carl train --backend slime` to THUDM/slime (Apache-2.0) — the RL stack

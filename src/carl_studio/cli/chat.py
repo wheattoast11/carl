@@ -363,7 +363,9 @@ def chat_cmd(
         if not _first_run_complete():
             c.blank()
             c.info("Looks like this is your first run. Let's set up in one minute.")
-            if typer.confirm("Run carl init now?", default=True):
+            from carl_studio.cli import ui as _ui
+
+            if _ui.confirm("Run carl init now?", default=True):
                 try:
                     init_cmd(skip_extras=False, skip_project=False, force=False, json_output=False)
                 except typer.Exit:
