@@ -33,6 +33,44 @@ from .shared import (
 if TYPE_CHECKING:
     from carl_studio.eval.runner import EvalReport
 
+
+# ---------------------------------------------------------------------------
+# Adapter resolution (the v0.17.1→v0.18 rename — see project.py doc)
+# ---------------------------------------------------------------------------
+
+# Compute-substrate names that older carl.yaml files wrote into the `backend`
+# field. These are NOT training adapters and should NOT resolve as such — when
+# we see one in a legacy carl.yaml, fall through to the default adapter.
+_LEGACY_COMPUTE_BACKEND_NAMES = frozenset(
+    {"hf_jobs", "runpod", "prime", "ssh", "local"}
+)
+
+
+def _resolve_adapter_name(*, cli_override: str | None, raw: dict[str, Any]) -> str:
+    """Resolve the training adapter to use, in priority order.
+
+    1. Explicit ``--backend`` CLI flag.
+    2. New ``adapter:`` field in carl.yaml (v0.17.1+).
+    3. Legacy ``backend:`` field in carl.yaml, ONLY IF it looks like an
+       adapter name (not a compute-substrate name like ``hf_jobs``).
+    4. Default ``"trl"``.
+
+    The legacy branch skips known compute-substrate names because v0.17.x and
+    older carl.yaml files serialized the compute orchestration into the same
+    ``backend`` key that the training command reads for adapter lookup —
+    ``backend: hf_jobs`` in those files meant "run on HF Jobs," not "use the
+    hf_jobs training adapter" (which does not exist).
+    """
+    if cli_override:
+        return cli_override.strip().lower()
+    adapter_val = str(raw.get("adapter") or "").strip().lower()
+    if adapter_val:
+        return adapter_val
+    legacy = str(raw.get("backend") or "").strip().lower()
+    if legacy and legacy not in _LEGACY_COMPUTE_BACKEND_NAMES:
+        return legacy
+    return "trl"
+
 # ---------------------------------------------------------------------------
 # carl run
 # ---------------------------------------------------------------------------
@@ -528,8 +566,12 @@ def train(
         for key, value in proposal.suggested_config.items():
             raw.setdefault(key, value)  # pyright: ignore[reportUnknownMemberType]
 
-    # Resolve the training backend early so unknown names fail fast (exit 2).
-    backend_name = (backend or str(raw.get("backend", "") or "trl")).strip().lower()
+    # Resolve the training adapter early so unknown names fail fast (exit 2).
+    # Precedence: explicit CLI flag → new `adapter` field → legacy `backend` field
+    # (only if it happens to match a registered adapter name; v0.17.x and older
+    # carl.yaml files conflated compute + adapter on this key, so fall through
+    # to "trl" when `backend` holds a compute-substrate name like "hf_jobs").
+    backend_name = _resolve_adapter_name(cli_override=backend, raw=raw)
     _maybe_dispatch_backend(
         backend_name=backend_name,
         raw=raw,

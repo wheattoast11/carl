@@ -33,12 +33,27 @@ class CARLProject(BaseModel):
 
     # Model
     base_model: str = Field(default="", description="HF model ID (e.g. your-org/your-model)")
-    adapter: str | None = Field(default=None, description="Existing adapter to resume from")
+    resume_from: str | None = Field(
+        default=None,
+        description="Existing LoRA adapter checkpoint to resume from (HF repo or local path)",
+    )
     output_repo: str = Field(default="", description="HF repo for trained model")
 
+    # Training framework (which adapter to route through)
+    adapter: str = Field(
+        default="trl",
+        description=(
+            "Training framework adapter: trl, unsloth, axolotl, tinker, atropos, slime. "
+            "This is the name registered in carl_studio.adapters — NOT a compute substrate."
+        ),
+    )
+
     # Hardware
-    compute_target: str = Field(default="l40sx1", description="Compute target (l4x1, l40sx1, a100-largex8, local)")
-    backend: str = Field(default="hf_jobs", description="Compute backend (hf_jobs, runpod, tinker, prime, ssh, local)")
+    compute_target: str = Field(default="local", description="Compute target (l4x1, l40sx1, a100-largex8, local)")
+    compute_backend: str = Field(
+        default="local",
+        description="Compute orchestration: local, hf_jobs, runpod, prime, ssh",
+    )
 
     # Data
     dataset_repo: str = Field(default="", description="HF dataset repo or local path")
@@ -64,7 +79,9 @@ class CARLProject(BaseModel):
             "base_model": self.base_model,
             "output_repo": self.output_repo,
             "method": self.method,
+            "adapter": self.adapter,
             "compute_target": self.compute_target,
+            "compute_backend": self.compute_backend,
             "dataset_repo": self.dataset_repo,
             "eval_dataset_repo": self.eval_dataset_repo,
             "max_steps": self.max_steps,
