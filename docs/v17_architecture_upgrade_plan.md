@@ -377,37 +377,48 @@ Each task has:
 ### 4.F Moat Extraction (Team F)
 
 **F1. Constitutional ledger extraction**
-- Scope: Move `packages/carl-core/src/carl_core/constitutional.py` (556 LOC) → `terminals-runtime/constitutional/ledger.py`. Keep a thin `ConstitutionalLedgerClient` in carl-core that communicates via the admin-gate pattern: on `load_private()`, the client binds to the private runtime's ledger; without private runtime, methods raise `carl.constitutional.private_required`.
-- Output: ~556 LOC moved; ~80 LOC `ConstitutionalLedgerClient` added to carl-core. Error code `carl.constitutional.private_required`.
+- Scope: Move `packages/carl-core/src/carl_core/constitutional.py` (556 LOC) → `resonance/src/resonance/signals/constitutional.py`. Keep a thin `ConstitutionalLedgerClient` in carl-core that communicates via the admin-gate pattern: on `load_private("signals.constitutional")`, the client binds to the private runtime's ledger; without private runtime, methods raise `carl.constitutional.private_required`.
+- Output: ~556 LOC moved to resonance; ~80 LOC `ConstitutionalLedgerClient` added to carl-core. Error code `carl.constitutional.private_required`.
 - Verification: ledger genesis + append + verify round-trip still works when admin-gate resolves; fails cleanly without. All 6 existing `test_constitutional.py` tests migrate to test the client + the private-runtime stub.
 
 **F2. Heartbeat reference implementation extraction**
-- Scope: Keep `heartbeat()` API signature + theorem docstring public in `packages/carl-core/src/carl_core/heartbeat.py`. Move the coefficient-pinned reference implementation to `terminals-runtime/heartbeat/standing_wave.py`. Public `heartbeat()` becomes a façade that delegates to the private impl when available, and provides a documented simple-reference fallback (useful for pedagogical purposes) when not.
-- Output: ~300 LOC moved to private; ~150 LOC public façade + fallback.
-- Verification: existing heartbeat tests pass both with and without admin-gate; coefficients referenced in tests become fixture-parameterized so they're not committed to MIT.
+- Scope: Keep `heartbeat()` API signature + theorem docstring + pedagogical simple-reference fallback public in `packages/carl-core/src/carl_core/heartbeat.py`. Move coefficient-pinned reference implementation to `resonance/src/resonance/signals/heartbeat.py`. Public `heartbeat()` delegates to the private impl when available; falls through to the simple-reference when not (so public users still get a working pedagogical reference, sans the benchmarked coefficients).
+- Output: ~300 LOC moved to resonance; ~150 LOC public façade + simple-reference fallback.
+- Verification: existing heartbeat tests pass both with and without admin-gate. Coefficients referenced in tests become fixture-parameterized so they're not committed to MIT.
 
 **F3. Resonant `joint`-mode extraction**
-- Scope: The `joint`-mode cognize path in `packages/carl-core/src/carl_core/resonant.py` (the latent-vector → scalar readout via single EML tree application) is ~80 LOC of commercial IP. Extract to `terminals-runtime/resonant/joint_cognize.py`; keep `per_dim` mode + the `Resonant` container public.
-- Output: ~80 LOC moved; `Resonant._cognize_joint` becomes a private runtime lookup.
+- Scope: The `joint`-mode cognize path in `packages/carl-core/src/carl_core/resonant.py` (the latent-vector → scalar readout via single EML tree application) is ~80 LOC of commercial IP. Extract to `resonance/src/resonance/geometry/joint_cognize.py` (geometry subpackage is the natural home for latent-space math). Keep `per_dim` cognize + the `Resonant` container + canonical encoding public.
+- Output: ~80 LOC moved to resonance; `Resonant._cognize_joint` becomes a private runtime lookup via `admin.load_private("geometry.joint_cognize")`.
 - Verification: `per_dim` tests untouched; `joint`-mode tests require admin-gate to run. Document in public Resonant docstring that `joint` mode requires the private runtime.
 
 **F4. EML reward trained-weights extraction**
-- Scope: `src/carl_studio/training/rewards/eml.py` contains the initialization heuristics + the 7-param trained coefficients that benchmark at +0.972 correlation with PhaseAdaptive. Move the numeric constants + init heuristic to `terminals-runtime/rewards/eml_weights.py`. Keep the structure (depth-3 tree, composition rules, scoring interface) public. Public reward loaded with default-uninitialized weights; private runtime populates the benchmarked numbers.
-- Output: ~150 LOC moved; public reward falls back to random-init when private not available.
-- Verification: benchmark script documents both paths; public CI test validates structure only.
+- Scope: `src/carl_studio/training/rewards/eml.py` contains the initialization heuristics + 7-param trained coefficients that benchmark at +0.972 correlation with PhaseAdaptive. Move numeric constants + init heuristic to `resonance/src/resonance/rewards/eml_weights.py` (the `resonance/rewards/` subpackage already exists with siblings `composite.py`, `coupling.py`, `gate.py`, `load.py`). Keep the structure (depth-3 tree, composition rules, scoring interface) public. Public reward loads with default-uninitialized weights; private runtime populates benchmarked numbers on admin-gate.
+- Output: ~150 LOC moved to resonance; public reward falls back to random-init.
+- Verification: benchmark script documents both paths. Public CI test validates structure only. Private reproduction test (admin-gated) asserts the +0.972 benchmark number.
 
-**F5. Admin-gate pattern formalization** (overlaps with §4.A/A8)
-- Scope: Document the pattern. `terminals-runtime/__init__.py` pattern, `admin.load_private()` contract, registration-at-admin-gate-time only. Never at module import.
+**F5. `admin.py` load_private() enhancement** (opportunistic cleanup per §13.2)
+- Scope: Try `import resonance.<module_name>` first; fall back to HF dataset download. Preserves distributed-access path while making local dev faster + offline-capable for terminals-team machines.
+- Output: ~20 LOC change to `src/carl_studio/admin.py::load_private`.
+- Verification: 2 new tests — `test_admin_gate_prefers_local_resonance`, `test_admin_gate_falls_back_to_hf_dataset`.
+
+**F6. Admin-gate pattern formalization** (overlaps with §4.A/A8)
+- Scope: Document the pattern. `resonance/__init__.py` pattern (the `resonance` package already exists and acts as `terminals_runtime` in all but name), `admin.load_private()` contract, registration-at-admin-gate-time only.
 - Output: `docs/v17_admin_gate_pattern.md`.
-- Verification: CI grep check — `grep -r "from terminals_runtime" src/carl_studio/ packages/carl-core/` returns only lines inside admin-gated functions.
+- Verification: CI grep check — `grep -rE "^(from resonance|import resonance)" src/carl_studio/ packages/carl-core/` returns only lines inside admin-gated functions.
+
+**F7. CI-level moat enforcement**
+- Scope: Add pre-commit hook + GitHub Action that fails the build if any code in `packages/carl-core/` or `src/carl_studio/` imports `resonance` or `terminals_runtime` at module level (only inside `if admin.is_admin():` or equivalent lazy blocks is allowed).
+- Output: `.github/workflows/moat-boundary-check.yml` + pre-commit hook.
+- Verification: regression test — introducing a top-level `import resonance` fails CI.
 
 **F6. CI-level moat enforcement**
 - Scope: Add a pre-commit hook + GitHub Action that fails the build if any code in `packages/carl-core/` or `src/carl_studio/` imports `terminals_runtime` at module level (only inside `if admin.is_admin():` or equivalent lazy blocks is allowed).
 - Output: `.github/workflows/moat-boundary-check.yml` + pre-commit hook.
 - Verification: regression test — introducing a top-level `import terminals_runtime` fails CI.
 
-**F7. Team F readout**
+**F8. Team F readout**
 - Structured readout per §12 format.
+- Must include: total LOC extracted, list of private-module landing paths, admin-gate round-trip test evidence, CI-hook proof.
 
 ---
 
@@ -575,6 +586,36 @@ All updates to be merged into `CLAUDE.md`:
 7. **Property-based tests for invariants.** Every new primitive with a lifecycle (put/resolve/revoke/expire) gets a hypothesis test.
 8. **Content-addressed audit trail.** Once D3 lands, every chain step is addressable. This is load-bearing for v0.18+ (replay, cross-process chain merging).
 
+### 10.9 CLI–AST isomorphism (new doctrine — Tej, 2026-04-21)
+
+Command namespace mirrors module namespace. `carl <subpackage> <module> <verb>` ↔ `carl_studio.<subpackage>.<module>.<ClassName>.<verb>`.
+
+**Why.** Tej's intuition: "I would imagine theres some value there in codebase composability and interpretability if the AST are both clean and both representable as a graph/tree in the first place." This is correct and has prior art in kubectl / helm / hugo — nested verb surfaces that mirror the codebase tree.
+
+**What it buys us:**
+
+- **Tab-completion = module exploration.** Users discover capabilities by walking the tree.
+- **Help text auto-derives from docstrings.** One source of truth.
+- **Refactor safety.** Rename module → rename command (one mechanical pass); lint rule enforces the match.
+- **Testing simplicity.** Test the method; CLI is a thin dispatch shim.
+- **Terminals OS alignment.** When carl's CLI eventually merges into a Terminals OS command space, the namespace-graph carries over cleanly.
+
+**v0.17 policy:**
+
+- Any NEW CLI command added by Teams A-F (there shouldn't be many) follows the principle.
+- Teams C (chat_agent split) and F (moat extraction) that touch CLI boundaries make their new commands conform.
+- **No bulk reorg of existing 94 commands this release** — that's a v0.18 dedicated UX sprint.
+
+**v0.18 policy (preview):**
+
+- Bulk CLI reorg: `carl train → carl training run`, `carl observe → carl observe live`, etc.
+- Automated lint rule: `cli/<path>.py` must declare commands under a typer app whose name matches the module tree.
+- Dedicated graph-export tool: `carl meta commands --as-tree` prints the command AST next to the module AST (diff must be empty).
+
+### 10.10 Opportunistic-cleanup policy (new — Tej, 2026-04-21)
+
+When a team touches a file in flight, they MAY do minor obvious cleanups in the same PR: unused imports, dead `_ = X` keep-lines, obvious typos, missing `from __future__ import annotations`. Scope boundary: cleanups must be <10 LOC per file and must not change public API. Anything bigger goes in its own ticket.
+
 ---
 
 ## 11. Digital Twin + Terminals OS alignment matrix
@@ -636,17 +677,47 @@ Orchestrator (Claude/me) produces the integrated executive readout at ship time 
 
 ---
 
-## 13. What I would ask Tej before execution
+## 13. Decision log (LOCKED 2026-04-21 with Tej)
 
-1. **Moat extraction scope (Team F).** Four primitives identified (`constitutional`, `heartbeat`, `resonant.joint`, `eml-rewards/weights`). **Recommendation: all four in v0.17.** Now is the moment. Which of the four, if any, do you want to DEFER and why? Default: all in.
-2. **Heartbeat public fallback semantics.** Keeping a pedagogical simple-reference fallback public versus making the public `heartbeat()` raise without private runtime. Recommendation: keep a simple public fallback — it's pedagogically useful + the theorem proof is in the docstring already. Competitors still lack the pinned coefficients.
-3. **TwinCheckpoint format.** Content-addressed JSON or a new binary format? Recommendation: content-addressed JSON for v0.17 (human-debuggable, simpler to test); binary later if snapshot sizes demand it.
-4. **Which adapter migrates first (Team B)?** Recommendation: TRL (smallest, best tested). Confirms shape before slime/unsloth follow.
-5. **Scrubber registry (D4) — ship or defer?** Recommendation: defer unless D1-D3 finish ahead of schedule. Cosmetic for v0.17.
-6. **`Session.__init__` signature.** Recommendation: `Session(user: str | None = None, chain: InteractionChain | None = None, ...)`. User can BYOC (bring own chain) for advanced cases.
-7. **Terminals OS naming.** Does `carl_core` eventually become `terminals_core`? If yes, should the v0.17 refactor start namespacing to `terminals_core` immediately? Recommendation: **NO — keep `carl_core` for v0.17**. The rename is a separate, mechanical pass when terminals-core lands as its own package. Mixing rename + architectural change is premature.
-8. **CLI fatigue — do we tackle this release or next?** 94 commands + 19 flags on `carl train` alone is operator-grade. Recommendation: flag for v0.18, not v0.17. Reason: scope discipline. The architectural upgrade is the lever; UX polish comes after the primitives stabilize.
-9. **Moat extraction — can we confirm `terminals-runtime` repo exists and is set up for receiving extractions?** Recommendation: before Day 1, confirm the private repo + admin-gate loader + CI secrets are configured. Team F blocks otherwise.
+1. **Moat extraction scope (Team F).** ✅ **ALL FOUR IN.** Tej: "let's do that now if you think worth gating and keeping in the moat category especially the coefficients and invariants." Confirmed: `constitutional`, `heartbeat`, `resonant.joint`, `eml-rewards-weights` — all ship v0.17.
+2. **Heartbeat public fallback semantics.** ✅ Keep a pedagogical simple-reference fallback public; private runtime contributes pinned coefficients + reference implementation. (Decided as Claude's rec per Tej default.)
+3. **TwinCheckpoint format.** ✅ Content-addressed JSON. Battle-tested pattern (git objects are content-addressed). Binary format deferred until/unless snapshot sizes demand it.
+4. **Which adapter migrates first (Team B)?** ✅ TRL.
+5. **Scrubber registry (D4).** ✅ **DEFER.** Explicitly out of v0.17.
+6. **`Session.__init__` signature.** ✅ Claude decides: `Session(user: str | None = None, *, chain: InteractionChain | None = None, secret_vault: SecretVault | None = None, resource_vault: ResourceVault | None = None, headless_browser: bool = True)`. All kwargs after `user` are BYOC-optional; defaults construct fresh. `user` positional for `carl.Session("tej")` ergonomics.
+7. **Terminals OS naming.** ✅ Keep `carl_core` for v0.17. Rename is a separate mechanical pass later.
+8. **CLI fatigue.** ✅ Bulk UX pass deferred to v0.18. **NEW principle added (Tej's insight):** opportunistic cleanups as teams touch CLI files, AND codify **CLI-AST isomorphism** — command namespace should mirror module namespace. See §10.9.
+9. **Private repo readiness.** ✅ **Resolved by audit.** Local private repo is `/Users/terminals/Documents/agents/models/resonance/` (package name: `resonance`, v0.1.0, depends on `carl-studio>=0.2.0`). Target subpackages already exist: `resonance/eml/`, `resonance/ttt/`, `resonance/rewards/`, `resonance/geometry/`, `resonance/signals/`, `resonance/deployment/`. Team F ships without repo setup blockers.
+
+### 13.1 Extraction landing map (concrete file paths)
+
+| Moat file (public, before) | Target path (private, after) | Notes |
+|---|---|---|
+| `packages/carl-core/src/carl_core/constitutional.py` (556 LOC, FULL move) | `resonance/src/resonance/signals/constitutional.py` | Lands in `resonance/signals/` since constitutional ledger IS a signal-domain primitive. Thin `ConstitutionalLedgerClient` remains in carl-core exposing the public `genesis/append/verify_chain` surface. |
+| `packages/carl-core/src/carl_core/heartbeat.py` (~300 LOC of pinned impl) | `resonance/src/resonance/signals/heartbeat.py` | Public heartbeat.py keeps API + theorem docstring + pedagogical simple-reference fallback. Private side has coefficient-pinned reference impl. |
+| `packages/carl-core/src/carl_core/resonant.py` — joint-mode cognize path (~80 LOC) | `resonance/src/resonance/geometry/joint_cognize.py` | Geometry subpackage is the natural home for latent-space math. `per_dim` cognize stays public; `joint` dispatches to private via admin-gate. Confirms Tej's note: "resonant file is serving Resonant, not the actual resonance logic." |
+| `src/carl_studio/training/rewards/eml.py` — trained weights + init heuristics (~150 LOC) | `resonance/src/resonance/rewards/eml_weights.py` | `resonance/rewards/` already exists with sibling `composite.py` / `coupling.py` / `gate.py` / `load.py`. Perfect landing. Public reward keeps structure + random-init default; private side contributes benchmarked numbers. |
+
+### 13.2 `admin.py` enhancement (opportunistic cleanup — Team F side-effort)
+
+Current `load_private()` downloads from `wheattoast11/carl-private` HF dataset. For local dev with `resonance` pip-installed, we should try direct import first:
+
+```python
+def load_private(module_name: str) -> Any:
+    if not is_admin():
+        raise ImportError(...)
+    # (1) Try local resonance package (local dev, terminals-team machines)
+    try:
+        import importlib
+        return importlib.import_module(f"resonance.{module_name}")
+    except ImportError:
+        pass
+    # (2) Fallback: HF dataset download (distributed access)
+    from huggingface_hub import hf_hub_download
+    ...
+```
+
+Keeps the distributed-access path; adds fast-path for local dev.
 
 ---
 
