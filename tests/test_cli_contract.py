@@ -1,15 +1,25 @@
-"""Tests for the ``carl contract constitution`` CLI surface."""
+"""Tests for the ``carl contract constitution`` CLI surface.
+
+After v0.17 moat extraction, CLI commands that drive lifecycle operations
+(genesis/verify/evaluate) go through ``carl_core.constitutional`` client
+which routes to the private runtime. Those tests carry
+``@pytest.mark.private`` + use the ``admin_unlocked`` fixture.
+
+Tests that only check help/dispatch/unknown-action paths are always on.
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from carl_studio.cli import app
+from tests.conftest import skip_if_private_unavailable
 
 
 # ---------------------------------------------------------------------------
-# help + command registration
+# help + command registration — no gating needed.
 # ---------------------------------------------------------------------------
 
 
@@ -29,12 +39,78 @@ def test_constitution_help_lists_subactions() -> None:
         assert sub in result.output
 
 
+def test_constitution_unknown_action_rejected(tmp_path: Path) -> None:
+    runner = CliRunner()
+    root = tmp_path / "ledger"
+    result = runner.invoke(
+        app,
+        ["contract", "constitution", "nonsense", "--ledger-root", str(root)],
+    )
+    assert result.exit_code == 2
+    assert "unknown" in result.output.lower()
+
+
+def test_constitution_status_before_genesis(tmp_path: Path) -> None:
+    """Pre-genesis status is read-only — no admin gate required."""
+    runner = CliRunner()
+    root = tmp_path / "ledger"
+    result = runner.invoke(
+        app, ["contract", "constitution", "status", "--ledger-root", str(root)]
+    )
+    assert result.exit_code == 0
+    assert "no genesis" in result.output.lower() or "genesis" in result.output.lower()
+
+
 # ---------------------------------------------------------------------------
-# genesis + verify roundtrip
+# Locked-client error surface — fires before admin gate resolves.
 # ---------------------------------------------------------------------------
 
 
-def test_constitution_genesis_creates_ledger(tmp_path: Path) -> None:
+def test_constitution_genesis_requires_private_runtime_when_locked(
+    tmp_path: Path,
+) -> None:
+    """Without admin unlock the CLI must surface a clean error, not crash.
+
+    The CLI catches the locked-client error and exits 1 with a visible
+    message. Exit code 2 is reserved for argument validation.
+    """
+    runner = CliRunner()
+    root = tmp_path / "ledger"
+    result = runner.invoke(
+        app,
+        [
+            "contract",
+            "constitution",
+            "genesis",
+            "--ledger-root",
+            str(root),
+            "--threshold",
+            "0.0",
+        ],
+    )
+    # Either the private runtime IS reachable in this environment (test
+    # passes with exit 0) or we get a visible locked-client message.
+    if result.exit_code == 0:
+        assert "Genesis block written" in result.output
+    else:
+        assert result.exit_code in (1, 2)
+        assert (
+            "private" in result.output.lower()
+            or "admin" in result.output.lower()
+            or "resonance" in result.output.lower()
+        ), result.output
+
+
+# ---------------------------------------------------------------------------
+# Full-lifecycle CLI tests — require the resonance private runtime.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.private
+def test_constitution_genesis_creates_ledger(
+    tmp_path: Path, admin_unlocked: bool
+) -> None:
+    skip_if_private_unavailable(admin_unlocked)
     runner = CliRunner()
     root = tmp_path / "ledger"
     result = runner.invoke(
@@ -56,7 +132,11 @@ def test_constitution_genesis_creates_ledger(tmp_path: Path) -> None:
     assert (root / "signing_key.bin").exists()
 
 
-def test_constitution_verify_fresh_ledger(tmp_path: Path) -> None:
+@pytest.mark.private
+def test_constitution_verify_fresh_ledger(
+    tmp_path: Path, admin_unlocked: bool
+) -> None:
+    skip_if_private_unavailable(admin_unlocked)
     runner = CliRunner()
     root = tmp_path / "ledger"
     genesis = runner.invoke(
@@ -72,12 +152,24 @@ def test_constitution_verify_fresh_ledger(tmp_path: Path) -> None:
     assert "chain valid" in verify.output
 
 
-def test_constitution_evaluate_allow_and_deny(tmp_path: Path) -> None:
+@pytest.mark.private
+def test_constitution_evaluate_allow_and_deny(
+    tmp_path: Path, admin_unlocked: bool
+) -> None:
+    skip_if_private_unavailable(admin_unlocked)
     runner = CliRunner()
     root = tmp_path / "ledger"
     runner.invoke(
         app,
-        ["contract", "constitution", "genesis", "--ledger-root", str(root), "--threshold", "0.0"],
+        [
+            "contract",
+            "constitution",
+            "genesis",
+            "--ledger-root",
+            str(root),
+            "--threshold",
+            "0.0",
+        ],
     )
     # A high coherence_phi should produce ALLOW under the default exp(phi) policy.
     allow = runner.invoke(
@@ -125,15 +217,13 @@ def test_constitution_evaluate_allow_and_deny(tmp_path: Path) -> None:
     assert "DENY" in deny.output
 
 
-def test_constitution_status_before_and_after_genesis(tmp_path: Path) -> None:
+@pytest.mark.private
+def test_constitution_status_after_genesis(
+    tmp_path: Path, admin_unlocked: bool
+) -> None:
+    skip_if_private_unavailable(admin_unlocked)
     runner = CliRunner()
     root = tmp_path / "ledger"
-    pre = runner.invoke(
-        app, ["contract", "constitution", "status", "--ledger-root", str(root)]
-    )
-    assert pre.exit_code == 0
-    assert "no genesis" in pre.output.lower() or "genesis" in pre.output.lower()
-
     runner.invoke(
         app, ["contract", "constitution", "genesis", "--ledger-root", str(root)]
     )
@@ -144,18 +234,11 @@ def test_constitution_status_before_and_after_genesis(tmp_path: Path) -> None:
     assert "height" in post.output.lower()
 
 
-def test_constitution_unknown_action_rejected(tmp_path: Path) -> None:
-    runner = CliRunner()
-    root = tmp_path / "ledger"
-    result = runner.invoke(
-        app,
-        ["contract", "constitution", "nonsense", "--ledger-root", str(root)],
-    )
-    assert result.exit_code == 2
-    assert "unknown" in result.output.lower()
-
-
-def test_constitution_evaluate_requires_action_json(tmp_path: Path) -> None:
+@pytest.mark.private
+def test_constitution_evaluate_requires_action_json(
+    tmp_path: Path, admin_unlocked: bool
+) -> None:
+    skip_if_private_unavailable(admin_unlocked)
     runner = CliRunner()
     root = tmp_path / "ledger"
     runner.invoke(
@@ -168,8 +251,12 @@ def test_constitution_evaluate_requires_action_json(tmp_path: Path) -> None:
     assert "--action-json" in result.output
 
 
-def test_constitution_genesis_with_custom_policy(tmp_path: Path) -> None:
+@pytest.mark.private
+def test_constitution_genesis_with_custom_policy(
+    tmp_path: Path, admin_unlocked: bool
+) -> None:
     """Genesis with a policy loaded from disk."""
+    skip_if_private_unavailable(admin_unlocked)
     from carl_core.constitutional import ConstitutionalPolicy
     from carl_studio.fsm_ledger import build_default_policy
 

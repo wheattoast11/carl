@@ -203,6 +203,7 @@ def constitution(
     try:
         from carl_core.constitutional import (
             ConstitutionalLedger,
+            ConstitutionalLedgerError,
             ConstitutionalPolicy,
             encode_action_features,
         )
@@ -228,6 +229,13 @@ def constitution(
             policy = build_default_policy(threshold=threshold)
         try:
             block = ledger.genesis(policy)
+        except ConstitutionalLedgerError as exc:
+            c.error(
+                "Constitutional ledger genesis requires the private resonance "
+                "runtime. Unlock admin mode (`carl admin unlock`) or install "
+                f"the resonance package. ({exc})"
+            )
+            raise typer.Exit(1)
         except ImportError as exc:
             c.error(str(exc))
             raise typer.Exit(2)
@@ -243,6 +251,13 @@ def constitution(
     if act == "verify":
         try:
             ok, bad = ledger.verify_chain()
+        except ConstitutionalLedgerError as exc:
+            c.error(
+                "Constitutional ledger verify requires the private resonance "
+                "runtime. Unlock admin mode (`carl admin unlock`) or install "
+                f"the resonance package. ({exc})"
+            )
+            raise typer.Exit(1)
         except ImportError as exc:
             c.error(str(exc))
             raise typer.Exit(2)

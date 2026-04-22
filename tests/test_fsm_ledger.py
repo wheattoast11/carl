@@ -1,8 +1,19 @@
-"""Tests for carl_studio.fsm_ledger — FSM wiring over the constitutional ledger."""
+"""Tests for carl_studio.fsm_ledger — FSM wiring over the constitutional ledger.
+
+After v0.17 moat extraction, lifecycle operations (genesis/append) route
+through the private ``resonance.signals.constitutional`` module. Tests that
+exercise these ops carry ``@pytest.mark.private`` and use the
+``admin_unlocked`` fixture from ``tests/conftest.py``.
+
+Pure helpers (``default_behavioral_tree``, ``build_default_policy``,
+``default_ledger_root``, ``ConstitutionalGatePredicate.check``) are still
+public and run unconditionally.
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 
 from carl_core.constitutional import ConstitutionalLedger, ConstitutionalPolicy
 from carl_studio.fsm_ledger import (
@@ -14,8 +25,12 @@ from carl_studio.fsm_ledger import (
     evaluate_action,
 )
 
+from tests.conftest import skip_if_private_unavailable
 
-def _fresh_ledger(tmp_path: Path, threshold: float = 0.0) -> tuple[ConstitutionalLedger, ConstitutionalPolicy, FSMState]:
+
+def _fresh_ledger(
+    tmp_path: Path, threshold: float = 0.0
+) -> tuple[ConstitutionalLedger, ConstitutionalPolicy, FSMState]:
     ledger = ConstitutionalLedger(
         root=tmp_path / "ledger",
         signing_key=b"t6-fsm-test-seed-32bytes-padded!"[:32],
@@ -29,6 +44,11 @@ def _fresh_ledger(tmp_path: Path, threshold: float = 0.0) -> tuple[Constitutiona
         step=0,
     )
     return ledger, policy, state
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers — public, no gating.
+# ---------------------------------------------------------------------------
 
 
 def test_default_ledger_root_under_home() -> None:
@@ -48,8 +68,17 @@ def test_build_default_policy_is_deterministic() -> None:
     assert p1.policy_id == p2.policy_id
 
 
-def test_evaluate_action_allow_advances_fsm(tmp_path: Path) -> None:
-    ledger, policy, state = _fresh_ledger(tmp_path, threshold=0.0)
+# ---------------------------------------------------------------------------
+# Full FSM lifecycle — requires the resonance private runtime.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.private
+def test_evaluate_action_allow_advances_fsm(
+    tmp_path: Path, admin_unlocked: bool
+) -> None:
+    skip_if_private_unavailable(admin_unlocked)
+    ledger, _policy, state = _fresh_ledger(tmp_path, threshold=0.0)
     action = {"type": "TOOL", "coherence_phi": 1.2, "tier": "PAID"}
     allowed, score, new_state = evaluate_action(action, state, ledger)
     assert allowed
@@ -61,18 +90,26 @@ def test_evaluate_action_allow_advances_fsm(tmp_path: Path) -> None:
     assert new_state.constitution_hash == state.constitution_hash
 
 
-def test_evaluate_action_deny_does_not_advance(tmp_path: Path) -> None:
-    ledger, policy, state = _fresh_ledger(tmp_path, threshold=1e12)
+@pytest.mark.private
+def test_evaluate_action_deny_does_not_advance(
+    tmp_path: Path, admin_unlocked: bool
+) -> None:
+    skip_if_private_unavailable(admin_unlocked)
+    ledger, _policy, state = _fresh_ledger(tmp_path, threshold=1e12)
     action = {"type": "TOOL", "coherence_phi": 0.01}
-    allowed, score, new_state = evaluate_action(action, state, ledger)
+    allowed, _score, new_state = evaluate_action(action, state, ledger)
     assert not allowed
     assert new_state is None
     # No block appended.
     assert ledger.height() == 1  # genesis only
 
 
-def test_multi_step_advances_sequentially(tmp_path: Path) -> None:
-    ledger, policy, state = _fresh_ledger(tmp_path, threshold=0.0)
+@pytest.mark.private
+def test_multi_step_advances_sequentially(
+    tmp_path: Path, admin_unlocked: bool
+) -> None:
+    skip_if_private_unavailable(admin_unlocked)
+    ledger, _policy, state = _fresh_ledger(tmp_path, threshold=0.0)
     for expected_step in range(1, 6):
         allowed, _, new_state = evaluate_action(
             {"type": "GATE", "coherence_phi": 0.5}, state, ledger
@@ -86,7 +123,7 @@ def test_multi_step_advances_sequentially(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# ConstitutionalGatePredicate
+# ConstitutionalGatePredicate — pure-math, no ledger gating needed.
 # ---------------------------------------------------------------------------
 
 

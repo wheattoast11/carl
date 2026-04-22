@@ -155,6 +155,9 @@ addopts = "--import-mode=importlib"
 # ``tests/_playwright_stub.py`` without needing an ``__init__.py`` that
 # would conflict with the importlib import mode.
 pythonpath = [".", "src", "packages/carl-core/src", "tests"]
+markers = [
+    "private: tests that require the private resonance runtime (admin unlock or `resonance` package on sys.path). Skipped by default when the runtime is unreachable.",
+]
 
 [tool.pyright]
 include = ["src", "packages/*/src", "packages/*/tests", "tests"]

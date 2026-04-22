@@ -1,42 +1,63 @@
-"""Constitutional FSM Ledger — EML-policy-gated, hash-chained, ed25519-signed.
+"""Constitutional Ledger — public client façade.
 
-Two EML trees govern the runtime:
+Public surface (MIT) for the constitutional ledger primitive. The full
+proprietary implementation — genesis/append lifecycle, ed25519 signing,
+hash-chain construction, 25-dim action feature encoder — lives in the
+private ``resonance.signals.constitutional`` module and is loaded
+lazily via the admin-gate pattern (see ``carl_studio.admin.load_private``).
 
-- **C (constitutional)** — immutable, signed at genesis. Encodes the policy
-  contract: "action is allowed iff eml_eval(C, features(s,a)) > tau".
-- **B_t (behavioral)** — mutable, updated per step. Tracks the current
-  behavioral fingerprint so a verifier can tell what the agent looks like now
-  vs. what the constitution permits.
+**What stays public** (required for TS ``@terminals-tech/emlt-codec``
+parity per ``docs/eml_signing_protocol.md``):
 
-Every authorized action appends a ``LedgerBlock`` whose hash folds in the
-previous block, the policy id, the action digest, the verdict score, the
-timestamp, and an ed25519 signature. Tampering with any prior block breaks
-the chain.
+- ``LedgerBlock`` dataclass shape + ``signing_bytes`` / ``block_hash``
+  / ``to_dict`` / ``from_dict`` / ``verify``. These are pure-data or
+  pure-crypto operations shared with the TypeScript sibling; hiding
+  them would break wire-format parity (the ledger_vectors.json
+  regression tests cover this).
+- ``ConstitutionalPolicy`` dataclass shape + ``evaluate`` / ``to_dict``
+  / ``from_dict`` / ``save`` / ``load``. Pure numpy against an EMLTree.
+- ``encode_action_features`` — the 25-dim feature encoder function
+  shape is a wire-format concern (policies live on disk and are
+  shared across systems).
 
-The ``pynacl`` dependency is optional — signing/verification imports are
-lazy. Importing this module (e.g. to read ``ConstitutionalPolicy`` metadata
-from disk) never requires pynacl.
+**What's gated** (routed through ``resonance.signals.constitutional``):
+
+- ``ConstitutionalLedger.genesis`` / ``ConstitutionalLedger.append``
+  / ``ConstitutionalLedger.verify_chain`` — the append-only,
+  signing-key-managing, hash-chain-walking lifecycle. These are the
+  proprietary combinations; without admin unlock they raise
+  ``ConstitutionalLedgerError(code='carl.constitutional.private_required')``.
+
+The pure-read methods (``head`` / ``replay`` / ``height`` / ``policy``)
+work locally against persisted ledger data — useful for read-only
+verification workflows that don't need to mint new blocks.
 """
 from __future__ import annotations
 
 import json
-import os
 import struct
-import time
 from dataclasses import dataclass, field
+from importlib import import_module
 from pathlib import Path
+from types import ModuleType
 from typing import Any, cast
 
 import numpy as np
 from numpy.typing import NDArray
 
 from carl_core.eml import EMLTree
-from carl_core.errors import CredentialError, ValidationError
+from carl_core.errors import CARLError, ValidationError
 from carl_core.hashing import content_hash
 
 # ---------------------------------------------------------------------------
-# Error helpers (all under carl.constitutional.*)
+# Error types
 # ---------------------------------------------------------------------------
+
+
+class ConstitutionalLedgerError(CARLError):
+    """Raised when a mutating ledger operation runs without private runtime."""
+
+    code = "carl.constitutional.private_required"
 
 
 def _missing_pynacl() -> ImportError:
@@ -48,10 +69,14 @@ def _missing_pynacl() -> ImportError:
 
 
 def _lazy_nacl() -> tuple[Any, Any]:
-    """Return (SigningKey, VerifyKey) classes or raise a typed ImportError."""
+    """Return (SigningKey, VerifyKey) classes or raise a typed ImportError.
+
+    Kept public: ed25519 verify is standard crypto, no proprietary math,
+    and the TS sibling's parity vectors round-trip through it.
+    """
     try:
         from nacl.signing import SigningKey, VerifyKey  # type: ignore[import-not-found]
-    except ImportError as exc:  # pragma: no cover - exercised only without pynacl
+    except ImportError as exc:  # pragma: no cover
         raise _missing_pynacl() from exc
     return SigningKey, VerifyKey
 
@@ -65,7 +90,61 @@ def _bad_chain(msg: str, **ctx: Any) -> ValidationError:
 
 
 # ---------------------------------------------------------------------------
+# Private-runtime resolution — lazy, admin-gated.
+# ---------------------------------------------------------------------------
+
+
+def _load_private_impl() -> ModuleType | None:
+    """Resolve the private resonance.signals.constitutional implementation.
+
+    Uses a runtime import of ``carl_studio.admin`` to invoke ``load_private``.
+    carl-core cannot import carl-studio at module-load time (carl-core is
+    upstream), so this dance stays inside a function body.
+
+    Returns the private module on admin unlock, or ``None`` when the gate
+    is locked. Any underlying ImportError is caught — callers decide how
+    to surface the locked state (typically by raising
+    ``ConstitutionalLedgerError``).
+    """
+    try:
+        admin = import_module("carl_studio.admin")
+    except ImportError:
+        return None
+    try:
+        is_admin_fn = getattr(admin, "is_admin", None)
+        load_private_fn = getattr(admin, "load_private", None)
+        if is_admin_fn is None or load_private_fn is None:
+            return None
+        if not is_admin_fn():
+            return None
+        mod = load_private_fn("signals.constitutional")
+        return cast(ModuleType, mod)
+    except ImportError:
+        return None
+    except Exception:
+        return None
+
+
+def _require_private(op: str) -> ModuleType:
+    """Return the private impl or raise ``ConstitutionalLedgerError``."""
+    mod = _load_private_impl()
+    if mod is None:
+        raise ConstitutionalLedgerError(
+            f"ConstitutionalLedger.{op} requires the private resonance runtime. "
+            "Unlock admin mode (`carl admin unlock`) or install the resonance "
+            "package. Public carl-core ships read-only ledger access.",
+            code="carl.constitutional.private_required",
+            context={"op": op},
+        )
+    return mod
+
+
+# ---------------------------------------------------------------------------
 # Feature encoding — 25-dim action vector convention.
+#
+# Kept public because policies live on disk (``policy.json``) and are
+# exchanged across runtimes; the feature layout is a wire-format
+# concern, not a proprietary secret.
 # ---------------------------------------------------------------------------
 
 
@@ -138,7 +217,7 @@ def encode_action_features(action: dict[str, Any]) -> NDArray[np.float64]:
 
 
 # ---------------------------------------------------------------------------
-# ConstitutionalPolicy — EML tree + threshold, identified by sha256.
+# ConstitutionalPolicy — pure-data + pure-math. Kept public.
 # ---------------------------------------------------------------------------
 
 
@@ -148,6 +227,9 @@ class ConstitutionalPolicy:
 
     ``policy_id`` is sha256 of (tree.hash + threshold + metadata). Two policies
     with the same tree but different thresholds produce different ids.
+
+    Kept public so ``policy.json`` files remain exchangeable across runtimes
+    and the TS parity vectors continue to round-trip.
     """
 
     tree: EMLTree
@@ -211,12 +293,20 @@ class ConstitutionalPolicy:
 
 
 # ---------------------------------------------------------------------------
-# LedgerBlock — hash-chained + ed25519-signed record of an authorized action.
+# LedgerBlock — pure-data + pure-crypto. Kept public for TS parity.
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class LedgerBlock:
+    """Hash-chained + ed25519-signed record of an authorized action.
+
+    The dataclass shape + ``signing_bytes`` / ``block_hash`` layout is
+    shared with ``@terminals-tech/emlt-codec`` (see
+    ``packages/emlt-codec-ts/test/ledger_vectors.json``). Changing this
+    surface breaks the npm sibling; keep parity by updating both.
+    """
+
     block_id: int
     prev_block_hash: str
     policy_id: str
@@ -263,7 +353,11 @@ class LedgerBlock:
         )
 
     def verify(self, pubkey: bytes | None = None) -> bool:
-        """Verify the ed25519 signature over ``signing_bytes``."""
+        """Verify the ed25519 signature over ``signing_bytes``.
+
+        Kept public: standard crypto verify with no proprietary component,
+        shared with the TS parity path. Requires pynacl at call time.
+        """
         _, VerifyKey = _lazy_nacl()
         pk = pubkey if pubkey is not None else self.signer_pubkey
         try:
@@ -300,7 +394,14 @@ class LedgerBlock:
 
 
 # ---------------------------------------------------------------------------
-# ConstitutionalLedger — append-only, hash-chained, persisted on disk.
+# ConstitutionalLedger — client façade.
+#
+# Mutating + signing operations (genesis, append, verify_chain) route
+# through the private ``resonance.signals.constitutional`` implementation
+# via the admin-gate pattern. Read-only operations (head, replay, height,
+# policy) work locally against any already-persisted ledger data so that
+# verifiers without admin unlock can still inspect a chain that was minted
+# on an unlocked host.
 # ---------------------------------------------------------------------------
 
 
@@ -310,17 +411,15 @@ _KEY_FILENAME: str = "signing_key.bin"
 
 
 class ConstitutionalLedger:
-    """Append-only hash-chained ledger of policy-authorized actions.
+    """Public façade for the append-only, hash-chained, ed25519-signed ledger.
 
-    On disk layout under ``root``::
+    With the private ``resonance`` runtime available (admin-unlocked host),
+    ``genesis`` / ``append`` / ``verify_chain`` delegate to the real
+    implementation. Without the runtime they raise
+    ``ConstitutionalLedgerError`` (``code='carl.constitutional.private_required'``).
 
-        policy.json          # ConstitutionalPolicy JSON
-        chain.jsonl          # one LedgerBlock JSON per line
-        signing_key.bin      # raw 32-byte ed25519 seed (0600 perms)
-
-    ``signing_key`` may be provided directly (tests) or loaded from disk.
-    When no key is present on disk and none is supplied, a fresh key is
-    generated at genesis and persisted.
+    Read-only operations (``head`` / ``replay`` / ``height`` / ``policy``)
+    work locally against any already-persisted ledger data.
     """
 
     def __init__(self, root: Path, signing_key: bytes | None = None) -> None:
@@ -330,69 +429,65 @@ class ConstitutionalLedger:
         self._policy: ConstitutionalPolicy | None = None
         # In-memory cache of loaded blocks (rehydrated on demand).
         self._blocks: list[LedgerBlock] | None = None
+        # Lazily-bound private impl. Only populated if a mutating call
+        # succeeds in loading it.
+        self._priv_ledger: Any | None = None
 
-    # ----- key management -------------------------------------------------
+    # ----- private-runtime binding ----------------------------------------
 
-    def _key_path(self) -> Path:
-        return self.root / _KEY_FILENAME
+    def _bind_private(self, op: str) -> Any:
+        """Return a private ``ConstitutionalLedger`` bound to the same root.
 
-    def _load_or_create_key(self) -> bytes:
-        if self._signing_seed is not None:
-            return self._signing_seed
-        kp = self._key_path()
-        if kp.exists():
-            self._signing_seed = kp.read_bytes()
-            return self._signing_seed
-        SigningKey, _ = _lazy_nacl()
-        seed = bytes(SigningKey.generate())  # 32 raw bytes
-        # nacl's SigningKey.__bytes__ returns the raw seed.
-        self.root.mkdir(parents=True, exist_ok=True)
-        kp.write_bytes(seed)
-        try:
-            os.chmod(kp, 0o600)
-        except OSError:  # pragma: no cover - best-effort on non-POSIX
-            pass
-        self._signing_seed = seed
-        return seed
+        Raises ``ConstitutionalLedgerError`` when the admin gate is locked.
+        """
+        if self._priv_ledger is not None:
+            return self._priv_ledger
+        mod = _require_private(op)
+        priv_cls = getattr(mod, "ConstitutionalLedger", None)
+        if priv_cls is None:  # pragma: no cover - defensive
+            raise ConstitutionalLedgerError(
+                "private resonance.signals.constitutional missing "
+                "ConstitutionalLedger",
+                code="carl.constitutional.private_required",
+                context={"op": op},
+            )
+        self._priv_ledger = priv_cls(self.root, signing_key=self._signing_seed)
+        return self._priv_ledger
 
-    def _signer(self) -> Any:
-        SigningKey, _ = _lazy_nacl()
-        seed = self._load_or_create_key()
-        return SigningKey(seed)
+    # ----- key + pubkey accessors (routed) --------------------------------
 
     def pubkey(self) -> bytes:
         if self._pubkey is not None:
             return self._pubkey
-        sk = self._signer()
-        self._pubkey = bytes(sk.verify_key)
-        return self._pubkey
+        priv = self._bind_private("pubkey")
+        pk = bytes(priv.pubkey())
+        self._pubkey = pk
+        return pk
 
-    # ----- policy management ----------------------------------------------
+    # ----- policy management (read-only, no gating) ----------------------
 
     def _policy_path(self) -> Path:
         return self.root / _POLICY_FILENAME
 
     def policy(self) -> ConstitutionalPolicy:
+        """Load the on-disk policy. Read-only; no admin gate required."""
         if self._policy is None:
             p = self._policy_path()
             if not p.exists():
                 raise _bad_chain(
-                    "ledger has no policy — call genesis() first", root=str(self.root)
+                    "ledger has no policy — call genesis() first",
+                    root=str(self.root),
                 )
             self._policy = ConstitutionalPolicy.load(p)
         return self._policy
 
-    # ----- chain I/O ------------------------------------------------------
+    # ----- chain I/O (read-only, no gating) -------------------------------
 
     def _chain_path(self) -> Path:
         return self.root / _BLOCKS_FILENAME
 
-    def _append_block_file(self, block: LedgerBlock) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        with self._chain_path().open("a") as fh:
-            fh.write(json.dumps(block.to_dict(), sort_keys=True) + "\n")
-
     def _load_blocks(self) -> list[LedgerBlock]:
+        """Load blocks from ``chain.jsonl``. Pure-data; no gating."""
         if self._blocks is not None:
             return self._blocks
         p = self._chain_path()
@@ -408,85 +503,41 @@ class ConstitutionalLedger:
         self._blocks = blocks
         return blocks
 
-    # ----- public operations ---------------------------------------------
+    # ----- mutating / signing operations (gated) --------------------------
 
     def genesis(self, policy: ConstitutionalPolicy) -> LedgerBlock:
         """Install ``policy`` and sign the genesis block.
 
-        Raises ``ValidationError`` if a policy already exists at this root.
+        Requires the private resonance runtime (admin unlock). Raises
+        ``ConstitutionalLedgerError`` when locked.
         """
-        if self._policy_path().exists():
-            raise _bad_chain(
-                "genesis already exists at this root", root=str(self.root)
-            )
-        policy.save(self._policy_path())
+        priv = self._bind_private("genesis")
+        block = priv.genesis(policy)
+        # Warm our local caches so subsequent read-only accessors work.
         self._policy = policy
-
-        # Genesis block: prev_block_hash is a zero-sha256 marker, action_digest
-        # is the hash of the policy, verdict is the threshold itself.
-        genesis_action = {"type": "GENESIS", "policy_id": policy.policy_id}
-        block = self._sign_block(
-            block_id=0,
-            prev_block_hash="0" * 64,
-            policy_id=policy.policy_id,
-            action_digest=content_hash(genesis_action),
-            verdict=float(policy.threshold),
-        )
-        self._append_block_file(block)
-        if self._blocks is None:
-            self._blocks = []
-        self._blocks.append(block)
-        return block
+        self._blocks = None  # force reload from disk
+        return cast(LedgerBlock, block)
 
     def append(self, action: dict[str, Any], policy_id: str) -> LedgerBlock:
         """Append a new block recording an authorized action.
 
-        The caller is responsible for having already evaluated the policy
-        (via ``ConstitutionalPolicy.evaluate``) and decided to proceed.
+        Requires the private resonance runtime.
         """
-        policy = self.policy()
-        if policy_id != policy.policy_id:
-            raise _bad_chain(
-                "policy_id mismatch", given=policy_id, expected=policy.policy_id
-            )
-        blocks = self._load_blocks()
-        if not blocks:
-            raise _bad_chain("no genesis block — call genesis() first")
-
-        features = encode_action_features(action)
-        _, score = policy.evaluate(features)
-
-        prev = blocks[-1]
-        block = self._sign_block(
-            block_id=prev.block_id + 1,
-            prev_block_hash=prev.block_hash(),
-            policy_id=policy.policy_id,
-            action_digest=content_hash(action),
-            verdict=float(score),
-        )
-        self._append_block_file(block)
-        blocks.append(block)
-        return block
+        priv = self._bind_private("append")
+        block = priv.append(action, policy_id)
+        self._blocks = None  # force reload
+        return cast(LedgerBlock, block)
 
     def verify_chain(self) -> tuple[bool, list[int]]:
-        """Walk the chain end-to-end, validating hashes + signatures."""
-        blocks = self._load_blocks()
-        bad: list[int] = []
-        expected_prev = "0" * 64
-        for i, blk in enumerate(blocks):
-            if blk.block_id != i:
-                bad.append(i)
-                continue
-            if blk.prev_block_hash != expected_prev:
-                bad.append(i)
-                expected_prev = blk.block_hash()
-                continue
-            if not blk.verify():
-                bad.append(i)
-                expected_prev = blk.block_hash()
-                continue
-            expected_prev = blk.block_hash()
-        return (len(bad) == 0, bad)
+        """Walk the chain end-to-end, validating hashes + signatures.
+
+        Requires the private resonance runtime for full signature checks.
+        """
+        priv = self._bind_private("verify_chain")
+        ok, bad = priv.verify_chain()
+        return (bool(ok), list(bad))
+
+    # ----- read-only accessors (no gating) --------------------------------
 
     def head(self) -> LedgerBlock | None:
         blocks = self._load_blocks()
@@ -501,56 +552,22 @@ class ConstitutionalLedger:
     def height(self) -> int:
         return len(self._load_blocks())
 
-    # ----- internals -----------------------------------------------------
 
-    def _sign_block(
-        self,
-        *,
-        block_id: int,
-        prev_block_hash: str,
-        policy_id: str,
-        action_digest: str,
-        verdict: float,
-    ) -> LedgerBlock:
-        try:
-            sk = self._signer()
-        except ImportError:
-            raise
-        except Exception as exc:
-            raise CredentialError(
-                f"failed to load signing key: {exc}",
-                code="carl.constitutional.bad_key",
-            ) from exc
+# ---------------------------------------------------------------------------
+# Backwards-compat: file-layout constants still exported so callers that
+# poke at ``ledger.root / chain.jsonl`` directly keep working.
+# ---------------------------------------------------------------------------
 
-        pk = bytes(sk.verify_key)
-        ts = time.time_ns()
-        pending = LedgerBlock(
-            block_id=block_id,
-            prev_block_hash=prev_block_hash,
-            policy_id=policy_id,
-            action_digest=action_digest,
-            verdict=float(verdict),
-            timestamp_ns=int(ts),
-            signer_pubkey=pk,
-            signature=b"",
-        )
-        signed = sk.sign(pending.signing_bytes())
-        return LedgerBlock(
-            block_id=block_id,
-            prev_block_hash=prev_block_hash,
-            policy_id=policy_id,
-            action_digest=action_digest,
-            verdict=float(verdict),
-            timestamp_ns=int(ts),
-            signer_pubkey=pk,
-            signature=bytes(signed.signature),
-        )
+
+# Used by some tests + the CLI status path.
+_ = (_BLOCKS_FILENAME, _POLICY_FILENAME, _KEY_FILENAME)
 
 
 __all__ = [
-    "FEATURE_DIM",
-    "encode_action_features",
-    "ConstitutionalPolicy",
-    "LedgerBlock",
     "ConstitutionalLedger",
+    "ConstitutionalLedgerError",
+    "ConstitutionalPolicy",
+    "FEATURE_DIM",
+    "LedgerBlock",
+    "encode_action_features",
 ]

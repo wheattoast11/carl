@@ -194,3 +194,58 @@ def tmp_db(tmp_path: Path):
     from carl_studio.db import LocalDB
 
     return LocalDB(db_path=tmp_path / "carl.db")
+
+
+# ---------------------------------------------------------------------------
+# Admin-gate shim for `@pytest.mark.private` tests (v0.17 moat extraction).
+# ---------------------------------------------------------------------------
+
+
+_RESONANCE_LOCAL_SRC = (
+    Path(__file__).resolve().parents[1].parent / "resonance" / "src"
+).resolve()
+
+
+@pytest.fixture
+def admin_unlocked(monkeypatch):
+    """Simulate admin-unlocked host by patching ``carl_studio.admin``.
+
+    Used by tests that exercise the full constitutional / heartbeat /
+    resonant lifecycle (mutating operations that were extracted to the
+    private ``resonance`` package in v0.17).
+
+    Returns ``True`` iff the ``resonance`` package is resolvable from
+    this environment (pip-installed OR the sibling ``resonance/src``
+    directory exists on disk). Returns ``False`` otherwise — tests
+    should call :func:`skip_if_private_unavailable` to bail cleanly.
+    """
+    if _RESONANCE_LOCAL_SRC.is_dir() and str(_RESONANCE_LOCAL_SRC) not in sys.path:
+        sys.path.insert(0, str(_RESONANCE_LOCAL_SRC))
+
+    try:
+        import resonance  # noqa: F401
+    except ImportError:
+        return False
+
+    try:
+        from carl_studio import admin as admin_mod
+    except ImportError:
+        return False
+
+    monkeypatch.setattr(admin_mod, "is_admin", lambda: True)
+
+    def _fake_load_private(name: str):
+        import importlib
+
+        return importlib.import_module(f"resonance.{name}")
+
+    monkeypatch.setattr(admin_mod, "load_private", _fake_load_private)
+    return True
+
+
+def skip_if_private_unavailable(unlocked: bool) -> None:
+    """Helper for ``@pytest.mark.private`` tests — skips cleanly when the
+    resonance runtime is unreachable in the current environment.
+    """
+    if not unlocked:
+        pytest.skip("resonance private runtime not available")
