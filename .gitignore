@@ -33,3 +33,9 @@ env/
 .claude/scheduled_tasks.lock
 # v0.18 Track B — project-local .carl/ scaffold
 .carl/
+
+# Project-local training config. CARLSettings layers this file in, and
+# users commonly drop dataset paths, hub namespaces, and occasionally
+# secrets into it. Keep it out of version control by default — commit a
+# `carl.yaml.example` template instead if you want to share settings.
+carl.yaml

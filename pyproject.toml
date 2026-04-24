@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "carl-studio"
-version = "0.18.0"
+version = "0.18.1"
 description = "CARL (Coherence-Aware Reinforcement Learning) — information-theoretic reward signals for LLM training via token-level probability distributions"
 readme = "README.md"
 license = "MIT"
@@ -133,6 +133,10 @@ packages = ["src/carl_studio"]
 
 [tool.uv.workspace]
 members = ["packages/*"]
+# Exclude non-Python sibling packages from the uv workspace (they use their
+# own tooling — npm for emlt-codec-ts). Without this, `uv lock` fails with
+# "Workspace member … is missing a pyproject.toml".
+exclude = ["packages/emlt-codec-ts"]
 
 [tool.uv.sources]
 carl-core = { workspace = true }

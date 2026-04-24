@@ -8,7 +8,7 @@ The entire paradigm in one import::
 See also: carl.py (300-line seed crystal at the repo root)
 """
 
-__version__ = "0.18.0"
+__version__ = "0.18.1"
 
 from typing import TYPE_CHECKING
 
