@@ -92,23 +92,31 @@ def disable_cmd(
 def acknowledge_cmd(
     path: Path | None = typer.Argument(
         None,
-        exists=False,
+        exists=True,
         file_okay=False,
         dir_okay=True,
         resolve_path=False,
         help="Project root to acknowledge. Defaults to the detected current project.",
     )
 ) -> None:
-    """Persist trust for a specific project root."""
+    """Persist trust for a specific project root.
+
+    Only one acknowledged root is stored at a time — acknowledging a new
+    path silently replaces the previous one. The prior root is surfaced
+    when this happens so users notice the eviction.
+    """
     target = path if path is not None else _detect_project_root()
     if target is None:
         typer.echo("Not inside a CARL project and no path was provided.", err=True)
         raise typer.Exit(2)
     registry = get_trust_registry()
+    prior = registry.current_acknowledged_root()
     state = registry.trust_root(target)
     c = _console()
     c.ok("Project acknowledged for bare entry.")
     c.kv("Acknowledged root", state.acknowledged_project_root or "(none)", key_width=20)
+    if prior is not None and str(prior) != state.acknowledged_project_root:
+        c.info(f"  Replaced previous acknowledged root: {prior}")
 
 
 @trust_app.command("reset")

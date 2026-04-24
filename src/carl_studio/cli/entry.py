@@ -289,6 +289,12 @@ def route(
         default_init()
         return True
 
+    # Trust precheck fires only on bare *interactive* entries (REPL or
+    # bare-prompt-into-REPL). The one-shot ``-p / --print`` path
+    # intentionally bypasses it: the user is asking for a single
+    # non-interactive reply, not dropping into a long-lived session
+    # bound to project context. Use ``carl trust acknowledge`` if you
+    # want a project trusted ahead of any one-shot use.
     bare_prompt_entry = (
         stdin_tty
         and (

@@ -79,19 +79,31 @@ class TestJsonOutput:
     def test_emits_structured_summary(
         self, isolated_home: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
+        """``--json`` is non-interactive: probe state, emit summary, exit 0.
+
+        Per v0.18.1, ``--json`` no longer drives the prompt-based wizard
+        (which would hang or abort on piped stdin). Instead it probes
+        every onboarding signal and reports them in a structured payload
+        so callers can decide whether a fresh ``carl init`` is needed.
+        """
         with (
             patch.object(init_mod, "_has_camp_session", return_value=True),
             patch.object(init_mod, "_detect_any_provider", return_value="Anthropic"),
             patch.object(init_mod, "_training_extras_installed", return_value=True),
             patch.object(init_mod, "_has_project_config", return_value=True),
             patch.object(init_mod, "_consent_set", return_value=True),
-            patch.object(init_mod, "_baseline_freshness", return_value=None),
         ):
-            init_mod.init_cmd(skip_extras=True, skip_project=True, force=False, json_output=True)
+            with pytest.raises(typer.Exit) as excinfo:
+                init_mod.init_cmd(
+                    skip_extras=True, skip_project=True, force=False, json_output=True
+                )
+            assert excinfo.value.exit_code == 0
 
         out = capsys.readouterr().out
-        assert '"status": "initialized"' in out
-        assert '"steps_done"' in out
+        assert '"status": "probed"' in out
+        assert '"camp_session": true' in out
+        assert '"llm_provider_detected": "Anthropic"' in out
+        assert '"project_config_present": true' in out
 
     def test_already_initialized_json(
         self, isolated_home: Path, capsys: pytest.CaptureFixture[str]

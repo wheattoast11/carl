@@ -60,6 +60,31 @@ def init_cmd(
             typer.echo(_json_result(chain, status="already_initialized", steps_done=[]))
         raise typer.Exit(0)
 
+    # ``--json`` means machine-readable, non-interactive: probe state +
+    # emit a structured summary instead of running the prompt-driven
+    # wizard. Avoids hanging or aborting on piped stdin where the help
+    # text says "structured summary instead of the wizard UI".
+    if json_output:
+        chain.context["mode"] = "probe-only"
+        probe_payload: dict[str, Any] = {
+            "first_run_complete": _first_run_complete(),
+            "camp_session": _has_camp_session(),
+            "llm_provider_detected": _detect_any_provider(),
+            "training_extras_healthy": _training_extras_installed(),
+            "project_config_present": _has_project_config(),
+            "consent_set": _consent_set(),
+            "context_present": bool(_load_context()),
+        }
+        chain.record(
+            ActionType.CLI_CMD,
+            "probe_state",
+            input={"mode": "json"},
+            output=probe_payload,
+            success=True,
+        )
+        typer.echo(_json_result(chain, status="probed", steps_done=[]))
+        raise typer.Exit(0)
+
     steps_done: list[str] = []
 
     c.blank()
