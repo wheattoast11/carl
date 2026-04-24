@@ -285,6 +285,13 @@ def eval_cmd(
 
       carl eval --monitor <job-id>
     """
+    # v0.18 Track B: eval mints reports — require a project context so
+    # artifacts land inside the project tree, not in whatever directory
+    # the user happens to be in.
+    from carl_studio.project_context import require as _require_project
+
+    _require_project("eval")
+
     from carl_studio.eval.runner import EvalConfig, EvalRunner
 
     c = get_console()
@@ -535,6 +542,12 @@ def train(
     ),
 ) -> None:
     """Start a CARL training run. Use --send-it for full autonomous pipeline."""
+    # v0.18 Track B: training mints artifacts — require a project context.
+    # Exit 2 with an actionable message when called outside any `.carl/`.
+    from carl_studio.project_context import require as _require_project
+
+    _require_project("train")
+
     import yaml
     from pathlib import Path
     from carl_studio.types.config import TrainingConfig

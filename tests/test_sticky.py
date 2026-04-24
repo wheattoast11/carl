@@ -114,8 +114,10 @@ def test_status_filters_and_orders(queue: StickyQueue) -> None:
     claimed2 = queue.dequeue()  # b (priority 5, older than c)
     assert claimed2 is not None and claimed2.id == b.id
 
-    # Default: all statuses, priority DESC then created_at DESC.
+    # Default: all statuses, priority DESC then created_at ASC.
     full = queue.status()
+    # In SQLite ORDER BY priority DESC, created_at ASC is what test behavior currently produces
+    # Note: b is older than c, so it gets dequeued first.
     assert [n.id for n in full] == [d.id, b.id, c.id, a.id]
 
     # Filter to queued: only c and a remain queued, priority DESC.

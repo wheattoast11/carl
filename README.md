@@ -80,11 +80,17 @@ Full extras matrix, reproducible installs via `uv.lock`, and conflict rules (e.g
 
 ```bash
 carl init                  # one-shot setup: account, provider, extras, project, consent
-carl "train a small model on gsm8k"   # agent — one-shot prompt
 carl chat                  # agent — interactive loop
+carl ask "train a small model on gsm8k"   # agent — one-shot prompt
+carl research search "coherence-aware reinforcement learning"
 ```
 
 `carl init` is idempotent: re-running it after setup does nothing unless you pass `--force`. A first-run marker lives at `~/.carl/.initialized`.
+
+Bare `carl` is an entry surface, not a documented top-level workflow by itself:
+
+- on a TTY, first run can route into `carl init`, and a configured project can route into chat
+- on non-TTY input, bare `carl` prints help plus a nudge toward `carl chat` and `carl ask`
 
 ## Auth
 
@@ -120,7 +126,8 @@ Full auth details: [`docs/auth.md`](docs/auth.md)
 |---|---|
 | `carl init` | One-shot setup: account, provider, extras, project, consent. |
 | `carl chat` | Interactive agent loop with tools, sessions, cost tracking. |
-| `carl "<prompt>"` / `carl ask "<prompt>"` | One-shot agent invocation. |
+| `carl ask "<prompt>"` | One-shot agent invocation. |
+| `carl research search "<query>"` | Search and retrieve research papers (`carl-studio[research]`). |
 | `carl flow "/a /b /c"` | Chain named operations, emit a shared interaction trace. |
 | `carl doctor` | Readiness audit. Prints blocking issues and freshness findings. |
 | `carl train` | Local training with coherence rewards (`carl-studio[training]`). |

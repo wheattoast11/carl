@@ -42,7 +42,7 @@ at a remote run.
 | `runpod` | RunPod compute backend | `pip install 'carl-studio[runpod]'` |
 | `tinker` | Tinker compute backend | `pip install 'carl-studio[tinker]'` |
 | `mcp` | MCP server (`carl mcp serve`) | `pip install 'carl-studio[mcp]'` |
-| `research` | `carl research` (arxiv) | `pip install 'carl-studio[research]'` |
+| `research` | `carl research ...` and `carl lab research ...` (arxiv) | `pip install 'carl-studio[research]'` |
 | `a2a` | Agent-to-agent protocol | `pip install 'carl-studio[a2a]'` |
 | `wallet` | Coinbase AgentKit wallet + keyring | `pip install 'carl-studio[wallet]'` |
 | `x402` | x402 HTTP payment rail (standalone, newer) | `pip install 'carl-studio[x402]'` |

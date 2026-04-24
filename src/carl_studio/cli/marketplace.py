@@ -229,6 +229,12 @@ def publish_cmd(
     rank: int = typer.Option(64, "--rank", "-r", help="LoRA rank (for adapters)"),
 ) -> None:
     """Publish a model or adapter to the carl.camp marketplace."""
+    # v0.18 Track B: publishing mints a marketplace entry tied to the
+    # project — require a project context so provenance stays aligned.
+    from carl_studio.project_context import require as _require_project
+
+    _require_project("publish")
+
     c = get_console()
     _warn_legacy_command_alias(c, ctx, "carl camp publish")
 

@@ -9,21 +9,26 @@ from carl_studio import __version__
 _APP_HELP = f"""Camp CARL v{__version__} — Coherence-Aware RL  ·  carl.camp
 
 Start here:
-  carl start
-  carl doctor
-  carl train ...
+  carl init
+  carl chat
+  carl ask "<prompt>"
+  carl research search "coherence-aware reinforcement learning"
 
 Core workbench:
   project / train / run / observe / eval / infer
 
 Attach platform:
   camp / config / compute / browse
+
+Bare `carl`:
+  interactive TTY entry routes into chat or first-run setup
+  non-TTY entry prints help + this nudge
 """
 
 app = typer.Typer(
     name="carl",
     help=_APP_HELP,
-    no_args_is_help=False,  # bare `carl` routes to chat via the default callback
+    no_args_is_help=False,  # bare `carl` routing is handled by the entry module
 )
 
 camp_app = typer.Typer(

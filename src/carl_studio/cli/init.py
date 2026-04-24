@@ -106,6 +106,15 @@ def init_cmd(
     _baseline_freshness(chain)
     steps_done.append("freshness baseline")
 
+    # 6b. v0.18 Track B safety net — if any previous step wrote
+    # carl.yaml without going through ``_ensure_project`` /
+    # ``_offer_sample_project`` (e.g. a custom ``project_init`` path that
+    # bypasses the scaffold helper), make sure .carl/ exists before we
+    # mark first-run complete. Idempotent — the inner scaffold call is
+    # a no-op when the marker already exists.
+    if _has_project_config():
+        _scaffold_project_marker(Path.cwd(), chain)
+
     # 7. Mark initialized
     _mark_first_run_complete()
     chain.record(ActionType.CLI_CMD, "mark_first_run_complete", success=True)
@@ -608,6 +617,11 @@ def _ensure_project(chain: InteractionChain) -> bool:
     c = get_console()
     if _has_project_config():
         c.ok("carl.yaml found in current directory.")
+        # v0.18: guarantee the .carl/ skeleton exists alongside an
+        # already-present carl.yaml. Upgrades from v0.17.x don't have
+        # the marker yet; this scaffolds it on first init re-run so
+        # the project-context gate resolves correctly.
+        _scaffold_project_marker(Path.cwd(), chain)
         chain.record(
             ActionType.CLI_CMD, "project_init",
             input={"already_present": True}, success=True,
@@ -647,8 +661,37 @@ def _ensure_project(chain: InteractionChain) -> bool:
         return False
 
     success = _has_project_config()
+    if success:
+        # v0.18 Track B: mint .carl/ marker so project_context.current()
+        # can discover this project from any nested CWD.
+        _scaffold_project_marker(Path.cwd(), chain)
     chain.record(ActionType.CLI_CMD, "project_init", success=success)
     return success
+
+
+def _scaffold_project_marker(cwd: Path, chain: InteractionChain) -> None:
+    """Mint the ``.carl/`` skeleton alongside ``carl.yaml``.
+
+    Thin shim over :func:`carl_studio.project_context.scaffold`. Idempotent
+    — re-running on an already-scaffolded project is a no-op. Errors are
+    recorded on the chain but never propagated: scaffold failure should
+    not abort init (the yaml is already on disk; the marker can be
+    recovered with ``mkdir .carl`` manually).
+    """
+    try:
+        from carl_studio import project_context
+
+        target = project_context.scaffold(cwd)
+    except Exception as exc:  # pragma: no cover — defensive
+        chain.record(
+            ActionType.CLI_CMD, "scaffold_marker",
+            output={"error": str(exc)}, success=False,
+        )
+        return
+    chain.record(
+        ActionType.CLI_CMD, "scaffold_marker",
+        output={"path": str(target)}, success=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -814,6 +857,10 @@ def _offer_sample_project(chain: InteractionChain) -> bool:
             output={"error": str(exc)}, success=False,
         )
         return False
+
+    # v0.18 Track B: also mint .carl/ so project_context.current()
+    # can discover the sample project via walk-up.
+    _scaffold_project_marker(cwd, chain)
 
     c.ok(f"Sample project scaffolded in {cwd}")
     if overrides:

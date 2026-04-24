@@ -38,7 +38,10 @@ class DummyTrackioSource:
         return []
 
 
-def test_train_missing_fields_has_actionable_error():
+def test_train_missing_fields_has_actionable_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".carl").mkdir()
+    (tmp_path / "carl.yaml").write_text("name: test\n")
     result = runner.invoke(
         app, ["train", "--model", "Qwen/Qwen3.5-9B", "--method", "grpo", "--compute", "a100"]
     )
@@ -49,11 +52,15 @@ def test_train_missing_fields_has_actionable_error():
     assert "ValidationError" not in result.output
 
 
-def test_train_accepts_compute_alias_and_default_run_name(tmp_path: Path):
+def test_train_accepts_compute_alias_and_default_run_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".carl").mkdir()
+    (tmp_path / "carl.yaml").write_text("name: test\n")
     config = tmp_path / "carl.yaml"
     config.write_text(
         "\n".join(
             [
+                "name: test",
                 "base_model: Tesslate/OmniCoder-9B",
                 "method: grpo",
                 "dataset_repo: org/data",
@@ -515,7 +522,10 @@ def test_project_init_uses_settings_defaults_noninteractive(monkeypatch, tmp_pat
     assert payload["tracking_url"] == "https://trackio.example"
 
 
-def test_train_persists_local_run_and_prints_run_guidance(monkeypatch, tmp_path: Path):
+def test_train_persists_local_run_and_prints_run_guidance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".carl").mkdir()
+    (tmp_path / "carl.yaml").write_text("name: test\n")
     monkeypatch.setattr(db_mod, "CARL_DIR", tmp_path)
     monkeypatch.setattr(db_mod, "DB_PATH", tmp_path / "carl.db")
 

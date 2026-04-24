@@ -117,13 +117,30 @@ class TestRegisterRecipeShell:
         assert "validation_failed" in (result.error or "")
 
     def test_transport_error(self) -> None:
+        # Non-OSError exception → generic "transport error" path (not
+        # retry-eligible). v0.18 Track D's Idempotency-Key work
+        # reclassified ``ConnectionError`` (subclass of OSError) as a
+        # retry-eligible ``transport timeout`` — see marketplace.py:627.
+        # So this test uses RuntimeError to hit the generic branch.
+        def _t(**kwargs: Any) -> _MockResponse:
+            raise RuntimeError("refused")
+
+        client = CampSyncClient(transport=_t)
+        result = client.register_recipe_shell(bearer_token="tok")
+        assert not result.ok
+        assert "transport error" in (result.error or "")
+
+    def test_transport_timeout_is_retry_eligible(self) -> None:
+        # New v0.18 behavior: ConnectionError / socket.timeout / URLError
+        # with a timeout inside are classified as retry-eligible so the
+        # §Q5 Idempotency-Key retry layer can kick in.
         def _t(**kwargs: Any) -> _MockResponse:
             raise ConnectionError("refused")
 
         client = CampSyncClient(transport=_t)
         result = client.register_recipe_shell(bearer_token="tok")
         assert not result.ok
-        assert "transport error" in (result.error or "")
+        assert "transport timeout" in (result.error or "")
 
     def test_no_transport(self) -> None:
         client = CampSyncClient(transport=None)

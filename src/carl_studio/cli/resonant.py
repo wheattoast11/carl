@@ -268,6 +268,13 @@ def publish_cmd(
     long-term, and NEVER sent over plain HTTP (we refuse ``http://``
     base URLs unless explicitly opted in via ``--dry-run``).
     """
+    # v0.18 Track B: publishing a Resonant mints a marketplace entry
+    # tied to the enclosing project — require a project context so the
+    # signed envelope's provenance matches an on-disk project root.
+    from carl_studio.project_context import require as _require_project
+
+    _require_project("resonant publish")
+
     from carl_core.errors import ValidationError
 
     from carl_studio.resonant_store import (
@@ -384,6 +391,22 @@ def publish_cmd(
             "402 Payment Required — publish path is free-tier; this indicates "
             "tier misconfiguration on carl.camp. Response body:\n"
             + body.decode("utf-8", errors="replace"),
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if status == 409:
+        # v0.18 Track D — per docs/platform-parity-reply-2026-04-22.md §Q2
+        # and carl.camp agent's ack (fc535e5, 2026-04-22): the 409 body
+        # deliberately does NOT include the existing resonant id —
+        # ownership-privacy, no leak of another user's id to a
+        # hash-collision visitor. No retry, no auto-rename.
+        typer.echo(
+            "409 Conflict — this content-hash is already published under "
+            "a different signer. Your copy has the same bytes as an "
+            "existing Resonant owned by another user; we refuse to dedupe "
+            "silently because that would strip authorship.\n"
+            "To proceed: rename / tweak your Resonant so the hash differs.",
             err=True,
         )
         raise typer.Exit(1)

@@ -106,6 +106,17 @@ class TestEval:
 
 
 class TestPublish:
+    @pytest.fixture(autouse=True)
+    def chdir_and_mkdir(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        # Project root must NOT equal $HOME (project_context home-guard
+        # excludes it). HOME is pinned to tmp_path by isolated_home, so
+        # the project lives one level deeper.
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        monkeypatch.chdir(proj)
+        (proj / ".carl").mkdir(parents=True, exist_ok=True)
+        (proj / "carl.yaml").write_text("name: test\n")
+
     def test_dry_run_builds_request_without_sending(self, runner: CliRunner) -> None:
         from carl_studio.resonant_store import save_resonant
 
@@ -164,7 +175,7 @@ class TestPublish:
         assert base64.b64decode(h["X-Carl-User-Secret"])
 
     def test_422_attestation_failure(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         from carl_studio.resonant_store import save_resonant
 
@@ -179,7 +190,7 @@ class TestPublish:
         assert result.exit_code == 1
 
     def test_no_token_exits_with_hint(
-        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch
+        self, runner: CliRunner, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         from carl_studio.resonant_store import save_resonant
 

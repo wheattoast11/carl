@@ -479,7 +479,7 @@ def _cli_app():
     return app
 
 
-def test_cli_train_with_unknown_backend_exits_2(tmp_path: Path):
+def test_cli_train_with_unknown_backend_exits_2(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = CliRunner()
     config = tmp_path / "carl.yaml"
     config.write_text(
@@ -492,6 +492,8 @@ def test_cli_train_with_unknown_backend_exits_2(tmp_path: Path):
             ]
         )
     )
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".carl").mkdir()
     result = runner.invoke(
         _cli_app(), ["train", "--config", str(config), "--backend", "nope"]
     )
@@ -499,7 +501,7 @@ def test_cli_train_with_unknown_backend_exits_2(tmp_path: Path):
     assert "unknown training backend" in result.output
 
 
-def test_cli_train_unsloth_dry_run_translates_without_submitting(tmp_path: Path):
+def test_cli_train_unsloth_dry_run_translates_without_submitting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = CliRunner()
     config = tmp_path / "carl.yaml"
     config.write_text(
@@ -516,6 +518,8 @@ def test_cli_train_unsloth_dry_run_translates_without_submitting(tmp_path: Path)
             ]
         )
     )
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".carl").mkdir()
 
     # Pretend unsloth is installed so availability is True.
     fake_spec = object()
@@ -554,7 +558,7 @@ def test_cli_lab_backends_table_output_contains_all():
         assert name in result.output
 
 
-def test_cli_train_unavailable_backend_errors_cleanly(tmp_path: Path):
+def test_cli_train_unavailable_backend_errors_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     runner = CliRunner()
     config = tmp_path / "carl.yaml"
     config.write_text(
@@ -567,6 +571,8 @@ def test_cli_train_unavailable_backend_errors_cleanly(tmp_path: Path):
             ]
         )
     )
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".carl").mkdir()
     # Force unsloth to appear absent.
     with patch(
         "carl_studio.adapters.unsloth_adapter.importlib.util.find_spec",

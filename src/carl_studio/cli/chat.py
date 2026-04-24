@@ -275,6 +275,56 @@ def ask_cmd(
     )
 
 
+def _resolve_project_prompt_prefix() -> str | None:
+    """Build the ``[⊙ <name>]`` Rich markup fragment for the REPL prompt.
+
+    v0.18 Track B — when the CWD resolves to a carl project (walk-up
+    finds a ``.carl/`` directory), return a Rich-markup string like
+    ``"[#A3D977]\\[⊙ my-project][/]"``. The caller prints this before
+    the ``input("  you> ")`` call so the prompt line shows:
+
+        [⊙ my-project]  you>
+
+    Returns ``None`` when there is no enclosing project — the REPL
+    still works outside projects (bare ``carl`` in ``$HOME``), the
+    prefix just vanishes.
+
+    Never raises: project-context discovery is best-effort; any
+    exception falls through to ``None`` so the chat loop stays alive.
+    """
+    try:
+        from carl_studio import project_context
+
+        ctx = project_context.current()
+    except Exception:
+        return None
+    if ctx is None:
+        return None
+
+    # Escape the leading '[' so Rich does not interpret it as the
+    # start of another markup tag. The glyph is from the existing
+    # theme palette (Icons.info = "●" is similar; ⊙ chosen for the
+    # "center-dot" kubectl-context feel).
+    safe_name = ctx.name.replace("[", "\\[").replace("]", "\\]")
+    return f"[{ctx.color}]\\[⊙ {safe_name}][/]"
+
+
+def _render_prompt_prefix(c: Any, prefix: str | None) -> None:
+    """Print the project prompt prefix, if any.
+
+    Kept separate from :func:`_resolve_project_prompt_prefix` so tests
+    can unit-check the markup string without exercising the console.
+    No-op when ``prefix`` is ``None`` (non-project CWD).
+    """
+    if prefix is None:
+        return
+    # end="" so the "  you> " prompt lands on the same visual row.
+    try:
+        c.print(prefix + " ", end="")
+    except Exception:  # pragma: no cover — defensive
+        return
+
+
 def _read_total_cost(agent: Any) -> float:
     """Read the session's running cost from the agent, safely.
 
@@ -334,8 +384,21 @@ def chat_cmd(
         "--show-cost/--no-show-cost",
         help="Show per-turn cost delta after each reply (default: from settings.show_per_turn_cost)",
     ),
+    initial_message: str | None = typer.Option(
+        None,
+        hidden=True,
+    ),
 ) -> None:
-    """Chat with CARL. Proactive agent with tool use, file ingestion, and analysis."""
+    """Chat with CARL. Proactive agent with tool use, file ingestion, and analysis.
+
+    ``initial_message`` is the v0.18 entry-point-router seam: when the
+    user launches ``carl "<prompt>"``, the router pre-submits the
+    positional as the first user turn so the REPL opens mid-conversation.
+    When unset, the REPL opens with an empty prompt as before. The
+    kwarg is wired through Typer as a hidden option so it cannot be
+    invoked from the CLI directly — only :func:`carl_studio.cli.entry.route`
+    is expected to pass it programmatically.
+    """
     c = get_console()
 
     if sessions:
@@ -470,13 +533,38 @@ def chat_cmd(
     # agent so resumed sessions start at the correct offset.
     prev_total_cost: float = _read_total_cost(agent) if show_cost_resolved else 0.0
 
+    # v0.18 entry-point-router pre-submit: when ``carl "<prompt>"`` is
+    # routed here by ``cli.entry.route``, the positional is injected as
+    # the first user turn so the REPL opens mid-conversation. Stripped +
+    # echoed visually so the user sees the same "  you> " affordance as
+    # a typed line, then consumed exactly once.
+    pending_initial: str | None = None
+    if isinstance(initial_message, str):
+        stripped_initial = initial_message.strip()
+        if stripped_initial:
+            pending_initial = stripped_initial
+
+    # v0.18 Track B: project-aware REPL prompt. When the CWD resolves
+    # to a carl project, prefix the "you> " line with "[⊙ <name>]" in
+    # the project's deterministic hue (sha256-derived hex). Rich
+    # handles the color; ``input()`` itself stays plain-text so
+    # readline / terminal history behave correctly.
+    _project_prefix = _resolve_project_prompt_prefix()
+
     while True:
-        try:
-            user_input = input("  you> ").strip()
-        except (KeyboardInterrupt, EOFError):
-            c.blank()
-            _exit_session(c, agent)
-            break
+        if pending_initial is not None:
+            user_input = pending_initial
+            pending_initial = None
+            _render_prompt_prefix(c, _project_prefix)
+            c.print(f"  you> {user_input}")
+        else:
+            try:
+                _render_prompt_prefix(c, _project_prefix)
+                user_input = input("  you> ").strip()
+            except (KeyboardInterrupt, EOFError):
+                c.blank()
+                _exit_session(c, agent)
+                break
 
         if not user_input or user_input.lower() in ("quit", "exit", "q"):
             _exit_session(c, agent)

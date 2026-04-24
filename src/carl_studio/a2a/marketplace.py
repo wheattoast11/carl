@@ -345,6 +345,15 @@ class RegisterResult:
 
     Shape of the real endpoint (2026-04-20):
         201 → {ok: true, agent_id, org_id, lifecycle_state, created_at}
+
+    v0.18 Track D (§Q5): ``divergence_warning`` is populated when a retry
+    happened AND the second attempt returned a different ``agent_id``
+    than the first. Callers should surface this to the operator.
+
+    ``observed_agent_id`` captures the ``agent_id`` returned in the
+    response body regardless of whether the attempt was otherwise
+    successful — this lets the retry layer detect divergence even when
+    attempt 1 was wrapped in an error envelope.
     """
 
     agent_id: str | None = None
@@ -352,6 +361,9 @@ class RegisterResult:
     lifecycle_state: str | None = None
     created_at: str | None = None
     error: str | None = None
+    # v0.18 Track D — divergence detection across retry attempts.
+    divergence_warning: str | None = None
+    observed_agent_id: str | None = None
 
     @property
     def ok(self) -> bool:
@@ -488,46 +500,160 @@ class CampSyncClient:
         bearer_token: str,
         name: str | None = None,
         org_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> RegisterResult:
         """Call ``POST /api/agents/register`` to mint a recipe-shell.
 
         The carl.camp endpoint creates an empty ``recipes`` row owned by
         the caller's org and returns a UUID. That UUID is what subsequent
         ``/api/sync/agent-cards`` calls reference as ``agent_id``.
+
+        v0.18 Track D (§Q5): when ``idempotency_key`` is provided it
+        travels as the ``Idempotency-Key`` header. On a transient failure
+        (5xx status OR a network timeout surfaced as ``OSError``/
+        ``TimeoutError`` from the transport) we retry ONCE with a 1s
+        wait and the SAME Idempotency-Key. If both attempts succeed but
+        return different ``agent_id`` values, the second result is used
+        and ``divergence_warning`` is populated.
         """
 
         if (err := self._require_transport()) is not None:
             return RegisterResult(error=err)
 
         url = f"{self._base_url}/api/agents/register"
-        headers = {
+        headers: dict[str, str] = {
             "Authorization": f"Bearer {bearer_token}",
             "Content-Type": "application/json",
         }
+        if idempotency_key is not None:
+            headers["Idempotency-Key"] = idempotency_key
         body: dict[str, Any] = {}
         if name is not None:
             body["name"] = name
         if org_id is not None:
             body["org_id"] = org_id
 
+        first = self._attempt_register(url=url, headers=headers, body=body)
+
+        # Retry ONLY when eligible: 5xx status OR a transient network
+        # exception. A 4xx or a successful 2xx is terminal on the first
+        # attempt — no retry, no divergence check needed.
+        if not self._should_retry_register(first):
+            return self._finalize_register(first)
+
+        # Single-retry wait — 1s per spec. ``time.sleep`` is fine here;
+        # this is a CLI-boundary call, not a hot loop.
+        import time as _time
+
+        _time.sleep(1.0)
+        second = self._attempt_register(url=url, headers=headers, body=body)
+
+        # Second attempt is terminal; surface whatever it yielded.
+        # Detect agent_id divergence across the two attempts (carl.camp
+        # echoes the same id when honoring the Idempotency-Key; a
+        # divergent id would indicate the server didn't honor it). We
+        # compare ``observed_agent_id`` — the raw body value — not
+        # ``agent_id`` so a flaky 5xx that still echoed an id is caught.
+        first_aid = first.observed_agent_id
+        second_aid = second.observed_agent_id
+        if (
+            first_aid is not None
+            and second_aid is not None
+            and first_aid != second_aid
+            and second.error is None
+        ):
+            warning = (
+                f"divergence: attempt 1 returned {first_aid}; "
+                f"attempt 2 returned {second_aid}; using second"
+            )
+            return RegisterResult(
+                agent_id=second.agent_id,
+                org_id=second.org_id,
+                lifecycle_state=second.lifecycle_state,
+                created_at=second.created_at,
+                observed_agent_id=second.observed_agent_id,
+                divergence_warning=warning,
+            )
+        return self._finalize_register(second)
+
+    @staticmethod
+    def _should_retry_register(result: "RegisterResult") -> bool:
+        """Eligibility gate for the single retry.
+
+        Per §Q5: retry only on 5xx status OR network timeout.
+        ``_attempt_register`` encodes a transient network fault as
+        ``error="transport timeout: <...>"`` or ``"http 5NN: ..."``;
+        anything else (4xx, unknown envelope, success) is terminal.
+        """
+        if result.error is None:
+            return False
+        msg = result.error
+        if msg.startswith("transport timeout:"):
+            return True
+        if msg.startswith("http "):
+            # Parse the status token: "http 502: ..." → "502".
+            try:
+                token = msg[5:].split(":", 1)[0]
+                return token.startswith("5") and len(token) == 3
+            except (IndexError, ValueError):
+                return False
+        return False
+
+    @staticmethod
+    def _finalize_register(result: "RegisterResult") -> "RegisterResult":
+        """Pass-through finalizer kept separate so retry paths share a
+        single exit shape."""
+        return result
+
+    def _attempt_register(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        body: dict[str, Any],
+    ) -> "RegisterResult":
+        """Single request cycle. Encodes network timeouts as a
+        retry-eligible ``transport timeout:`` error so the retry layer
+        can branch on the error class without sniffing the exception
+        type twice.
+
+        Always records ``observed_agent_id`` from the response body
+        when present, regardless of envelope state — this feeds the
+        divergence check across retries even when an attempt's envelope
+        was wrapped in an error.
+        """
         try:
             response = self._transport(url=url, headers=headers, json=body)  # type: ignore[misc]
+        except (TimeoutError, OSError) as exc:
+            # OSError covers socket.timeout, requests.Timeout (subclass
+            # via RequestException→OSError), and urllib.error.URLError
+            # when the wrapped reason is socket.timeout. This is the
+            # "network timeout" limb of §Q5's retry trigger.
+            return RegisterResult(error=f"transport timeout: {exc}")
         except Exception as exc:
+            # Non-timeout transport failures (DNS, TLS, etc.) are
+            # terminal — no retry, propagate directly. Keeps the policy
+            # conservative.
             return RegisterResult(error=f"transport error: {exc}")
 
-        if (env_err := self._envelope_error(response)) is not None:
-            return RegisterResult(error=env_err)
-
+        # Parse the payload once — we need ``agent_id`` both for the
+        # success path AND for divergence detection across retries.
         payload = self._parse_payload(response)
-        aid = payload.get("agent_id")
-        if not isinstance(aid, str):
+        observed_aid = payload.get("agent_id")
+        observed_aid_str = observed_aid if isinstance(observed_aid, str) else None
+
+        if (env_err := self._envelope_error(response)) is not None:
+            return RegisterResult(error=env_err, observed_agent_id=observed_aid_str)
+
+        if observed_aid_str is None:
             return RegisterResult(error="response missing agent_id")
 
         return RegisterResult(
-            agent_id=aid,
+            agent_id=observed_aid_str,
             org_id=payload.get("org_id"),
             lifecycle_state=payload.get("lifecycle_state"),
             created_at=payload.get("created_at"),
+            observed_agent_id=observed_aid_str,
         )
 
 

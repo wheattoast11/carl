@@ -429,16 +429,26 @@ class TestCLIShow:
 
 
 class TestCLIPublish:
-    @patch("carl_studio.cli.marketplace.check_tier")
-    @patch("carl_studio.cli.marketplace._get_client")
-    def test_publish_model(self, mock_get: MagicMock, mock_tier: MagicMock) -> None:
+    @pytest.fixture(autouse=True)
+    def chdir_and_mkdir(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".carl").mkdir()
+        (tmp_path / "carl.yaml").write_text("name: test\n")
+
+    def test_publish_model(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         from carl_studio.tier import Tier
 
+        mock_tier = MagicMock()
         mock_tier.return_value = (True, Tier.PAID, Tier.PAID)
+        monkeypatch.setattr("carl_studio.cli.marketplace.check_tier", mock_tier)
+
         client = MagicMock()
         published = MarketplaceModel(**{**_SAMPLE_MODEL, "id": "new-id"})
         client.publish_model.return_value = published
+
+        mock_get = MagicMock()
         mock_get.return_value = client
+        monkeypatch.setattr("carl_studio.cli.marketplace._get_client", mock_get)
 
         result = runner.invoke(app, [
             "publish", "wheattoast11/OmniCoder-9B",
@@ -446,64 +456,76 @@ class TestCLIPublish:
             "--name", "OmniCoder 9B",
             "--base", "Tesslate/OmniCoder-9B",
         ])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert "Published model" in result.output
 
-    @patch("carl_studio.cli.marketplace.check_tier")
-    def test_publish_blocked_free_tier(self, mock_tier: MagicMock) -> None:
+    def test_publish_blocked_free_tier(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         from carl_studio.tier import Tier
 
+        mock_tier = MagicMock()
         mock_tier.return_value = (False, Tier.FREE, Tier.PAID)
+        monkeypatch.setattr("carl_studio.cli.marketplace.check_tier", mock_tier)
 
         result = runner.invoke(app, ["publish", "user/model"])
-        assert result.exit_code == 1
+        assert result.exit_code == 1, result.output
         assert "Paid" in result.output or "carl.camp/pricing" in result.output
 
-    @patch("carl_studio.cli.marketplace.check_tier")
-    @patch("carl_studio.cli.marketplace._get_client")
-    def test_publish_adapter(self, mock_get: MagicMock, mock_tier: MagicMock) -> None:
+    def test_publish_adapter(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         from carl_studio.tier import Tier
 
+        mock_tier = MagicMock()
         mock_tier.return_value = (True, Tier.PAID, Tier.PAID)
+        monkeypatch.setattr("carl_studio.cli.marketplace.check_tier", mock_tier)
+
         client = MagicMock()
         published = MarketplaceAdapter(**_SAMPLE_ADAPTER)
         client.publish_adapter.return_value = published
+
+        mock_get = MagicMock()
         mock_get.return_value = client
+        monkeypatch.setattr("carl_studio.cli.marketplace._get_client", mock_get)
 
         result = runner.invoke(app, [
             "publish", "wheattoast11/OmniCoder-9B-Zero-Phase2",
             "--type", "adapter",
             "--rank", "32",
         ])
-        assert result.exit_code == 0
+        assert result.exit_code == 0, result.output
         assert "Published adapter" in result.output
 
-    @patch("carl_studio.cli.marketplace.check_tier")
-    @patch("carl_studio.cli.marketplace._get_client")
-    def test_publish_invalid_type(self, mock_get: MagicMock, mock_tier: MagicMock) -> None:
+    def test_publish_invalid_type(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         from carl_studio.tier import Tier
 
+        mock_tier = MagicMock()
         mock_tier.return_value = (True, Tier.PAID, Tier.PAID)
+        monkeypatch.setattr("carl_studio.cli.marketplace.check_tier", mock_tier)
+
+        mock_get = MagicMock()
         mock_get.return_value = MagicMock()
+        monkeypatch.setattr("carl_studio.cli.marketplace._get_client", mock_get)
 
         result = runner.invoke(app, [
             "publish", "user/model", "--type", "invalid"
         ])
-        assert result.exit_code == 1
+        assert result.exit_code == 1, result.output
         assert "Invalid type" in result.output
 
-    @patch("carl_studio.cli.marketplace.check_tier")
-    @patch("carl_studio.cli.marketplace._get_client")
-    def test_publish_api_error(self, mock_get: MagicMock, mock_tier: MagicMock) -> None:
+    def test_publish_api_error(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         from carl_studio.tier import Tier
 
+        mock_tier = MagicMock()
         mock_tier.return_value = (True, Tier.PAID, Tier.PAID)
+        monkeypatch.setattr("carl_studio.cli.marketplace.check_tier", mock_tier)
+
         client = MagicMock()
         client.publish_model.side_effect = MarketplaceError(
             "Marketplace API error (401): Unauthorized"
         )
+
+        mock_get = MagicMock()
         mock_get.return_value = client
+        monkeypatch.setattr("carl_studio.cli.marketplace._get_client", mock_get)
 
         result = runner.invoke(app, ["publish", "user/model"])
-        assert result.exit_code == 1
+        assert result.exit_code == 1, result.output
         assert "login" in result.output.lower() or "authenticated" in result.output.lower()

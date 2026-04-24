@@ -13,6 +13,7 @@ Commands:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import uuid
@@ -399,9 +400,19 @@ def register(
         )
         return
 
+    # v0.18 Track D (§Q5): Idempotency-Key = sha256(org_id ‖ agent_name ‖
+    # content_hash). A nullish org_id is rendered as the empty string —
+    # same behavior on server + client so the computed key matches the
+    # carl.camp-side cache entry.
+    idem_source = f"{org_id or ''}|{name}|{card.content_hash}"
+    idempotency_key = hashlib.sha256(idem_source.encode("utf-8")).hexdigest()
+
     client = CampSyncClient(transport=transport)
     reg_result = client.register_recipe_shell(
-        bearer_token=bearer, name=name, org_id=org_id
+        bearer_token=bearer,
+        name=name,
+        org_id=org_id,
+        idempotency_key=idempotency_key,
     )
     if not reg_result.ok:
         _err(f"Register failed: {reg_result.error}")
@@ -410,6 +421,13 @@ def register(
             fg="bright_blue",
         )
         return
+
+    # Surface divergence across retry attempts — the server should have
+    # honored Idempotency-Key and returned the same agent_id both times.
+    # A divergence means the server cache missed; we use attempt 2's id
+    # but make the operator aware.
+    if reg_result.divergence_warning is not None:
+        _err(reg_result.divergence_warning)
 
     # Replace the local placeholder agent_id with the server-minted UUID.
     new_id = reg_result.agent_id
@@ -448,6 +466,11 @@ def publish(
     recent InteractionChain shows healthy coherence (R ≥ 0.5).
     Degenerate-probe cases allow (no signal → fail open).
     """
+    # v0.18 Track B: agent publishing mints marketplace entries bound
+    # to the enclosing project — require a project context first.
+    from carl_studio.project_context import require as _require_project
+
+    _require_project("agent publish")
 
     from carl_core.interaction import InteractionChain
     from carl_core.presence import success_rate_probe

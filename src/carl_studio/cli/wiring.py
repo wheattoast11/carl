@@ -50,6 +50,7 @@ def _make_stub(
 
     @target_app.command(name=name, hidden=hidden)
     def _stub() -> None:  # noqa: D401
+        """"""
         typer.echo(f"{doc}")
         typer.echo(f"Install: {hint}")
         raise typer.Exit(1)
@@ -102,8 +103,15 @@ lab_app.add_typer(admin_app, name="admin")
 try:
     from carl_studio.research._cli import research_app
 
+    app.add_typer(research_app, name="research")
     lab_app.add_typer(research_app, name="research")
 except ImportError:
+    _make_stub(
+        app,
+        "research",
+        doc="Research requires the arxiv package.",
+        hint="pip install 'carl-studio[research]'",
+    )
     _make_stub(
         lab_app,
         "research",
@@ -347,12 +355,48 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Wire carl session (v0.18 Track D — per-project CLI sessions)
+# ---------------------------------------------------------------------------
+try:
+    from .session_cmd import session_app
+
+    app.add_typer(session_app, name="session")
+except ImportError:
+    _make_stub(app, "session", doc="Session commands require the full carl-studio package.")
+
+
+# ---------------------------------------------------------------------------
+# Wire carl trust (v0.18 Track B — bare-entry project trust)
+# ---------------------------------------------------------------------------
+try:
+    from .trust import trust_app
+
+    app.add_typer(trust_app, name="trust")
+except ImportError:
+    _make_stub(app, "trust", doc="Trust commands require the full carl-studio package.")
+
+
+# ---------------------------------------------------------------------------
 # Wire carl chat (top-level agentic chat)
 # ---------------------------------------------------------------------------
-# F1 — Two canonical surfaces only: `carl chat` (interactive) and
-# `carl ask "<prompt>"` (one-shot). Bare `carl` no longer auto-routes to
-# chat; it prints help + a 1-line nudge so new users discover both entry
-# points explicitly. The legacy `carl lab repl` alias is removed.
+# F1 (v0.7) — Two canonical surfaces: `carl chat` (interactive) and
+# `carl ask "<prompt>"` (one-shot). The legacy `carl lab repl` alias is
+# removed.
+#
+# v0.18 Track A — bare ``carl`` now delegates to
+# :func:`carl_studio.cli.entry.route`, which is the single decision point
+# for all entry modes:
+#
+# * empty argv (TTY)            → ``chat_cmd`` REPL
+# * empty argv (non-TTY / piped) → help + nudge
+# * ``carl "<prompt>"``          → ``chat_cmd(initial_message=prompt)``
+# * ``carl -p "<prompt>"``       → ``ask_cmd``
+# * ``~/.carl/.initialized`` missing on a TTY → ``init_cmd`` then exit
+#
+# The router returns ``True`` when it handled the invocation end-to-end;
+# ``False`` means "fall through to Typer help". Subcommand dispatch is
+# always owned by Typer — the callback only fires when
+# ``ctx.invoked_subcommand is None``.
 try:
     from .chat import ask_cmd, chat_cmd
 
@@ -360,10 +404,29 @@ try:
     app.command(name="ask")(ask_cmd)
 
     @app.callback(invoke_without_command=True)
-    def _show_help_when_bare(ctx: typer.Context) -> None:
-        """Print help + a routing nudge when the user runs bare ``carl``."""
+    def _route_bare_carl(ctx: typer.Context) -> None:  # pyright: ignore[reportUnusedFunction]
+        """Delegate bare ``carl`` invocations to the unified router."""
         if ctx.invoked_subcommand is not None:
             return
+
+        # Lazy import so the wiring module stays cheap to load when the
+        # router is not needed (e.g. on ``carl <verb>``).
+        from carl_studio.cli.entry import route
+
+        # The callback fires with ``sys.argv`` already stripped of the
+        # program name and of any consumed group-level options. The
+        # router inspects the full slice so it can reach the positional
+        # prompt / ``-p`` shapes that Typer's callback context does not
+        # expose directly.
+        import sys as _sys
+
+        handled = route(list(_sys.argv[1:]))
+        if handled:
+            return
+
+        # Router returned False → fall back to today's help + nudge.
+        # This keeps ``carl`` inside a piped script visually identical
+        # to v0.17.x for operators who rely on the existing output.
         typer.echo(ctx.get_help())
         typer.echo(
             "\nUse `carl chat` for an interactive session or "

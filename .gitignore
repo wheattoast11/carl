@@ -31,3 +31,5 @@ env/
 /fix_*.py
 /patch_*.py
 .claude/scheduled_tasks.lock
+# v0.18 Track B — project-local .carl/ scaffold
+.carl/
