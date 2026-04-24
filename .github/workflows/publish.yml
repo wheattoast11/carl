@@ -1,18 +1,35 @@
 name: Publish to PyPI
 
+# Triggers:
+#   1. GitHub Release published — full flow (resolve version, optionally bump
+#      pyproject/commit, align release tag, build, publish).
+#   2. `v*` tag push — minimal flow (build + publish from the tagged commit).
+#      Intentional: every `v*` tag push historically on this repo was meant to
+#      publish; requiring a separate "Release" step is why v0.4..v0.15 never
+#      shipped. Keep scoped sub-package tags (`carl-*@*`) routed to the
+#      sub-package job below.
+#   3. Manual dispatch — operator-triggered catch-up or dry-run.
 on:
   release:
     types: [published]
   push:
     tags:
+      - "v*"
       - "carl-*@*"
+  workflow_dispatch:
+    # Manual dispatch is always a build-only dry-run. To publish, push a
+    # v* tag or cut a GitHub Release.
 
 jobs:
   # --------------------------------------------------------------------
-  # Root package: carl-studio (triggered by GitHub Release, original flow)
+  # Root package: carl-studio
+  # Fires on GitHub Release publish OR on `v*` tag push OR manual dispatch.
   # --------------------------------------------------------------------
   publish-root:
-    if: github.event_name == 'release'
+    if: >
+      github.event_name == 'release' ||
+      (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -33,20 +50,23 @@ jobs:
         run: uv lock --check
       - name: Sync locked dependencies
         run: uv sync --locked --all-extras --no-install-workspace || uv sync --locked --extra all
-      - name: Resolve release version
+      # --- Release path: resolve_version may bump pyproject + commit ---
+      - name: Resolve release version (release path only)
+        if: github.event_name == 'release'
         id: resolve_version
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: python scripts/release_version.py --apply --release-tag "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT"
-      - name: Commit version update
-        if: steps.resolve_version.outputs.changed == 'true'
+      - name: Commit version update (release path only)
+        if: github.event_name == 'release' && steps.resolve_version.outputs.changed == 'true'
         env:
           VERSION: ${{ steps.resolve_version.outputs.version }}
         run: |
           git add pyproject.toml src/carl_studio/__init__.py uv.lock
           git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -m "chore: bump release version to v$VERSION"
           git push origin HEAD:${{ github.event.release.target_commitish }}
-      - name: Align release tag
+      - name: Align release tag (release path only)
+        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_TAG: ${{ github.event.release.tag_name }}
@@ -60,6 +80,21 @@ jobs:
           fi
           git push origin "$TARGET_TAG"
           gh release edit "$SOURCE_TAG" --tag "$TARGET_TAG"
+
+      # --- Tag-push path: pyproject must already match the tag ---
+      - name: Require pyproject to match tag (tag-push path)
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG_VER: ${{ github.ref_name }}
+        run: |
+          tag_clean="${TAG_VER#v}"
+          py_ver=$(python -c "import re, pathlib; m=re.search(r'(?m)^version = \"([^\"]+)\"', pathlib.Path('pyproject.toml').read_text()); print(m.group(1))")
+          if [ "$tag_clean" != "$py_ver" ]; then
+            echo "::error::Tag $TAG_VER (clean=$tag_clean) does not match pyproject version $py_ver"
+            echo "::error::Bump pyproject.toml + src/carl_studio/__init__.py to $tag_clean before pushing the tag."
+            exit 1
+          fi
+          echo "Tag $TAG_VER matches pyproject version $py_ver"
       - run: python -m build
       - name: Generate SBOM (CycloneDX)
         run: |
@@ -70,12 +105,24 @@ jobs:
         with:
           name: sbom
           path: sbom.json
-      - name: Attach SBOM to GitHub release
+      - name: Attach SBOM to GitHub release (release path only)
+        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$RELEASE_TAG" sbom.json --clobber
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      # Upload to PyPI only on release or v* tag push. workflow_dispatch is
+      # always a dry-run — operators who want to publish should cut a Release
+      # or push a tag instead.
+      - name: Publish to PyPI
+        if: github.event_name == 'release' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Dry-run summary (workflow_dispatch always skips upload)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "Dry-run: built artifacts in dist/ but skipped PyPI upload."
+          echo "To publish, push a v* tag or cut a GitHub Release."
+          ls -la dist/
 
   # --------------------------------------------------------------------
   # Sub-packages: carl-core, carl-training, etc.
