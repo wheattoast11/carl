@@ -618,8 +618,11 @@ def _resolve_bearer_token() -> str | None:
     """Resolve the carl.camp Supabase bearer token.
 
     Looks at (in order):
-    1. CARL_CAMP_TOKEN env var (explicit override)
-    2. ~/.carl/camp_token (written by `carl camp login`)
+    1. ``CARL_CAMP_TOKEN`` env var (explicit override)
+    2. ``~/.carl/camp_token`` (legacy file path — manual drop)
+    3. ``LocalDB.get_auth("jwt")`` — what ``carl camp login`` actually writes,
+       TTL-gated at 24h by default.
+
     Returns ``None`` when no token is found — callers handle by
     rendering an FYI nudge instead of failing hard.
     """
@@ -633,7 +636,14 @@ def _resolve_bearer_token() -> str | None:
     token_path = Path.home() / ".carl" / "camp_token"
     if token_path.is_file():
         try:
-            return token_path.read_text().strip() or None
+            text = token_path.read_text().strip()
+            if text:
+                return text
         except OSError:
-            return None
-    return None
+            pass
+    try:
+        from carl_studio.db import LocalDB
+
+        return LocalDB().get_auth("jwt")
+    except Exception:
+        return None

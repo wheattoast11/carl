@@ -50,7 +50,11 @@ def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 def _resolve_bearer_token() -> str | None:
-    """Reuse the same resolution order as a2a._cli._resolve_bearer_token."""
+    """Reuse the same resolution order as a2a._cli._resolve_bearer_token.
+
+    Order: ``CARL_CAMP_TOKEN`` env → ``~/.carl/camp_token`` legacy file →
+    ``LocalDB.get_auth("jwt")`` (what ``carl camp login`` writes).
+    """
     explicit = os.environ.get("CARL_CAMP_TOKEN")
     if explicit:
         return explicit
@@ -62,7 +66,12 @@ def _resolve_bearer_token() -> str | None:
                 return text
         except OSError:
             pass
-    return None
+    try:
+        from carl_studio.db import LocalDB
+
+        return LocalDB().get_auth("jwt")
+    except Exception:
+        return None
 
 
 def _http_post_bytes(
