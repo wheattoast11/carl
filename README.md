@@ -263,7 +263,28 @@ Trained with CARL on [OmniCoder-9B](https://huggingface.co/Tesslate/OmniCoder-9B
 
 ---
 
-## What's new (v0.9.0)
+## What's new (v0.18.1 · 2026-04-24)
+
+**Unified entry-point router + sessions + trust + journey coverage matrix.**
+
+- **One `carl` binary, four entry modes.** `carl` (REPL), `carl "<prompt>"`
+  (REPL with first turn), `carl -p "<q>"` (one-shot, trust-bypass), `carl <verb>`
+  (Typer dispatch). Router at `src/carl_studio/cli/entry.py`; contract docs at
+  `docs/v18_journey_coverage.md`.
+- **`carl trust` — bare-entry trust pre-check.** `trust status/acknowledge/enable/disable/reset`
+  with prior-root eviction notice; persisted at `~/.carl/trust.yaml`.
+- **`carl session list/show/delete` — project-aware.** Walks up via
+  `project_context.current` so you can invoke from any subdir of a project.
+- **`carl init --json` probe-only fast-path.** Seven stable probe keys
+  (`first_run_complete`, `camp_session`, `llm_provider_detected`,
+  `training_extras_healthy`, `project_config_present`, `consent_set`,
+  `context_present`). No prompts on piped stdin; contract locked by
+  `tests/journeys/test_journeys_v18.py`.
+- **Journey matrix.** 12 journeys × 4 transitions = 48 transitions, covered by
+  172 passing tests (164 pre-existing + 8 new journey tests). Batch spec for
+  parallel UAT execution at `tests/journeys/BATCHES.md`.
+
+### What's new (v0.9.0) — still applies
 
 **EML symbolic witness — third realizability primitive alongside BITC and DMC.**
 
@@ -321,6 +342,15 @@ Credential setup and provider auth → [docs/auth.md](docs/auth.md)
 ## Changelog
 
 Full history lives in [`CHANGELOG.md`](CHANGELOG.md); the most recent entries:
+
+### v0.18.1 (2026-04-24) — unified entry-point + journey matrix
+
+- Unified router (`cli/entry.py`) picks between REPL / bare-prompt / one-shot (`-p`) / subcommand.
+- `carl trust` — bare-entry trust pre-check registry at `~/.carl/trust.yaml`.
+- `carl session` — project-aware, walks up via `project_context.current`.
+- `carl init --json` — probe-only fast-path with 7 stable keys; never prompts on piped stdin.
+- Journey matrix + BATCHES spec at `tests/journeys/`; 172 tests green on v0.18 surface.
+- Fixture discipline: HOME-pinned tests place the project at `tmp_path/"proj"` (home-guard invariant).
 
 ### v0.7.1 (2026-04-19) — Phase-2b close-out
 

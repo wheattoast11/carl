@@ -4,6 +4,41 @@
 
 ### Added
 
+- **Unified entry-point router + sessions + trust + journey matrix**
+  (v0.18 / v0.18.1, 2026-04-22 → 2026-04-24).
+
+  - `src/carl_studio/cli/entry.py` owns the decision ladder BEFORE Typer
+    dispatch: bare → REPL (+ first-run wizard + trust precheck); `carl
+    "<prompt>"` → REPL with first turn; `carl -p "<q>"` → one-shot
+    `ask_cmd` with trust-precheck **intentionally bypassed**; `carl
+    <verb>` → Typer. Fifty-three registered subcommands in a frozen
+    `REGISTERED_SUBCOMMANDS` snapshot.
+  - `src/carl_studio/cli/trust.py` + `src/carl_studio/trust.py` —
+    bare-entry trust pre-check registry persisted at
+    `~/.carl/trust.yaml`. Commands: `trust status/acknowledge/enable/
+    disable/reset`. `acknowledge` replaces prior root with a
+    visible eviction notice.
+  - `src/carl_studio/cli/session_cmd.py` + `src/carl_studio/cli_session.py`
+    — project-aware session CLI. `_resolve_project_root` walks up via
+    `project_context.current`, so `carl session list` works from any
+    subdir.
+  - `src/carl_studio/project_context.py` — `.carl/` anchor detection
+    with a home-guard: `$HOME` can never be a project root. Test
+    fixtures that pin HOME must place the project at
+    `tmp_path / "proj"`.
+  - `carl init --json` — probe-only fast-path (v0.18.1). Seven stable
+    probe keys: `first_run_complete`, `camp_session`,
+    `llm_provider_detected`, `training_extras_healthy`,
+    `project_config_present`, `consent_set`, `context_present`. Never
+    prompts on piped stdin; contract locked by
+    `tests/journeys/test_journeys_v18.py`.
+  - Journey matrix at `tests/journeys/JOURNEYS.md` — 12 journeys, 48
+    transitions, 172 tests green on the v0.18 surface.
+  - Parallel UAT batch spec at `tests/journeys/BATCHES.md` — 8 offline
+    batches + 6 online batches (online gated on explicit user
+    authorization).
+  - Provenance doc: `docs/v18_journey_coverage.md`.
+
 - **Dependency probe + auto-heal UX** (v0.17.1, 2026-04-22).
   `carl init` no longer dies on sibling-dep metadata corruption (the
   huggingface-hub / transformers `Unable to compare versions ...

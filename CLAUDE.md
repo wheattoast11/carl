@@ -289,10 +289,13 @@ The plan that drove the implementation: `docs/v17_cli_ux_and_dep_probe_plan.md`.
 - `python -m build` works.
 - Single pytest node IDs work from the repo root.
 - Repo-wide Ruff and Pyright currently have pre-existing noise; validate touched files first.
-- Test baseline (post v0.16.1 handle-runtime Stage C complete, 2026-04-21):
+- Test baseline (post v0.18.1 unified-entry-router + journey matrix, 2026-04-24):
   **~3770 tests pass; 16 pre-existing `test_heartbeat.py` fixture-
-  collision errors surface ONLY in full-suite runs.** Running
-  `pytest packages/carl-core/tests/test_heartbeat.py tests/test_heartbeat.py`
+  collision errors surface ONLY in full-suite runs.** v0.18 surface
+  (router + sessions + trust + project-context + init + resonant +
+  parity fixtures): **172 tests green in 1.15s** (164 pre-existing
+  + 8 new journey-coverage tests in `tests/journeys/test_journeys_v18.py`).
+  Running `pytest packages/carl-core/tests/test_heartbeat.py tests/test_heartbeat.py`
   in isolation passes (24/24) — the collision is cross-suite, NOT a
   regression. Full suite ~70s with `--timeout-method=thread`.
   `tests/test_uat_e2e.py` + `tests/test_uat.py` are the UAT suites
@@ -341,13 +344,24 @@ The plan that drove the implementation: `docs/v17_cli_ux_and_dep_probe_plan.md`.
 - Sessions persist at `~/.carl/sessions/` with `schema_version=1`. Knowledge `words` are sets — serialize as sorted lists.
 - Anthropic SDK: >=0.95.0 required for `cache_control` top-level param and streaming.
 
-## CLI routing (as of 2026-04-20, v0.15)
+## CLI routing (as of 2026-04-24, v0.18.1)
+
+Post-v0.18 the router at `cli/entry.py` owns the decision ladder BEFORE
+Typer dispatch. Journey matrix at `tests/journeys/JOURNEYS.md`; batch
+spec at `tests/journeys/BATCHES.md`.
 
 | User invocation | Routes to | Behavior |
 |---|---|---|
-| `carl` (bare) | `cli/chat.py:chat_cmd` via `_default_to_chat` callback | Full CARLAgent loop. |
-| `carl chat` | `cli/chat.py:chat_cmd` | Full CARLAgent loop (same as bare). |
-| `carl "<prompt>"` / `carl ask "<prompt>"` | `cli/chat.py:ask_cmd` → `run_one_shot_agent` | One-shot agent — single Anthropic call with tools. |
+| `carl` (bare, TTY, no `.initialized`) | `cli/init.py:init_cmd` (first-run gate) | One-shot wizard, writes marker, returns. |
+| `carl` (bare, TTY, initialized) | `cli/chat.py:chat_cmd` via router | Trust precheck fires once per untrusted project → REPL. |
+| `carl` (bare, non-TTY) | `cli/apps.py` help | Prints help (piped script path). |
+| `carl "<prompt>"` (TTY) | Trust precheck → `chat_cmd(initial_message=...)` | REPL with first turn pre-submitted. |
+| `carl -p "<q>"` / `--print` | `cli/chat.py:ask_cmd` (trust precheck SKIPPED) | One-shot ask; intentional bypass. |
+| `carl <verb> ...` | Router returns False, Typer dispatches | Normal subcommand. |
+| `carl chat` | `cli/chat.py:chat_cmd` | Full CARLAgent loop. |
+| `carl ask "<prompt>"` | `cli/chat.py:ask_cmd` → `run_one_shot_agent` | One-shot agent — single Anthropic call with tools. |
+| `carl session list/show/delete` | `cli/session_cmd.py` | Project-aware via `project_context.current` walk-up. |
+| `carl trust status/acknowledge/enable/disable/reset` | `cli/trust.py` | Global trust registry at `~/.carl/trust.yaml`. |
 | `carl flow "/a /b /c"` | `cli/flow.py:flow_cmd` → `cli/operations.OPERATIONS` | Chains ops; trace persisted to `~/.carl/interactions/<id>.jsonl`. |
 | `carl init` / `carl camp init` | `cli/init.py:init_cmd` | One-shot wizard. First-run marker `~/.carl/.initialized`. |
 | `carl doctor` | `cli/startup.py:doctor` | Readiness + typed freshness report. |
