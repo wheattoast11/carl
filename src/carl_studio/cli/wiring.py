@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import typer
 
+from . import apps as _apps_mod
 from .apps import app, camp_app, lab_app
 from .lab import (
     admin_app,
@@ -404,8 +405,24 @@ try:
     app.command(name="ask")(ask_cmd)
 
     @app.callback(invoke_without_command=True)
-    def _route_bare_carl(ctx: typer.Context) -> None:  # pyright: ignore[reportUnusedFunction]
-        """Delegate bare ``carl`` invocations to the unified router."""
+    def _route_bare_carl(  # pyright: ignore[reportUnusedFunction]
+        ctx: typer.Context,
+        version: bool = typer.Option(
+            False,
+            "--version",
+            "-V",
+            callback=_apps_mod._version_callback,  # pyright: ignore[reportPrivateUsage]
+            is_eager=True,
+            help="Print carl-studio version and exit.",
+        ),
+    ) -> None:
+        """Delegate bare ``carl`` invocations to the unified router.
+
+        Also attaches the eager ``--version`` / ``-V`` option here because
+        Typer only supports one root callback; see ``apps.py`` for the
+        callback body.
+        """
+        del version  # eager callback handles it; suppress pyright unused
         if ctx.invoked_subcommand is not None:
             return
 

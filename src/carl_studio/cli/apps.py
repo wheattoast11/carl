@@ -31,6 +31,18 @@ app = typer.Typer(
     no_args_is_help=False,  # bare `carl` routing is handled by the entry module
 )
 
+
+def _version_callback(value: bool) -> None:
+    """Eager callback: print version and exit when ``--version`` is passed.
+
+    Wired into the root callback in ``wiring.py`` (not here) because Typer
+    only supports a single ``@app.callback()`` — the wiring-module callback
+    owns bare-``carl`` routing.
+    """
+    if value:
+        typer.echo(f"carl-studio {__version__}")
+        raise typer.Exit()
+
 camp_app = typer.Typer(
     name="camp",
     help="carl.camp account, sync, credits, marketplace, and paid platform surfaces.",

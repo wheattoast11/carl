@@ -6,7 +6,7 @@ zero network calls — pure math + a typed interaction trace primitive.
 """
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from carl_core.constants import KAPPA, SIGMA, DEFECT_THRESHOLD, T_STAR
 from carl_core.coherence_trace import CoherenceTrace, LayeredTrace, select_traces
