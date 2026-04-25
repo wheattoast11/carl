@@ -1,0 +1,14 @@
+{
+  "name": "carl-studio",
+  "version": "0.18.3",
+  "private": true,
+  "terminals": {
+    "concept": "carl",
+    "tier": "platform",
+    "parent": "domain",
+    "scope": "studio",
+    "primitive_signature": [true, true, true, true, true, false, false],
+    "causal": { "progenitor": "tej", "emergent": "genesis" },
+    "version": "0.18.3"
+  }
+}
