@@ -4,6 +4,9 @@
 
 The foundational layer of the CARL stack. Pure coherence math + interaction trace primitive. Every CARL metric is a reduction of the per-token coherence field defined here. Zero network calls, zero training deps.
 
+Currently published: **carl-core 0.1.2** on PyPI (2026-04-25, OIDC trusted
+publisher via `carl-*@*` tag push from the parent repo's workflow).
+
 ## Public API
 
 - `CoherenceTrace`, `select_traces` (from `coherence_trace`)
@@ -35,6 +38,29 @@ The foundational layer of the CARL stack. Pure coherence math + interaction trac
 - `Tier`, `FEATURE_TIERS`, `TierGateError`, `feature_tier`, `tier_allows` (from `tier`)
 - `MemoryItem`, `MemoryLayer`, `MemoryStore` (from `memory`)
 - `InteractionStore` (from `interaction_store`)
+- **v0.9.0 additions** (in `eml`, `resonant`, `heartbeat`,
+  `optimizer_state`, `constitutional`, `signing`):
+  `EMLNode`, `EMLTree`, `eml`, `Resonant`, `compose_resonants` (MAX_DEPTH=4),
+  pure-functional heartbeat loop, durable Adam state, `ConstitutionalLedger`,
+  software-tier HMAC signing helpers (`sign_tree_software`,
+  `verify_software_signature`, etc).
+- **v0.16.1 handle runtime** (in `data_handles`, `resource_handles`):
+  `DataRef`, `DataVault`, `DataKind`, `ResourceRef`, `ResourceVault`.
+  Carl moves refs, not values. Doctrine: parent repo's
+  `docs/v16_handle_runtime.md`.
+
+## Standalone testing
+
+```bash
+# From repo root — runs only carl-core's own tests
+pytest packages/carl-core/tests/ -q --tb=short --timeout-method=thread
+pyright packages/carl-core/src/carl_core/<module>.py
+```
+
+Carl-core's tests live alongside its source (`packages/carl-core/tests/`)
+and are also picked up by the parent repo's full pytest run. Standalone
+runs are useful when iterating on coherence math without paying the
+carl-studio test-suite cost.
 
 ## Dependencies
 

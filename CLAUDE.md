@@ -289,12 +289,15 @@ The plan that drove the implementation: `docs/v17_cli_ux_and_dep_probe_plan.md`.
 - `python -m build` works.
 - Single pytest node IDs work from the repo root.
 - Repo-wide Ruff and Pyright currently have pre-existing noise; validate touched files first.
-- Test baseline (post v0.18.1 unified-entry-router + journey matrix, 2026-04-24):
+- Test baseline (post v0.18.3 PyPI publish + carl --version + bearer fix, 2026-04-25):
   **~3770 tests pass; 16 pre-existing `test_heartbeat.py` fixture-
   collision errors surface ONLY in full-suite runs.** v0.18 surface
   (router + sessions + trust + project-context + init + resonant +
-  parity fixtures): **172 tests green in 1.15s** (164 pre-existing
-  + 8 new journey-coverage tests in `tests/journeys/test_journeys_v18.py`).
+  parity + bearer-resolution + version-flag): **181 tests green in ~1.4s**
+  (164 pre-existing + 8 journey + 6 bearer + 3 version).
+- **Live on PyPI (2026-04-25):** `carl-studio==0.18.3`, `carl-core==0.1.2`.
+  Earlier 0.18.1 / 0.18.2 are install-broken (carl-core 404 at install
+  time); yank candidates.
   Running `pytest packages/carl-core/tests/test_heartbeat.py tests/test_heartbeat.py`
   in isolation passes (24/24) — the collision is cross-suite, NOT a
   regression. Full suite ~70s with `--timeout-method=thread`.
@@ -379,11 +382,14 @@ spec at `tests/journeys/BATCHES.md`.
 | `carl resonant publish <name>` | `cli/resonant.py:publish_cmd` | **v0.9.1.** POST signed envelope to `{CARL_CAMP_BASE}/api/resonants` per `docs/eml_signing_protocol.md` §5.1. Headers: `X-Carl-User-Secret` (b64), `X-Carl-Projection`, `X-Carl-Readout`. Refuses non-HTTPS unless `--dry-run`. |
 | `carl lab repl` | `cli/lab.py:chat_repl` | Simple REPL, no tool use (legacy). |
 | `carl lab curriculum` / `carl lab carlito` | `cli/lab.py` | Canonical paths (not top-level). |
+| `carl --version` / `carl -V` | `cli/wiring.py` root callback (eager) | **v0.18.3.** Prints `carl-studio <semver>` and exits 0. |
 
 - `carl lab chat` no longer exists — renamed to `carl lab repl`.
 - `settings.py` defaults: `default_model=""`, `naming_prefix=""` — user must configure.
 - CLI `wiring.py` stubs print install hints when extras are missing (not silent `pass`).
-- Bearer token for `carl agent register/publish`: `CARL_CAMP_TOKEN` env var OR `~/.carl/camp_token` file; absent → local-only + FYI nudge.
+- Bearer token resolution order (post-v0.18.3): `CARL_CAMP_TOKEN` env →
+  `~/.carl/camp_token` (legacy file) → `LocalDB.get_auth("jwt")` (what
+  `carl camp login` actually writes; 24h TTL). Absent → local-only + FYI nudge.
 
 ## Documentation header convention (as of 2026-04-20 · v0.8.0)
 
@@ -694,3 +700,32 @@ reward composition, policy features, and hardware-attested head fitting.
 - Do NOT copy BSL-licensed terminals-runtime methodology into MIT carl-studio.
   The admin-gate + lazy-import pattern (`admin.py`, `coherence_observer.py`)
   is the canonical integration seam — extend it, don't bypass it.
+- **Release flow.** Bump `pyproject.toml` + `src/carl_studio/__init__.py`
+  together; run `uv lock` (regenerates lockfile or workflow's
+  `uv lock --check` will fail). Push commit, then push tag. Workflow
+  triggers on `v*` (root) and `carl-*@*` (subpackage) tag push, OIDC
+  trusted publisher.
+- **Subpackage tags ALWAYS go before parent tags.** Pushing
+  `carl-core@x.y.z` and `v0.X.Y` in parallel will publish carl-studio
+  even if carl-core fails — leaving an install-broken release on PyPI.
+  Push carl-core tag, wait for `gh run watch` to confirm PyPI upload,
+  then push the carl-studio tag.
+- **Pending publisher must exist before first publish of any new PyPI
+  project.** PyPI rejects trusted-publisher uploads for projects that
+  don't exist yet ("Non-user identities cannot create new projects").
+  Set up at <https://pypi.org/manage/account/publishing/>: project
+  name, owner=`wheattoast11`, repo=`carl`, workflow=`publish.yml`,
+  environment=Any. One-time per package.
+- **Fresh-venv smoke test is a release prerequisite.** Local editable
+  install hides PyPI dependency-resolution failures (every
+  `from carl_core import ...` works locally even if carl-core is 404
+  on PyPI). Run `python -m venv /tmp/smoke && source .../activate &&
+  pip install carl-studio==<just-shipped> && carl --version` before
+  declaring a release shipped.
+- **`carl.yaml` is gitignored** (post-v0.18.1). Project-local training
+  config commonly grows secrets; gitignore prevents leak. Read by
+  `CARLSettings.load()` layering still works. Put user-scoped secrets
+  in `~/.carl/config.yaml` (mode 0600) instead.
+- **uv workspace excludes `packages/emlt-codec-ts`** (TypeScript
+  sibling, no `pyproject.toml`). Don't drop the exclude or `uv lock`
+  fails.
