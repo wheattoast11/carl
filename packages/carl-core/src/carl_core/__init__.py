@@ -8,7 +8,7 @@ from __future__ import annotations
 
 __version__ = "0.1.2"
 
-from carl_core.constants import KAPPA, SIGMA, DEFECT_THRESHOLD, T_STAR
+from carl_core.constants import KAPPA, PHI, SIGMA, DEFECT_THRESHOLD, T_STAR
 from carl_core.coherence_trace import CoherenceTrace, LayeredTrace, select_traces
 from carl_core.coherence_probe import (
     CARL_LAYER_PROBE_ENABLED,
@@ -88,6 +88,15 @@ from carl_core.optimizer_state import (
     AdamMoments,
     OptimizerStateStore,
 )
+from carl_core.forecast import CoherenceForecast, ForecastMethod
+from carl_core.substrate import SubstrateChannel, SubstrateState
+from carl_core.anticipatory import (
+    AnticipatoryGate,
+    AnticipatoryPredicate,
+    GateResult,
+)
+from carl_core.forecast_fractal import FractalForecast, phi_scale_bands
+from carl_core.realizability import realizability_chain, realizability_gap
 from carl_core.connection import (
     VALID_TRANSITIONS,
     AsyncBaseConnection,
@@ -225,9 +234,23 @@ __all__ = [
     "run_heartbeat",
     "detect_resonant_modes",
     "initial_state",
+    "KAPPA",
+    "PHI",
     # Optimizer state — durable Adam (m, v)
     "DEFAULT_OPT_STATE_DIR",
     "AdamMoments",
     "OptimizerStateStore",
+    # v0.19 anticipatory coherence trinity
+    "CoherenceForecast",
+    "ForecastMethod",
+    "SubstrateChannel",
+    "SubstrateState",
+    "AnticipatoryGate",
+    "AnticipatoryPredicate",
+    "GateResult",
+    "FractalForecast",
+    "phi_scale_bands",
+    "realizability_chain",
+    "realizability_gap",
     "__version__",
 ]

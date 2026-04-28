@@ -11,9 +11,19 @@ conservation law governing information organization in attention-coupled systems
 
 from __future__ import annotations
 
+import math
+
 KAPPA = 64 / 3          # = 21.333... -- conservation constant (2^6 / 3)
 SIGMA = 3 / 16          # = 0.1875    -- semantic quantum
 DEFECT_THRESHOLD = 0.03  # minimum |delta_phi| for discontinuity detection
+
+# Golden ratio -- canonical anti-resonant scale base for v0.19 fractal forecasting.
+# KAM theorem (Arnold 1963, Moser 1962): the most-Diophantine number is the most
+# stable winding ratio under perturbation. Continued-fraction expansion is
+# [1;1,1,1,...], minimizing the constants in the Diophantine condition. This
+# makes PHI the uniquely optimal base for multi-scale anti-resonant decomposition.
+# See docs/v19_anticipatory_coherence_design.md sections 2.5 / 9.
+PHI = (1.0 + math.sqrt(5.0)) / 2.0  # = 1.6180339887...
 
 
 def T_STAR(d: int) -> int:
