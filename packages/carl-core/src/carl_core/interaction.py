@@ -32,12 +32,13 @@ same process.
 from __future__ import annotations
 
 import json
+import logging as _forwarder_logging
 import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any
+from typing import Any, Callable as _ForwarderCallable
 
 
 class ActionType(str, Enum):
@@ -395,6 +396,7 @@ class InteractionChain:
             probe_call=probe_call,
         )
         self.steps.append(step)
+        _emit_to_forwarder(step)
         return step
 
     # -- query -------------------------------------------------------------
@@ -487,6 +489,7 @@ __all__ = [
     "Step",
     "InteractionChain",
     "verify_step_content_hash",
+    "set_global_forwarder",
 ]
 
 
@@ -600,3 +603,46 @@ def _json_safe(value: Any) -> Any:
         except Exception:
             pass
     return _scrub_secrets(repr(value))
+
+
+# ============================================================
+# Global forwarder seam (v0.10) — registers a side-channel that
+# receives every Step appended via InteractionChain.record(...).
+# Used by carl_studio.telemetry.axon to push telemetry over HTTP.
+# carl_core stays HTTP-free; the registration inverts the dep.
+# ============================================================
+
+_forwarder_logger = _forwarder_logging.getLogger(__name__)
+_GLOBAL_FORWARDER: _ForwarderCallable[[Step], None] | None = None
+
+
+def set_global_forwarder(fn: _ForwarderCallable[[Step], None] | None) -> None:
+    """Register a callback that receives every Step appended via record().
+
+    Pass ``None`` to clear. Errors raised by the forwarder are swallowed
+    and logged at WARNING level — the forwarder must never disrupt the
+    durability of the InteractionChain itself.
+
+    Thread-safety: the global is read by ``record()`` without a lock,
+    which is fine for atomic pointer assignment in CPython. Callers
+    that need ordered registration should serialize themselves.
+
+    The forwarder receives only the ``Step`` itself — for chain-level
+    correlation, use ``Step.session_id`` / ``Step.trace_id`` (set at
+    record-time by the caller) or use ``Step.step_id`` (always unique,
+    12 hex chars). carl_studio.telemetry.axon uses ``step_id`` as the
+    idempotency-key seed so retries are safe.
+    """
+    global _GLOBAL_FORWARDER
+    _GLOBAL_FORWARDER = fn  # pyright: ignore[reportConstantRedefinition]
+
+
+def _emit_to_forwarder(step: Step) -> None:
+    """Internal — invoked by InteractionChain.record after step append."""
+    fn = _GLOBAL_FORWARDER
+    if fn is None:
+        return
+    try:
+        fn(step)
+    except Exception:
+        _forwarder_logger.exception("global forwarder failed; continuing")

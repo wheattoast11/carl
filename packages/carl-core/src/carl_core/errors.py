@@ -82,6 +82,137 @@ class CARLTimeoutError(CARLError):
     code = "carl.timeout"
 
 
+# v0.10 remote entitlements (carl.camp signed-JWT tier verification) ---------
+#
+# These error codes form the failure taxonomy for the studio-side
+# ``EntitlementsClient`` that fetches the Ed25519-signed JWT from
+# ``carl.camp``'s ``GET /api/platform/entitlements`` route, verifies the
+# signature against ``/.well-known/carl-camp-jwks.json``, and caches the
+# result locally with 15-min TTL plus a 24h offline-grace window. See
+# ``src/carl_studio/entitlements.py`` and ``docs/v10_remote_entitlements_spec.md``.
+
+
+class RemoteEntitlementError(CARLError):
+    """Local tier check passed PAID but remote ed25519-verified JWT says FREE
+    (or a feature is not in the entitlements list). Caller should deny the
+    requested action.
+
+    Code: ``carl.gate.tier_remote_mismatch``
+    """
+
+    code = "carl.gate.tier_remote_mismatch"
+
+
+class EntitlementsNetworkError(NetworkError):
+    """The carl.camp ``/api/platform/entitlements`` endpoint was unreachable.
+    Caller should fall back to offline-grace cache or deny.
+
+    Code: ``carl.entitlements.network_unavailable``
+    """
+
+    code = "carl.entitlements.network_unavailable"
+
+
+class EntitlementsSignatureError(ValidationError):
+    """JWT signature verification failed. Either tampered token, wrong kid,
+    or our JWKS cache is stale and the signing kid is unknown.
+
+    Code: ``carl.entitlements.signature_invalid``
+    """
+
+    code = "carl.entitlements.signature_invalid"
+
+
+class EntitlementsCacheError(ValidationError):
+    """Local cache file at ``~/.carl/entitlements_cache.json`` is corrupted
+    or structurally invalid. Treated as a cache miss (caller refetches).
+
+    Code: ``carl.entitlements.cache_corrupt``
+    """
+
+    code = "carl.entitlements.cache_corrupt"
+
+
+class JWKSStaleError(NetworkError):
+    """JWKS cache fetch failed AND the locally-cached JWKS does not contain
+    the kid referenced by the JWT we're verifying. Distinct from
+    :class:`EntitlementsNetworkError` because the JWT itself is fresh; only
+    the pubkey lookup is stale.
+
+    Code: ``carl.entitlements.jwks_stale``
+    """
+
+    code = "carl.entitlements.jwks_stale"
+
+
+# v0.10 managed slime training (carl.camp /api/train/slime/submit) ----------
+#
+# Failure taxonomy for the studio-side ``SlimeSubmitClient`` that posts
+# translated ``SlimeArgs`` payloads to carl.camp's managed dispatcher.
+# See ``src/carl_studio/adapters/slime_submit.py``.
+
+
+class SlimeHfTokenLeakError(ValidationError):
+    """User HF token detected in a managed slime payload.
+
+    The managed slime path uses ``CARL_CAMP_HF_TOKEN`` exclusively; user
+    HF tokens must NEVER appear in payloads sent to
+    ``/api/train/slime/submit``. This error is raised by the studio-side
+    :func:`assert_no_user_hf_token_leak` defence-in-depth guard before
+    any network round-trip — carl.camp's dispatcher enforces the same
+    invariant server-side, so a misconfigured payload fails fast either way.
+
+    Code: ``carl.slime.hf_token_leak``
+    """
+
+    code = "carl.slime.hf_token_leak"
+
+
+class SlimeManagedSubmitFailedError(NetworkError):
+    """The carl.camp ``/api/train/slime/submit`` call failed.
+
+    Covers transport errors, non-2xx responses, missing bearer token,
+    and malformed responses. The submitted payload itself is unaffected
+    — caller may retry once the underlying issue is resolved.
+
+    Code: ``carl.slime.managed_submit_failed``
+    """
+
+    code = "carl.slime.managed_submit_failed"
+
+
+class SlimeRunNotFoundError(CARLError):
+    """The requested ``slime_run_id`` was not found.
+
+    Either the id never existed or it was created under a different org.
+    The studio side returns 404 on ``GET /api/train/slime/<run_id>``.
+
+    Code: ``carl.slime.run_not_found``
+    """
+
+    code = "carl.slime.run_not_found"
+
+
+# v0.10 constitutional ledger forwarding (Phase H-S4a) ----------------------
+#
+# Failure taxonomy for the studio-side ``ConstitutionalForwarder`` that
+# POSTs signed ``LedgerBlock`` instances to carl.camp's hardened
+# ``/api/ledger/append`` route. See ``src/carl_studio/fsm_ledger_forward.py``.
+
+
+class ConstitutionalForwardFailedError(NetworkError):
+    """The carl.camp ``/api/ledger/append`` POST failed.
+
+    Local persistence at ``~/.carl/constitutional_ledger.jsonl``
+    still succeeded — :meth:`ConstitutionalForwarder.replay_pending`
+    can retry once the underlying transport / auth issue clears.
+
+    Code: ``carl.constitutional.forward_failed``
+    """
+
+    code = "carl.constitutional.forward_failed"
+
+
 _SENSITIVE_TOKENS = ("key", "token", "secret", "password", "authorization", "bearer")
 
 
@@ -112,4 +243,13 @@ __all__ = [
     "BudgetError",
     "PermissionError",
     "CARLTimeoutError",
+    "RemoteEntitlementError",
+    "EntitlementsNetworkError",
+    "EntitlementsSignatureError",
+    "EntitlementsCacheError",
+    "JWKSStaleError",
+    "SlimeHfTokenLeakError",
+    "SlimeManagedSubmitFailedError",
+    "SlimeRunNotFoundError",
+    "ConstitutionalForwardFailedError",
 ]

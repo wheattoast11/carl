@@ -540,6 +540,33 @@ def train(
         "--gate-mode",
         help="Cascade gate mode: metric | crystallization",
     ),
+    managed: bool = typer.Option(
+        False,
+        "--managed",
+        help=(
+            "Submit to carl.camp managed slime training (PAID tier). "
+            "Routes through SlimeSubmitClient instead of the local "
+            "SlimeAdapter. Cross-system invariant: payload MUST NOT "
+            "carry the user's HF token — managed runs use "
+            "CARL_CAMP_HF_TOKEN exclusively."
+        ),
+    ),
+    wait: bool = typer.Option(
+        False,
+        "--wait",
+        help=(
+            "When used with --managed, block until the run reaches a "
+            "terminal state. Default polls every 5s, 24h cap."
+        ),
+    ),
+    idempotency_key: str | None = typer.Option(
+        None,
+        "--idempotency-key",
+        help=(
+            "When used with --managed, pass an Idempotency-Key header "
+            "so safe retries don't double-submit the same payload."
+        ),
+    ),
 ) -> None:
     """Start a CARL training run. Use --send-it for full autonomous pipeline."""
     # v0.18 Track B: training mints artifacts — require a project context.
@@ -585,6 +612,18 @@ def train(
     # carl.yaml files conflated compute + adapter on this key, so fall through
     # to "trl" when `backend` holds a compute-substrate name like "hf_jobs").
     backend_name = _resolve_adapter_name(cli_override=backend, raw=raw)
+
+    # --managed: route to carl.camp's POST /api/train/slime/submit instead
+    # of the local SlimeAdapter. Requires PAID tier and the slime backend.
+    if managed:
+        _maybe_dispatch_managed_slime(
+            backend_name=backend_name,
+            raw=raw,
+            dry_run=dry_run,
+            wait=wait,
+            idempotency_key=idempotency_key,
+        )
+
     _maybe_dispatch_backend(
         backend_name=backend_name,
         raw=raw,
@@ -1032,6 +1071,201 @@ def _backend_install_hint(name: str) -> str:
         "tinker": "pip install tinker  (see https://thinkingmachines.ai/tinker)",
         "atropos": "pip install atropos",
     }.get(name, f"install the {name} backend")
+
+
+# ---------------------------------------------------------------------------
+# Managed slime dispatch (carl train --managed)
+# ---------------------------------------------------------------------------
+
+
+def _maybe_dispatch_managed_slime(
+    *,
+    backend_name: str,
+    raw: dict[str, Any],
+    dry_run: bool,
+    wait: bool,
+    idempotency_key: str | None,
+) -> None:
+    """Route ``carl train --managed`` to carl.camp's POST /api/train/slime/submit.
+
+    Pre-flight:
+      * ``backend`` must resolve to ``slime`` — managed orchestration is
+        slime-only at v0.10.
+      * Effective tier must be PAID (managed compute is metered).
+      * Translated payload must NOT carry the user's HF token —
+        ``assert_no_user_hf_token_leak`` runs server-side AND here as
+        defence in depth (cross-system invariant, 2026-04-21).
+
+    On dry-run, prints the translated payload without sending. On wire
+    success, prints the run handle (and polls when ``--wait``).
+    """
+    c = get_console()
+
+    if backend_name != "slime":
+        c.error(
+            f"--managed requires --backend slime (or `backend: slime` in carl.yaml); "
+            f"got {backend_name!r}"
+        )
+        c.info("Managed orchestration is slime-only at v0.10.")
+        raise typer.Exit(2)
+
+    # PAID-tier check. Mirrors the --send-it pattern at line ~649: local
+    # check_tier read is the fast path; the carl.camp side enforces the
+    # final entitlement when the submit lands.
+    from carl_studio.tier import check_tier, tier_message
+
+    allowed, _, _ = check_tier("train.slime.managed")
+    if not allowed:
+        c.error_with_hint(
+            tier_message("train.slime.managed")
+            or "--managed requires CARL Paid (train.slime.managed).",
+            hint="Upgrade with: carl camp upgrade",
+            signup_url="https://carl.camp/pricing",
+            code="tier:train.slime.managed",
+        )
+        raise typer.Exit(1)
+
+    # Translate the carl.yaml dict into a SlimeArgs payload via the
+    # canonical translator so the wire shape matches carl.camp's
+    # /api/train/slime/submit zod schema (single source of truth).
+    try:
+        from carl_studio.adapters.slime_translator import (
+            SlimeArgs,
+            translate_config,
+        )
+    except ImportError as exc:
+        _render_extra_install_hint(c, "training", "Slime support is not installed.", exc)
+        raise typer.Exit(1)
+
+    raw_normalized = _normalize_training_config(raw)
+    try:
+        slime_args: SlimeArgs = translate_config(raw_normalized)
+    except Exception as exc:
+        from carl_core.errors import CARLError
+
+        if isinstance(exc, CARLError):
+            c.error(f"{exc.code}: {exc}")
+            raise typer.Exit(1)
+        raise
+
+    from carl_studio.adapters.slime_submit import (
+        SlimeSubmitClient,
+        assert_no_user_hf_token_leak,
+    )
+    from carl_core.errors import (
+        SlimeHfTokenLeakError,
+        SlimeManagedSubmitFailedError,
+        SlimeRunNotFoundError,
+    )
+
+    # Defence-in-depth pre-flight: refuse to send a payload carrying the
+    # user's HF token. carl.camp also enforces this, but a misconfigured
+    # payload should fail fast (no wire round-trip, no cost).
+    try:
+        assert_no_user_hf_token_leak(slime_args)
+    except SlimeHfTokenLeakError as exc:
+        c.error(f"{exc.code}: {exc}")
+        c.info(
+            "Managed slime runs MUST use carl.camp's HF token "
+            "(CARL_CAMP_HF_TOKEN). Remove any hf_token / huggingface_token "
+            "field from carl.yaml."
+        )
+        raise typer.Exit(1)
+
+    if dry_run:
+        c.banner(f"v{__version__}")
+        c.config_block(
+            [
+                ("Backend", "slime"),
+                ("Mode", "managed (carl.camp)"),
+                ("Model", str(raw_normalized.get("base_model", "-"))),
+                ("Dataset", str(raw_normalized.get("dataset_repo", "-"))),
+                ("Method", str(raw_normalized.get("method", "-"))),
+                ("Idempotency-Key", idempotency_key or "(none)"),
+                ("Wait", "yes" if wait else "no"),
+            ],
+            title="Managed Slime Submit -- Dry Run",
+        )
+        c.blank()
+        c.info("Translated SlimeArgs payload (preview):")
+        from rich.syntax import Syntax
+
+        c.print(Syntax(json.dumps(slime_args.to_dict(), indent=2), "json", theme="monokai"))
+        c.blank()
+        raise typer.Exit(0)
+
+    client = SlimeSubmitClient()
+    try:
+        handle = client.submit(slime_args, idempotency_key=idempotency_key)
+    except SlimeHfTokenLeakError as exc:
+        c.error(f"{exc.code}: {exc}")
+        raise typer.Exit(1)
+    except SlimeManagedSubmitFailedError as exc:
+        c.error(f"{exc.code}: {exc}")
+        raise typer.Exit(1)
+
+    c.banner(f"v{__version__}")
+    c.ok(f"Managed slime run submitted: {handle.run_id}")
+    c.kv("Status URL", handle.status_url)
+    if handle.hf_job_id:
+        c.kv("HF Job", handle.hf_job_id)
+    if handle.estimated_cost_micros:
+        c.kv("Est. cost (μ)", str(handle.estimated_cost_micros))
+
+    if not wait:
+        c.info(f"Poll: carl run status {handle.run_id}")
+        raise typer.Exit(0)
+
+    c.info("Waiting for terminal state (interval=5s, timeout=24h)...")
+    try:
+        final = client.poll_until_done(handle.run_id)
+    except SlimeRunNotFoundError as exc:
+        c.error(f"{exc.code}: {exc}")
+        raise typer.Exit(1)
+    except SlimeManagedSubmitFailedError as exc:
+        c.error(f"{exc.code}: {exc}")
+        raise typer.Exit(1)
+
+    c.kv("Final status", final.status)
+    if final.cost_micros:
+        c.kv("Cost (μ)", str(final.cost_micros))
+    if final.gpu_hours:
+        c.kv("GPU hours", f"{final.gpu_hours:.2f}")
+    if final.resonant_id:
+        c.kv("Resonant", final.resonant_id)
+    if final.error_code:
+        c.kv("Error", final.error_code)
+    raise typer.Exit(0 if final.status == "succeeded" else 1)
+
+
+@app.command(name="slime-schema")
+def slime_schema_cmd(
+    pretty: bool = typer.Option(
+        False,
+        "--pretty",
+        help="Print indented JSON instead of one-line compact JSON",
+    ),
+) -> None:
+    """Print SlimeArgs JSON Schema for carl.camp's server-side validation.
+
+    The schema is the single source of truth shared between carl-studio's
+    ``SlimeArgs`` Pydantic model and carl.camp's
+    ``/api/train/slime/submit`` zod validator. Pipe this through
+    ``json2ts`` (or carl.camp's regenerator) when ``SlimeArgs`` evolves.
+    """
+    try:
+        from carl_studio.adapters.slime_translator import SlimeArgs
+    except ImportError as exc:
+        _render_extra_install_hint(
+            get_console(), "training", "Slime support is not installed.", exc
+        )
+        raise typer.Exit(1)
+
+    schema = SlimeArgs.json_schema()
+    if pretty:
+        typer.echo(json.dumps(schema, indent=2, sort_keys=True))
+    else:
+        typer.echo(json.dumps(schema, sort_keys=True))
 
 
 # ---------------------------------------------------------------------------

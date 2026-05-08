@@ -38,6 +38,24 @@ resonant_app = typer.Typer(
 _REDACTED = "<redacted>"
 
 
+def _is_uuid(value: str) -> bool:
+    """Return True iff ``value`` parses as a UUID (any RFC 4122 version).
+
+    carl.camp's resonants route validates ``X-Carl-Slime-Run-Id`` as
+    UUID v4 server-side; we keep the studio-side check version-agnostic
+    so legitimate UUIDv7 / v8 ids don't get blocked at the CLI boundary
+    in case the contract relaxes later. Either way malformed strings
+    fail fast here instead of round-tripping for a 422.
+    """
+    import uuid
+
+    try:
+        uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError):
+        return False
+    return True
+
+
 def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
     """Return a copy of headers with secret-shaped fields redacted."""
     out: dict[str, str] = {}
@@ -260,6 +278,15 @@ def publish_cmd(
     domain: str | None = typer.Option(
         None, "--domain", help="Optional domain tag for discovery (e.g. 'audio')"
     ),
+    slime_run_id: str | None = typer.Option(
+        None,
+        "--slime-run-id",
+        help=(
+            "UUID of the managed-slime run that produced this Resonant. "
+            "Sent as the X-Carl-Slime-Run-Id header so carl.camp can populate "
+            "slime_runs.resonant_id for the linkage. (F-S3a contract.)"
+        ),
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Build the request but do not send it"
     ),
@@ -330,6 +357,17 @@ def publish_cmd(
     }
     if domain:
         headers["X-Carl-Domain"] = domain
+    if slime_run_id:
+        # Validate UUID v4 shape locally so we don't ship a malformed
+        # value across the wire — carl.camp's resonants route validates
+        # this header strictly and rejects non-UUIDs with 422.
+        if not _is_uuid(slime_run_id):
+            typer.echo(
+                f"--slime-run-id must be a UUID, got {slime_run_id!r}",
+                err=True,
+            )
+            raise typer.Exit(2)
+        headers["X-Carl-Slime-Run-Id"] = slime_run_id
 
     bearer = _resolve_bearer_token()
     if bearer:

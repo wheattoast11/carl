@@ -347,7 +347,7 @@ The plan that drove the implementation: `docs/v17_cli_ux_and_dep_probe_plan.md`.
 - Sessions persist at `~/.carl/sessions/` with `schema_version=1`. Knowledge `words` are sets — serialize as sorted lists.
 - Anthropic SDK: >=0.95.0 required for `cache_control` top-level param and streaming.
 
-## CLI routing (as of 2026-04-24, v0.18.1)
+## CLI routing (as of 2026-05-08, v0.10-parity)
 
 Post-v0.18 the router at `cli/entry.py` owns the decision ladder BEFORE
 Typer dispatch. Journey matrix at `tests/journeys/JOURNEYS.md`; batch
@@ -383,6 +383,9 @@ spec at `tests/journeys/BATCHES.md`.
 | `carl lab repl` | `cli/lab.py:chat_repl` | Simple REPL, no tool use (legacy). |
 | `carl lab curriculum` / `carl lab carlito` | `cli/lab.py` | Canonical paths (not top-level). |
 | `carl --version` / `carl -V` | `cli/wiring.py` root callback (eager) | **v0.18.3.** Prints `carl-studio <semver>` and exits 0. |
+| `carl entitlements show` | `cli/entitlements_cmd.py:show_cmd` | **v0.10.** Print cached v0.10 entitlements + age + key_id. Flags: `--json --refresh`. |
+| `carl train --managed` | `cli/training.py:train_cmd` | **v0.10.** Submit slime training to carl.camp managed compute via `SlimeSubmitClient`. Gated by `@tier_gate(PAID, feature="train.slime.managed", verify_remote=True)`. |
+| `carl slime-schema` | `cli/training.py:slime_schema_cmd` | **v0.17.** Print `SlimeArgs.model_json_schema()` JSON for carl.camp's server-side validator regen. |
 
 - `carl lab chat` no longer exists — renamed to `carl lab repl`.
 - `settings.py` defaults: `default_model=""`, `naming_prefix=""` — user must configure.
@@ -442,6 +445,20 @@ All items in this arc are live on `main`. See `CHANGELOG.md` for details.
   / `ToolPermission` canonical enums; `carl env` expanded to 7 questions.
 - **v0.15.0** — chat_agent tool-loop body collapsed onto `execute_block`
   (~100 LOC → ~40 LOC). Anti-Deferral Protocol ledger closed.
+- **v0.10-parity** (2026-05-08, branch `feat/v10-parity`) — closes four
+  long-deferred carl.camp parity items in one phased deliverable: (1)
+  v0.10 signed remote entitlements (Ed25519 JWT + JWKS + studio
+  `EntitlementsClient` + `tier_gate(verify_remote=True)`), (2) AXON
+  event ingestion (`/api/axon/ingest` + cron rollup + studio
+  `AxonForwarder` + 5-signal taxonomy), (3) managed slime training
+  (`/api/train/slime/submit` + `SlimeSubmitClient` + `--managed`
+  flag + `assert_no_user_hf_token_leak` invariant guard), (4)
+  Stripe Billing Meters activation (`recordGpuHours` → `tryPublishMeterEvent`
+  + drift detection cron + 2 webhook events). Plus: carl.camp
+  vitest scaffold, migration-linter CI, constitutional ledger
+  forwarder, zero-rl-pipeline gate.py refresh, resonance-boundary
+  reaffirmation. See `/Users/terminals/.claude/plans/put-together-a-plan-sleepy-crystal.md`
+  for the full plan + verification.
 
 `docs/v10_master_plan.md` remains the historical Fano-consensus record.
 `docs/v10_agent_card_supabase_spec.md` is implementation-complete.
@@ -506,43 +523,56 @@ is now authoritative. Notable design records:
 + carl.camp agent handoff; every item here has a named owner in the
 next planning window):
 
-**v0.16 (slime artifact emission + schema sharing):**
-- `SlimeRolloutBridge.finalize_resonant() -> Resonant` — snapshot the
-  trained `EMLTree` (`reward_class="eml"` case) into a `Resonant` via
-  `carl_core.resonant` + `docs/eml_signing_protocol.md`. Publishes
-  through the **existing** `carl resonant publish` (v0.9.1) →
-  carl.camp `POST /api/resonants`. **No new carl.camp endpoint
-  required** — confirmed by carl.camp agent 2026-04-21; metadata JSONB
-  absorbs slime provenance without migration.
-- Export `SlimeArgs.model_json_schema()` for carl.camp's
-  `/api/train/slime/submit` server-side validation. Reuse
-  `translate_config()` end-to-end; `AdapterError` codes
-  (`carl.adapter.translation`, `carl.adapter.missing_required`,
-  `carl.adapter.unavailable`) map cleanly to HTTP 400.
-- AXON-isomorphic event emission from carl-studio via HTTP to
-  carl.camp. Step shapes already align; needs the HTTP forwarder.
+**v0.16 (slime artifact emission + schema sharing) — SHIPPED 2026-05-08
+on `feat/v10-parity`:**
+- ✅ `SlimeRolloutBridge.finalize_resonant(slime_run_id=...)` — snapshots
+  the trained `EMLTree` and propagates `slime_run_id` via
+  `X-Carl-Slime-Run-Id` header on `carl resonant publish`. The header
+  (NOT `metadata.slime_run_id` — the resonants route is
+  application/octet-stream, not JSON) is the linkage channel; carl.camp
+  validates UUID-v4 shape and writes `slime_runs.resonant_id`.
+- ✅ Export `SlimeArgs.model_json_schema()` via `carl slime-schema`.
+  carl.camp's `src/lib/slime-args-schema.ts` is the zod mirror; regen
+  procedure documented in `docs/api-reference.md` (regen via
+  `carl slime-schema | jq`).
+- ✅ AXON HTTP forwarder: `src/carl_studio/telemetry/axon.py`
+  (`AxonForwarder` + thread-bound queue + daemon flush) registered via
+  the new `carl_core.set_global_forwarder` seam. Default-OFF; honors
+  `consent.telemetry` + `AXON_FORWARD_DISABLED` env. POST to
+  `/api/axon/ingest` (carl.camp side: `axon_events` table via mig 043,
+  `signal_type` CHECK list pinned to `src/lib/axon-signal-types.ts`).
 
 **v0.17 (policy-head compile + input schema):**
 - py2bend compilation of the **policy head** (not the reward head —
   that's covered in v0.16 via composition). BUSL-gated via `admin.py`,
   separate wheel, lazy-imported. See HVM mental-model section below.
-- `SlimeConfig` input-shape Pydantic model (sibling to `SlimeArgs`,
-  captures the `slime:` block in `carl.yaml`). Enables OpenAPI client
-  generation for third-party tooling.
-- Substrate presence probe lazy-import seam.
+  **Still deferred** — out of scope for v0.10-parity arc.
+- ✅ `SlimeArgs.model_json_schema()` published via `carl slime-schema`
+  (Phase F-S3a). The original `SlimeConfig` sibling for the
+  `carl.yaml`-shape can compose on top later; the JSON-schema export
+  unblocks the OpenAPI client generation use case named here.
+- Substrate presence probe lazy-import seam — **still deferred**.
 
-**v0.10 remote-tier verification (carl.camp signed entitlements):**
-- Decorator-level `@tier_gate(Tier.PAID, feature="...",
-  verify_remote=True)` — **NOT** detector-level (would break
-  offline/fast-path UX on every `carl train --dry-run`).
-  Local SQLite read stays the default fast path; remote verify fires
-  in the background after local passes. JWT + ed25519 (pynacl already
-  in `[constitutional]` extra). 15-min cache at
-  `~/.carl/entitlements_cache.json`. New error code
-  `carl.gate.tier_remote_mismatch`. 24h offline-grace fallback so
-  carl.camp outages don't create hard-denials.
-- Deliverable: **`docs/v10_remote_entitlements_spec.md`** stub
-  before implementation — owner: next-session agent_2.
+**v0.10 remote-tier verification (carl.camp signed entitlements) —
+SHIPPED 2026-05-08 on `feat/v10-parity`:**
+- ✅ Decorator-level `@tier_gate(Tier.PAID, feature="...",
+  verify_remote=True)` — local-fast-path-then-async-verify ladder.
+  Local check first; on allow, async background verify; on deny + paid
+  feature, consult cache (24h offline-grace), allow with
+  `tier_remote_grace` event step on cache hit, hard-deny otherwise.
+- ✅ JWT + ed25519 issuer at carl.camp (`/api/platform/entitlements`,
+  signed by Vault-stored private key, JWKS at
+  `/.well-known/carl-camp-jwks.json`). 15-min cache at
+  `~/.carl/entitlements_cache.json`. JWKS pin-on-first-use rejects
+  silent kid swaps; additive rotation accepted.
+- ✅ 5 new error codes: `carl.gate.tier_remote_mismatch` plus
+  `carl.entitlements.{network_unavailable,signature_invalid,
+  cache_corrupt,jwks_stale}`.
+- ✅ 24h offline-grace fallback. carl.camp outages do not create
+  hard-denials within the grace window.
+- ✅ Spec rewritten at `docs/v10_remote_entitlements_spec.md` with
+  the implementation map (file paths, function signatures, error
+  codes, runbooks).
 
 **Locked scope decisions (do not re-litigate):**
 - `train.slime.managed` tier key covers BOTH paths: (a) carl.camp-

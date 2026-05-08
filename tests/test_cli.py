@@ -409,6 +409,146 @@ def test_doctor_verdict_pure_helper():
     )
 
 
+# ---------------------------------------------------------------------------
+# S1c — `carl entitlements show` + `carl doctor` entitlements block
+# ---------------------------------------------------------------------------
+
+
+def _isolate_carl_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Pin all per-user state into ``tmp_path`` for a single test.
+
+    Both ``Path.home()`` (used by ``EntitlementsClient`` defaults) and
+    the LocalDB ``CARL_DIR`` are redirected. We also reset the
+    entitlements singleton so the previous test's cache_path doesn't
+    leak in.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(db_mod, "CARL_DIR", tmp_path)
+    monkeypatch.setattr(db_mod, "DB_PATH", tmp_path / "carl.db")
+    monkeypatch.setattr(settings_mod, "GLOBAL_CONFIG", tmp_path / "config.yaml")
+    monkeypatch.setattr(settings_mod, "_find_local_config", lambda: None)
+    monkeypatch.setattr(theme_mod, "THEME_FILE", tmp_path / "theme.yaml")
+    monkeypatch.delenv("CARL_CAMP_TOKEN", raising=False)
+
+    from carl_studio.entitlements import reset_default_client
+
+    reset_default_client()
+
+
+def _seed_entitlements_cache(
+    cache_path: Path, *, age_seconds: int = 0, key_id: str = "cc-test-1"
+) -> None:
+    """Write a synthetic Entitlements payload that ``cache_get`` can parse."""
+    from datetime import datetime, timedelta, timezone
+
+    from carl_studio.entitlements import Entitlements, EntitlementGrant
+
+    now = datetime.now(tz=timezone.utc)
+    cached_at = now - timedelta(seconds=age_seconds)
+    expires_at = cached_at + timedelta(minutes=15)
+    ent = Entitlements(
+        tier="PAID",
+        tier_label="managed_payg",
+        entitlements=[
+            EntitlementGrant(key="agent.publish", granted_at=cached_at),
+            EntitlementGrant(key="train.slime", granted_at=cached_at),
+        ],
+        cached_at=cached_at,
+        expires_at=expires_at,
+        key_id=key_id,
+        org_id="org-abc",
+        sub="user-123",
+        jwt="header.payload.sig",
+    )
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(ent.model_dump_json())
+
+
+def test_entitlements_show_missing_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Empty ``~/.carl/`` → ``carl entitlements show`` exits 0 with 'missing'."""
+    _isolate_carl_home(monkeypatch, tmp_path)
+
+    result = runner.invoke(app, ["entitlements", "show"])
+    assert result.exit_code == 0
+    assert "missing" in result.output
+
+    json_result = runner.invoke(app, ["entitlements", "show", "--json"])
+    assert json_result.exit_code == 0
+    payload = json.loads(json_result.output)
+    assert payload["status"] == "missing"
+
+
+def test_entitlements_show_with_cache_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Populated cache → ``--json`` returns a fresh status payload."""
+    _isolate_carl_home(monkeypatch, tmp_path)
+    cache_path = tmp_path / ".carl" / "entitlements_cache.json"
+    _seed_entitlements_cache(cache_path, age_seconds=60, key_id="cc-fresh")
+
+    result = runner.invoke(app, ["entitlements", "show", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "fresh"
+    assert payload["key_id"] == "cc-fresh"
+    assert payload["tier"] == "PAID"
+    assert payload["tier_label"] == "managed_payg"
+    assert payload["age_s"] >= 0
+    assert payload["age_s"] < 15 * 60
+    keys = {grant["key"] for grant in payload["entitlements"]}
+    assert keys == {"agent.publish", "train.slime"}
+    assert payload["org_id"] == "org-abc"
+    assert payload["sub"] == "user-123"
+
+
+def test_entitlements_show_corrupt_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Garbage in cache file → exits 1 with corrupt status."""
+    _isolate_carl_home(monkeypatch, tmp_path)
+    cache_path = tmp_path / ".carl" / "entitlements_cache.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text("{not valid json")
+
+    result = runner.invoke(app, ["entitlements", "show", "--json"])
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "corrupt"
+    assert payload["code"] == "carl.entitlements.cache_corrupt"
+
+
+def test_doctor_includes_entitlements_state(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``carl doctor --json`` emits an entitlements block with status+key_id."""
+    _isolate_carl_home(monkeypatch, tmp_path)
+    cache_path = tmp_path / ".carl" / "entitlements_cache.json"
+    _seed_entitlements_cache(cache_path, age_seconds=30, key_id="cc-doctor")
+
+    result = runner.invoke(app, ["doctor", "--json"])
+    payload = json.loads(result.output)
+    assert "entitlements" in payload
+    assert payload["entitlements"]["status"] == "fresh"
+    assert payload["entitlements"]["key_id"] == "cc-doctor"
+    assert isinstance(payload["entitlements"]["age_s"], int)
+
+
+def test_doctor_entitlements_state_missing_when_no_cache(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Doctor reports ``missing`` when no cache file exists yet."""
+    _isolate_carl_home(monkeypatch, tmp_path)
+
+    result = runner.invoke(app, ["doctor", "--json"])
+    payload = json.loads(result.output)
+    assert payload["entitlements"]["status"] == "missing"
+    assert payload["entitlements"]["key_id"] is None
+    assert payload["entitlements"]["age_s"] is None
+
+
 def test_camp_and_lab_help_expose_grouped_aliases():
     camp_result = runner.invoke(app, ["camp", "--help"])
     assert camp_result.exit_code == 0

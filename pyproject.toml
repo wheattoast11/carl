@@ -121,7 +121,7 @@ secrets = [
 # path is fully covered by tests. Industry-standard arrow-key UX (gh,
 # vite, claude-code, codex) without the prompt_toolkit Textual footprint.
 cli = ["questionary>=2.0,<3"]
-dev = ["pytest", "ruff", "pyright", "hypothesis>=6.100"]
+dev = ["pytest", "ruff", "pyright", "hypothesis>=6.100", "respx>=0.21"]
 all = ["carl-studio[training,observe,hf,runpod,tinker,tui,mcp,research,a2a,x402,payments,metrics,constitutional,slime,secrets,cli,dev]"]
 
 [project.scripts]
