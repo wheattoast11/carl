@@ -82,6 +82,69 @@ class CARLTimeoutError(CARLError):
     code = "carl.timeout"
 
 
+# v0.10 remote entitlements (carl.camp signed-JWT tier verification) ---------
+#
+# These error codes form the failure taxonomy for the studio-side
+# ``EntitlementsClient`` that fetches the Ed25519-signed JWT from
+# ``carl.camp``'s ``GET /api/platform/entitlements`` route, verifies the
+# signature against ``/.well-known/carl-camp-jwks.json``, and caches the
+# result locally with 15-min TTL plus a 24h offline-grace window. See
+# ``src/carl_studio/entitlements.py`` and ``docs/v10_remote_entitlements_spec.md``.
+
+
+class RemoteEntitlementError(CARLError):
+    """Local tier check passed PAID but remote ed25519-verified JWT says FREE
+    (or a feature is not in the entitlements list). Caller should deny the
+    requested action.
+
+    Code: ``carl.gate.tier_remote_mismatch``
+    """
+
+    code = "carl.gate.tier_remote_mismatch"
+
+
+class EntitlementsNetworkError(NetworkError):
+    """The carl.camp ``/api/platform/entitlements`` endpoint was unreachable.
+    Caller should fall back to offline-grace cache or deny.
+
+    Code: ``carl.entitlements.network_unavailable``
+    """
+
+    code = "carl.entitlements.network_unavailable"
+
+
+class EntitlementsSignatureError(ValidationError):
+    """JWT signature verification failed. Either tampered token, wrong kid,
+    or our JWKS cache is stale and the signing kid is unknown.
+
+    Code: ``carl.entitlements.signature_invalid``
+    """
+
+    code = "carl.entitlements.signature_invalid"
+
+
+class EntitlementsCacheError(ValidationError):
+    """Local cache file at ``~/.carl/entitlements_cache.json`` is corrupted
+    or structurally invalid. Treated as a cache miss (caller refetches).
+
+    Code: ``carl.entitlements.cache_corrupt``
+    """
+
+    code = "carl.entitlements.cache_corrupt"
+
+
+class JWKSStaleError(NetworkError):
+    """JWKS cache fetch failed AND the locally-cached JWKS does not contain
+    the kid referenced by the JWT we're verifying. Distinct from
+    :class:`EntitlementsNetworkError` because the JWT itself is fresh; only
+    the pubkey lookup is stale.
+
+    Code: ``carl.entitlements.jwks_stale``
+    """
+
+    code = "carl.entitlements.jwks_stale"
+
+
 _SENSITIVE_TOKENS = ("key", "token", "secret", "password", "authorization", "bearer")
 
 
@@ -112,4 +175,9 @@ __all__ = [
     "BudgetError",
     "PermissionError",
     "CARLTimeoutError",
+    "RemoteEntitlementError",
+    "EntitlementsNetworkError",
+    "EntitlementsSignatureError",
+    "EntitlementsCacheError",
+    "JWKSStaleError",
 ]
