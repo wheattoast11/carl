@@ -11,13 +11,21 @@ Thin orchestration layer over ``carl_core.constitutional``:
 
 Defaults keep the module importable without pynacl — the lazy import
 only fires when signing/verification is actually attempted.
+
+Phase H-S4a (v0.10): ``evaluate_action`` accepts an optional
+``forward: ConstitutionalForwarder | None`` keyword argument. When set
+AND the local append succeeded, the freshly-signed block is shipped to
+carl.camp's ``/api/ledger/append`` route via the forwarder. Forward
+errors are non-fatal — they never propagate or roll back the local
+ledger append.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -28,6 +36,11 @@ from carl_core.constitutional import (
 )
 from carl_core.eml import EMLTree
 from carl_core.hashing import content_hash
+
+if TYPE_CHECKING:
+    from carl_studio.fsm_ledger_forward import ConstitutionalForwarder
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "FSMState",
@@ -172,12 +185,30 @@ def evaluate_action(
     action: dict[str, Any],
     state: FSMState,
     ledger: ConstitutionalLedger,
+    *,
+    forward: ConstitutionalForwarder | None = None,
 ) -> tuple[bool, float, FSMState | None]:
     """Evaluate ``action`` against the ledger's constitution and, on pass,
     append a block and return the advanced state.
 
     Returns ``(allowed, score, new_state_or_None)``. On deny, no block is
     appended and ``new_state_or_None`` is ``None``.
+
+    Parameters
+    ----------
+    forward
+        Optional :class:`~carl_studio.fsm_ledger_forward.ConstitutionalForwarder`.
+        When supplied AND the action passes (so a block is appended),
+        the freshly-signed block is shipped to carl.camp via the
+        forwarder. The forwarder always persists the block to its
+        local JSONL first (independent of carl.camp reachability) and
+        then forwards only when ``consent.telemetry == True``.
+
+        Forward failures are NON-FATAL: any exception from
+        :meth:`ConstitutionalForwarder.forward_block` is logged and
+        swallowed so the local FSM transition is preserved. Operators
+        replay missed forwards via
+        :meth:`ConstitutionalForwarder.replay_pending`.
     """
     policy = ledger.policy()
     features = encode_action_features(action)
@@ -195,4 +226,19 @@ def evaluate_action(
         new_head=block.block_hash(),
         new_step=block.block_id,
     )
+
+    # Optional HTTP forward to carl.camp. Errors NEVER propagate —
+    # the local append + state advance is already durable; forward
+    # is best-effort, and replay_pending() recovers missed posts.
+    if forward is not None:
+        try:
+            forward.forward_block(block)
+        except Exception:
+            logger.exception(
+                "constitutional.forward: forward_block raised; local "
+                "append already succeeded (block_id=%s, sig=%s...)",
+                block.block_id,
+                block.signature.hex()[:12],
+            )
+
     return (True, float(score), new_state)

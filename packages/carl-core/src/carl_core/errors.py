@@ -193,6 +193,26 @@ class SlimeRunNotFoundError(CARLError):
     code = "carl.slime.run_not_found"
 
 
+# v0.10 constitutional ledger forwarding (Phase H-S4a) ----------------------
+#
+# Failure taxonomy for the studio-side ``ConstitutionalForwarder`` that
+# POSTs signed ``LedgerBlock`` instances to carl.camp's hardened
+# ``/api/ledger/append`` route. See ``src/carl_studio/fsm_ledger_forward.py``.
+
+
+class ConstitutionalForwardFailedError(NetworkError):
+    """The carl.camp ``/api/ledger/append`` POST failed.
+
+    Local persistence at ``~/.carl/constitutional_ledger.jsonl``
+    still succeeded — :meth:`ConstitutionalForwarder.replay_pending`
+    can retry once the underlying transport / auth issue clears.
+
+    Code: ``carl.constitutional.forward_failed``
+    """
+
+    code = "carl.constitutional.forward_failed"
+
+
 _SENSITIVE_TOKENS = ("key", "token", "secret", "password", "authorization", "bearer")
 
 
@@ -231,4 +251,5 @@ __all__ = [
     "SlimeHfTokenLeakError",
     "SlimeManagedSubmitFailedError",
     "SlimeRunNotFoundError",
+    "ConstitutionalForwardFailedError",
 ]
