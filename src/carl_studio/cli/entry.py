@@ -99,6 +99,7 @@ REGISTERED_SUBCOMMANDS: frozenset[str] = frozenset(
         "session",
         "setup",
         "skill",
+        "slime-schema",
         "start",
         "substrate",
         "sync",

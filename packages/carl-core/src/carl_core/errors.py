@@ -145,6 +145,54 @@ class JWKSStaleError(NetworkError):
     code = "carl.entitlements.jwks_stale"
 
 
+# v0.10 managed slime training (carl.camp /api/train/slime/submit) ----------
+#
+# Failure taxonomy for the studio-side ``SlimeSubmitClient`` that posts
+# translated ``SlimeArgs`` payloads to carl.camp's managed dispatcher.
+# See ``src/carl_studio/adapters/slime_submit.py``.
+
+
+class SlimeHfTokenLeakError(ValidationError):
+    """User HF token detected in a managed slime payload.
+
+    The managed slime path uses ``CARL_CAMP_HF_TOKEN`` exclusively; user
+    HF tokens must NEVER appear in payloads sent to
+    ``/api/train/slime/submit``. This error is raised by the studio-side
+    :func:`assert_no_user_hf_token_leak` defence-in-depth guard before
+    any network round-trip — carl.camp's dispatcher enforces the same
+    invariant server-side, so a misconfigured payload fails fast either way.
+
+    Code: ``carl.slime.hf_token_leak``
+    """
+
+    code = "carl.slime.hf_token_leak"
+
+
+class SlimeManagedSubmitFailedError(NetworkError):
+    """The carl.camp ``/api/train/slime/submit`` call failed.
+
+    Covers transport errors, non-2xx responses, missing bearer token,
+    and malformed responses. The submitted payload itself is unaffected
+    — caller may retry once the underlying issue is resolved.
+
+    Code: ``carl.slime.managed_submit_failed``
+    """
+
+    code = "carl.slime.managed_submit_failed"
+
+
+class SlimeRunNotFoundError(CARLError):
+    """The requested ``slime_run_id`` was not found.
+
+    Either the id never existed or it was created under a different org.
+    The studio side returns 404 on ``GET /api/train/slime/<run_id>``.
+
+    Code: ``carl.slime.run_not_found``
+    """
+
+    code = "carl.slime.run_not_found"
+
+
 _SENSITIVE_TOKENS = ("key", "token", "secret", "password", "authorization", "bearer")
 
 
@@ -180,4 +228,7 @@ __all__ = [
     "EntitlementsSignatureError",
     "EntitlementsCacheError",
     "JWKSStaleError",
+    "SlimeHfTokenLeakError",
+    "SlimeManagedSubmitFailedError",
+    "SlimeRunNotFoundError",
 ]

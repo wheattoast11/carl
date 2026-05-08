@@ -267,6 +267,7 @@ class SlimeRolloutBridge:
         *,
         observation_dim: int | None = None,
         extra_metadata: dict[str, Any] | None = None,
+        slime_run_id: str | None = None,
     ) -> Resonant:
         """Snapshot the trained reward tree as a publishable Resonant.
 
@@ -288,6 +289,16 @@ class SlimeRolloutBridge:
             extra_metadata: Optional dict merged into the Resonant's metadata
                 after the standard slime-run fields. Useful for caller-specified
                 tags (dataset id, experiment name, etc.).
+            slime_run_id: Optional UUID for the managed-slime run that
+                produced this reward. When set, recorded in the Resonant
+                metadata under ``slime_run_id`` AND propagated as the
+                ``X-Carl-Slime-Run-Id`` HTTP header on
+                ``carl resonant publish`` so carl.camp's resonants route
+                can populate ``slime_runs.resonant_id`` for the linkage.
+                The route accepts binary octet-stream bodies, so the
+                metadata channel is HTTP headers, not envelope JSON
+                — see ``docs/eml_signing_protocol.md`` and the F-S3a
+                contract correction.
 
         Raises:
             ValueError: when ``self.reward`` is ``None`` or the reward has no
@@ -318,6 +329,8 @@ class SlimeRolloutBridge:
             "tree_depth": int(cast_tree.depth()),
             "tree_input_dim": int(cast_tree.input_dim),
         }
+        if slime_run_id:
+            meta["slime_run_id"] = str(slime_run_id)
         if extra_metadata:
             meta.update(extra_metadata)
 
@@ -330,17 +343,20 @@ class SlimeRolloutBridge:
         # Record the finalization as a Step in the chain so the trace carries
         # the artifact-emission boundary explicitly. Output is the identity
         # fingerprint only (no tree bytes, no matrix contents).
+        step_output: dict[str, Any] = {
+            "identity": resonant.identity,
+            "tree_depth": meta["tree_depth"],
+            "tree_input_dim": meta["tree_input_dim"],
+            "rollouts_seen": self._rollouts_seen,
+            "training_steps_seen": self._training_steps_seen,
+        }
+        if slime_run_id:
+            step_output["slime_run_id"] = str(slime_run_id)
         self.chain.record(
             ActionType.CHECKPOINT,
             name=f"{self.run_name}.finalize_resonant",
             input={"reward_class": type(self.reward).__name__},
-            output={
-                "identity": resonant.identity,
-                "tree_depth": meta["tree_depth"],
-                "tree_input_dim": meta["tree_input_dim"],
-                "rollouts_seen": self._rollouts_seen,
-                "training_steps_seen": self._training_steps_seen,
-            },
+            output=step_output,
         )
         return resonant
 
