@@ -275,10 +275,14 @@ class EntitlementsClient:
             )
 
         body = cast(dict[str, Any], payload)
-        token = body.get("jwt") or body.get("access_token")
+        # carl.camp's GET /api/platform/entitlements returns {ok, token, ...}.
+        # Accept the modern `token` field first; fall back to `jwt` /
+        # `access_token` for forward-compat with future renames or any
+        # alternative deployment that surfaces a different name.
+        token = body.get("token") or body.get("jwt") or body.get("access_token")
         if not isinstance(token, str) or not token:
             raise EntitlementsNetworkError(
-                "carl.camp entitlements payload missing 'jwt' field.",
+                "carl.camp entitlements payload missing 'token' field.",
                 context={"status": status},
             )
 

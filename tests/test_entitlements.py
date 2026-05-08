@@ -135,7 +135,7 @@ def test_fetch_remote_happy_path_caches_jwt(tmp_path: Path) -> None:
     jwks = {"keys": [entry]}
 
     ent_route = respx.get(f"{DEFAULT_CARL_CAMP_BASE}{ENTITLEMENTS_PATH}").mock(
-        return_value=httpx.Response(200, json={"jwt": token})
+        return_value=httpx.Response(200, json={"token": token})
     )
     jwks_route = respx.get(f"{DEFAULT_CARL_CAMP_BASE}{JWKS_PATH}").mock(
         return_value=httpx.Response(200, json=jwks)
@@ -168,7 +168,7 @@ def test_fetch_remote_signature_invalid_raises(tmp_path: Path) -> None:
     advertised_jwks = {"keys": [entry_real]}
 
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{ENTITLEMENTS_PATH}").mock(
-        return_value=httpx.Response(200, json={"jwt": token})
+        return_value=httpx.Response(200, json={"token": token})
     )
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{JWKS_PATH}").mock(
         return_value=httpx.Response(200, json=advertised_jwks)
@@ -188,7 +188,7 @@ def test_offline_grace_serves_cache_within_24h(tmp_path: Path) -> None:
     jwks = {"keys": [entry]}
 
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{ENTITLEMENTS_PATH}").mock(
-        return_value=httpx.Response(200, json={"jwt": token})
+        return_value=httpx.Response(200, json={"token": token})
     )
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{JWKS_PATH}").mock(
         return_value=httpx.Response(200, json=jwks)
@@ -224,7 +224,7 @@ def test_offline_grace_expires_after_24h_raises(tmp_path: Path) -> None:
     jwks = {"keys": [entry]}
 
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{ENTITLEMENTS_PATH}").mock(
-        return_value=httpx.Response(200, json={"jwt": token})
+        return_value=httpx.Response(200, json={"token": token})
     )
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{JWKS_PATH}").mock(
         return_value=httpx.Response(200, json=jwks)
@@ -279,7 +279,7 @@ def test_jwks_kid_unknown_raises_jwks_stale(tmp_path: Path) -> None:
     advertised = {"keys": [other_entry]}
 
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{ENTITLEMENTS_PATH}").mock(
-        return_value=httpx.Response(200, json={"jwt": token})
+        return_value=httpx.Response(200, json={"token": token})
     )
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{JWKS_PATH}").mock(
         return_value=httpx.Response(200, json=advertised)
@@ -300,7 +300,7 @@ def test_jwt_iat_skew_5min_rejects_expired_outside_window(tmp_path: Path) -> Non
     jwks = {"keys": [entry]}
 
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{ENTITLEMENTS_PATH}").mock(
-        return_value=httpx.Response(200, json={"jwt": token})
+        return_value=httpx.Response(200, json={"token": token})
     )
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{JWKS_PATH}").mock(
         return_value=httpx.Response(200, json=jwks)
@@ -321,7 +321,7 @@ def test_cache_set_writes_mode_0600(tmp_path: Path) -> None:
     jwks = {"keys": [entry]}
 
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{ENTITLEMENTS_PATH}").mock(
-        return_value=httpx.Response(200, json={"jwt": token})
+        return_value=httpx.Response(200, json={"token": token})
     )
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{JWKS_PATH}").mock(
         return_value=httpx.Response(200, json=jwks)
@@ -348,7 +348,7 @@ def test_jwks_pofu_rejects_silent_key_swap(tmp_path: Path) -> None:
         return_value=httpx.Response(200, json={"keys": [entry_a]})
     )
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{ENTITLEMENTS_PATH}").mock(
-        return_value=httpx.Response(200, json={"jwt": token_a})
+        return_value=httpx.Response(200, json={"token": token_a})
     )
 
     client = _client(tmp_path)
@@ -384,7 +384,7 @@ def test_jwks_pofu_accepts_additive_rotation(tmp_path: Path) -> None:
         return_value=httpx.Response(200, json={"keys": [entry_a]})
     )
     respx.get(f"{DEFAULT_CARL_CAMP_BASE}{ENTITLEMENTS_PATH}").mock(
-        return_value=httpx.Response(200, json={"jwt": token_a})
+        return_value=httpx.Response(200, json={"token": token_a})
     )
 
     client = _client(tmp_path)
