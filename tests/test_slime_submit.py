@@ -64,7 +64,10 @@ def test_invariant_rejects_user_hf_token_in_payload(
     _no_hf_token_env: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Exact-match: a string equal to the resolved user HF token raises."""
-    fake_token = "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    # Synthesized at runtime so the source literal doesn't match GitHub's
+    # HF-token secret-scanning regex. Still triggers our hf_[A-Za-z0-9_-]{34,}
+    # validator AND the exact-env-match path (HF_TOKEN is set below).
+    fake_token = "hf_" + "x" * 36
     monkeypatch.setenv("HF_TOKEN", fake_token)
 
     payload = {
