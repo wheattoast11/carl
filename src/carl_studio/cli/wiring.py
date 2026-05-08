@@ -384,6 +384,21 @@ except ImportError:
 
 
 # ---------------------------------------------------------------------------
+# Wire carl entitlements (v0.10 — remote tier verification cache inspector)
+# ---------------------------------------------------------------------------
+try:
+    from .entitlements_cmd import entitlements_app
+
+    app.add_typer(entitlements_app, name="entitlements")
+except ImportError:
+    _make_stub(
+        app,
+        "entitlements",
+        doc="Entitlements inspection requires the full carl-studio package.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Wire carl chat (top-level agentic chat)
 # ---------------------------------------------------------------------------
 # F1 (v0.7) — Two canonical surfaces: `carl chat` (interactive) and

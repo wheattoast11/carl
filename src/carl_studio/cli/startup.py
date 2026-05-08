@@ -113,6 +113,22 @@ def doctor(
         queue_pending = None
         queue_error = str(exc)
 
+    # v0.10 entitlements cache state — informational stanza so the
+    # doctor surface includes remote-tier health alongside the existing
+    # readiness/queue/freshness blocks. Never raises; falls back to a
+    # status string when the entitlements module cannot be reached.
+    try:
+        from .entitlements_cmd import doctor_entitlements_state
+
+        entitlements_state = doctor_entitlements_state()
+    except Exception as exc:  # noqa: BLE001 — doctor must never crash
+        entitlements_state = {
+            "status": "unavailable",
+            "key_id": None,
+            "age_s": None,
+            "reason": str(exc),
+        }
+
     doctor_payload = {
         "guided_workbench": readiness["guided_workbench"],
         "blocking_issues": readiness["blocking_issues"],
@@ -132,6 +148,7 @@ def doctor(
             "error": queue_error,
             "oldest_processing_s": queue_oldest_processing_s,
         },
+        "entitlements": entitlements_state,
     }
 
     if json_output:
@@ -224,6 +241,28 @@ def doctor(
                     f" (oldest processing {queue_oldest_processing_s:.0f}s)"
                 )
             table.add_row("Queue", queue_status, queue_detail)
+
+        # Entitlements — show whichever status the cache classifier
+        # produced. Fresh/stale/grace are informational; corrupt/missing
+        # show the remediation so operators can self-serve.
+        ent_status = str(entitlements_state.get("status") or "unavailable")
+        ent_key_id = entitlements_state.get("key_id")
+        ent_age_s = entitlements_state.get("age_s")
+        if ent_status == "missing":
+            ent_detail = "no cache — run: carl camp login && carl entitlements show --refresh"
+        elif ent_status == "corrupt":
+            ent_detail = "cache file unreadable — quarantined; rerun --refresh"
+        elif ent_status == "unavailable":
+            ent_detail = "entitlements module unreachable"
+        elif ent_status == "offline_grace_expired":
+            ent_detail = (
+                f"cache > 24h old — refresh required (kid={ent_key_id})"
+            )
+        else:
+            age_part = f"age={int(ent_age_s)}s" if isinstance(ent_age_s, int) else ""
+            kid_part = f"kid={ent_key_id}" if ent_key_id else ""
+            ent_detail = " ".join(p for p in (kid_part, age_part) if p) or "ok"
+        table.add_row("Entitlements", ent_status, ent_detail)
         c.print(table)
         c.blank()
     else:

@@ -71,6 +71,7 @@ REGISTERED_SUBCOMMANDS: frozenset[str] = frozenset(
         "db",
         "dev",
         "doctor",
+        "entitlements",
         "env",
         "eval",
         "flow",
