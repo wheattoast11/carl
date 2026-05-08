@@ -26,6 +26,7 @@ from unittest.mock import patch
 import pytest
 
 from carl_core.errors import CARLError
+from carl_studio import tier as tier_module
 from carl_studio.tier import (
     Tier,
     TierGateError,
@@ -275,3 +276,237 @@ def test_resolver_called_per_gate_invocation() -> None:
     for _ in range(3):
         _guarded()
     assert counter["n"] == 3
+
+
+# ---------------------------------------------------------------------------
+# verify_remote=True extension (v0.10 · S1b)
+# ---------------------------------------------------------------------------
+#
+# The extension preserves the local-fast-path doctrine (CLAUDE.md AP-1):
+#
+# * Local check runs FIRST.
+# * Local allow + verify_remote=True → fire-and-forget background fetch.
+# * Local deny + cached PAID grant within 24h grace → admit.
+# * Local deny + no cache (or no grant) → original TierGateError raised.
+#
+# We patch the module-private helpers
+# (``_schedule_async_verify`` / ``_try_cached_grant``) at the
+# ``carl_studio.tier`` import path so the tests don't have to spin up
+# the entitlements client + httpx mock for the surface contract.
+
+
+def test_tier_gate_verify_remote_default_false_does_not_call_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backward-compat guard: existing ``tier_gate(Tier.PAID, feature=...)``
+    callers must NOT trigger any remote-verify code path."""
+    fired: list[str] = []
+    cache_calls: list[str] = []
+
+    def _fake_async(feature: str) -> None:
+        fired.append(feature)
+
+    def _fake_cache(feature: str) -> object:
+        cache_calls.append(feature)
+        return None
+
+    monkeypatch.setattr(
+        tier_module, "_schedule_async_verify", _fake_async
+    )
+    monkeypatch.setattr(
+        tier_module, "_try_cached_grant", _fake_cache
+    )
+    register_tier_resolver(lambda _f: Tier.PAID)
+
+    @tier_gate(Tier.PAID, feature="mcp.serve")
+    def _guarded() -> str:
+        return "ok"
+
+    assert _guarded() == "ok"
+    assert fired == []
+    assert cache_calls == []
+
+
+def test_tier_gate_verify_remote_local_allow_fires_async(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local check passes; verify_remote=True schedules async fetch.
+
+    The decorated function returns normally without blocking on the
+    network. The async helper is invoked exactly once with the
+    decorator's feature name.
+    """
+    fired: list[str] = []
+
+    def _fake_async(feature: str) -> None:
+        fired.append(feature)
+
+    monkeypatch.setattr(
+        tier_module, "_schedule_async_verify", _fake_async
+    )
+    register_tier_resolver(lambda _f: Tier.PAID)
+
+    @tier_gate(Tier.PAID, feature="train.slime.managed", verify_remote=True)
+    def _guarded() -> str:
+        return "ok"
+
+    assert _guarded() == "ok"
+    assert fired == ["train.slime.managed"]
+
+
+def test_tier_gate_verify_remote_local_deny_with_cached_grant_allows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Local denies (FREE) but cache has a matching PAID grant within grace → admit."""
+    grace_calls: list[tuple[str, object]] = []
+
+    class _FakeGrant:
+        key = "train.slime.managed"
+
+    class _FakeEntitlements:
+        tier = "PAID"
+        entitlements = [_FakeGrant()]
+        key_id = "cc-test-1"
+        cached_at = None  # _emit_tier_remote_grace tolerates None
+
+    def _fake_cache(feature: str) -> object:
+        if feature == "train.slime.managed":
+            return _FakeEntitlements()
+        return None
+
+    def _fake_grace(feature: str, ent: object) -> None:
+        grace_calls.append((feature, ent))
+
+    monkeypatch.setattr(
+        tier_module, "_try_cached_grant", _fake_cache
+    )
+    monkeypatch.setattr(
+        tier_module, "_emit_tier_remote_grace", _fake_grace
+    )
+
+    # Force the local gate to deny: resolver returns FREE.
+    register_tier_resolver(lambda _f: Tier.FREE)
+
+    @tier_gate(Tier.PAID, feature="train.slime.managed", verify_remote=True)
+    def _guarded() -> str:
+        return "ok"
+
+    assert _guarded() == "ok"
+    assert len(grace_calls) == 1
+    assert grace_calls[0][0] == "train.slime.managed"
+
+
+def test_tier_gate_verify_remote_local_deny_without_cached_grant_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Critical security guarantee: local deny + cache miss → TierGateError.
+
+    No cached grant must NEVER allow access. This is the mirror of the
+    happy-path admit and is the test we never let weaken.
+    """
+
+    def _fake_cache(_feature: str) -> object:
+        return None
+
+    monkeypatch.setattr(
+        tier_module, "_try_cached_grant", _fake_cache
+    )
+
+    register_tier_resolver(lambda _f: Tier.FREE)
+
+    @tier_gate(Tier.PAID, feature="train.slime.managed", verify_remote=True)
+    def _guarded() -> str:
+        return "ok"
+
+    with pytest.raises(TierGateError) as excinfo:
+        _guarded()
+    err = excinfo.value
+    assert err.feature == "train.slime.managed"
+    assert err.required is Tier.PAID
+    assert err.current is Tier.FREE
+
+
+def test_tier_gate_verify_remote_local_deny_grant_outside_grace_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_try_cached_grant`` returning ``None`` for outside-grace must hard-deny.
+
+    This pins the contract that the cache helper, not the wrapper,
+    owns the offline-grace decision. If the helper returns ``None``
+    for any reason — corrupt cache, stale beyond 24h, missing grant —
+    the wrapper falls through to the original TierGateError.
+    """
+
+    def _fake_cache(_feature: str) -> object:
+        # Simulate cache present but stale beyond grace; helper returns None.
+        return None
+
+    monkeypatch.setattr(
+        tier_module, "_try_cached_grant", _fake_cache
+    )
+    register_tier_resolver(lambda _f: Tier.FREE)
+
+    @tier_gate(Tier.PAID, feature="agent.publish", verify_remote=True)
+    def _guarded() -> str:
+        return "ok"
+
+    with pytest.raises(TierGateError):
+        _guarded()
+
+
+def test_tier_gate_verify_remote_async_failure_does_not_propagate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production ``_schedule_async_verify`` swallows internal failures.
+
+    Critical for the fast-path doctrine: a network outage / signature
+    error / unimportable entitlements module must NEVER convert an
+    allow into a deny on the local-allow path. We exercise the real
+    helper but make ``fetch_remote_async`` raise.
+    """
+    import carl_studio.entitlements as ent_mod
+
+    def _failing_fetch(_jwt: str, **_kw: object) -> None:
+        raise RuntimeError("network down")
+
+    # Replace fetch_remote_async (what _schedule_async_verify imports
+    # internally) AND ensure a bearer is resolvable so the helper
+    # actually reaches the failing call.
+    monkeypatch.setattr(ent_mod, "fetch_remote_async", _failing_fetch)
+    monkeypatch.setattr(
+        tier_module,
+        "_resolve_bearer_token_for_verify",
+        lambda: "fake-jwt-token",
+    )
+    register_tier_resolver(lambda _f: Tier.PAID)
+
+    @tier_gate(Tier.PAID, feature="mcp.serve", verify_remote=True)
+    def _guarded() -> str:
+        return "ok"
+
+    # The real _schedule_async_verify wraps the call in
+    # ``contextlib.suppress(Exception)`` — the fast path returns "ok"
+    # even though fetch_remote_async raises.
+    assert _guarded() == "ok"
+
+
+def test_tier_gate_verify_remote_metadata_attribute_set() -> None:
+    """``verify_remote=True`` is reflected in the wrapper's introspection metadata."""
+
+    @tier_gate(Tier.PAID, feature="mcp.serve", verify_remote=True)
+    def _guarded() -> str:
+        return "ok"
+
+    assert getattr(_guarded, "__tier_required__") is Tier.PAID  # noqa: B009
+    assert getattr(_guarded, "__tier_feature__") == "mcp.serve"  # noqa: B009
+    assert getattr(_guarded, "__tier_verify_remote__") is True  # noqa: B009
+
+
+def test_tier_gate_verify_remote_default_false_metadata() -> None:
+    """``verify_remote`` defaults to False; the metadata reflects that."""
+
+    @tier_gate(Tier.PAID, feature="mcp.serve")
+    def _guarded() -> str:
+        return "ok"
+
+    assert getattr(_guarded, "__tier_verify_remote__") is False  # noqa: B009
