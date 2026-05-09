@@ -837,11 +837,12 @@ requires-dist = [
 
 [[package]]
 name = "carl-studio"
-version = "0.20.0"
+version = "0.20.1"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
     { name = "carl-core" },
+    { name = "httpx" },
     { name = "numpy" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -984,6 +985,7 @@ requires-dist = [
     { name = "cryptography", marker = "extra == 'wallet'", specifier = ">=42.0.0" },
     { name = "datasets", marker = "extra == 'training'", specifier = ">=4.0" },
     { name = "gradio-client", marker = "extra == 'observe'", specifier = ">=1.0" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "huggingface-hub", marker = "extra == 'hf'", specifier = ">=1.0" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
     { name = "keyring", marker = "extra == 'secrets'", specifier = ">=24.0.0" },
