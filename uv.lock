@@ -822,7 +822,7 @@ wheels = [
 
 [[package]]
 name = "carl-core"
-version = "0.1.2"
+version = "0.2.0"
 source = { editable = "packages/carl-core" }
 dependencies = [
     { name = "numpy" },
@@ -837,7 +837,7 @@ requires-dist = [
 
 [[package]]
 name = "carl-studio"
-version = "0.18.3"
+version = "0.20.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },

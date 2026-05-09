@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.20.0] — 2026-05-09 — v0.10 carl.camp parity (entitlements + AXON + slime + ledger)
+
+Closes the long-deferred carl.camp ↔ carl-studio parity arc. End-to-end signed remote tier verification, AXON event forwarding, managed slime training submit, constitutional ledger forward path, and a refresh of `zero-rl-pipeline`'s tier-gate consumer.
+
+Companion releases:
+- **carl-core 0.2.0** — adds 9 new error subclasses + `set_global_forwarder` seam in `interaction.py`. carl-studio 0.20.0 requires carl-core ≥ 0.2.0.
+- carl.camp backend (private repo) — see `docs/v10_remote_entitlements_spec.md` for the wire contract.
+
+### Added
+
+- **`EntitlementsClient`** (`src/carl_studio/entitlements.py`) — Python verifier of carl.camp's signed entitlements JWT. pynacl-backed Ed25519 verify, JWKS pin-on-first-use, 15-min cache + 24h offline-grace at `~/.carl/entitlements_cache.json` (mode 0600, atomic write). 5 new error codes under `carl.entitlements.*` + `carl.gate.tier_remote_mismatch`.
+- **`tier_gate(..., verify_remote=False)` extension** (`src/carl_studio/tier.py`) — local-fast-path-then-async ladder per AP-1. Local check runs first; on allow, fires `fetch_remote_async` background verify; on local-deny + paid feature, consults the cache for a matching grant within offline-grace.
+- **`carl entitlements show [--json] [--refresh]`** (`src/carl_studio/cli/entitlements_cmd.py`) — inspect cached v0.10 entitlements + age + key_id. Status taxonomy: `fresh / stale / offline_grace / offline_grace_expired / missing / corrupt / unavailable`.
+- **AXON HTTP forwarder** (`src/carl_studio/telemetry/axon.py`) — `AxonForwarder` thread-bound queue + daemon flush, opt-in via `consent.telemetry` + `AXON_FORWARD_DISABLED` env. Maps `Step.action` → 5-signal taxonomy (`skill.training_started`, `skill.crystallized`, `coherence.update`, `interaction.created`, `action.dispatched`); secondary `coherence.update` event fires when `phi` / `kuramoto_r` / `channel_coherence` is populated. Idempotency via `sha256(step_id:signal_type)`. Payload runs through `carl_core.errors._redact` before forward.
+- **`set_global_forwarder` seam** (`packages/carl-core/src/carl_core/interaction.py`) — module-level registration hook; carl-core stays HTTP-free, carl-studio registers itself. `record(...)` invokes the forwarder synchronously after `self.steps.append(step)`. Errors swallowed + logged at WARN.
+- **`SlimeSubmitClient`** (`src/carl_studio/adapters/slime_submit.py`) — managed slime training submit + status polling. `assert_no_user_hf_token_leak(slime_args)` guard with three detection paths: env-token exact match, key-name regex (`hf_token` / `huggingface_token` case-insensitive), value regex (`^hf_[A-Za-z0-9_-]{34,}$`). Recursive scan covers nested envelopes.
+- **`carl train --managed`** + **`carl slime-schema`** (`src/carl_studio/cli/training.py`) — opt-in flag routes through `SlimeSubmitClient` (gated by `tier_gate(PAID, feature="train.slime.managed", verify_remote=True)`); schema export prints `SlimeArgs.model_json_schema()` JSON.
+- **`SlimeRolloutBridge.finalize_resonant(slime_run_id=...)`** (`src/carl_studio/training/slime_bridge.py`) — propagates the slime run id into resonant metadata for the carl.camp side's `X-Carl-Slime-Run-Id` header path.
+- **`ConstitutionalForwarder`** (`src/carl_studio/fsm_ledger_forward.py`) — always persists signed `LedgerBlock`s to `~/.carl/constitutional_ledger.jsonl` (mode 0600, 10MB rotation, max 3 archives). HTTP forward to carl.camp's `/api/ledger/append` is opt-in via `consent.telemetry`. `replay_pending()` retries unacked entries.
+- **`evaluate_action(forward=...)` kwarg** (`src/carl_studio/fsm_ledger.py`) — wires the forwarder into the FSM evaluation path.
+- **9 new error subclasses** (`packages/carl-core/src/carl_core/errors.py`):
+  - `carl.gate.tier_remote_mismatch` (`RemoteEntitlementError`)
+  - `carl.entitlements.network_unavailable` (`EntitlementsNetworkError`)
+  - `carl.entitlements.signature_invalid` (`EntitlementsSignatureError`)
+  - `carl.entitlements.cache_corrupt` (`EntitlementsCacheError`)
+  - `carl.entitlements.jwks_stale` (`JWKSStaleError`)
+  - `carl.slime.hf_token_leak` (`SlimeHfTokenLeakError`)
+  - `carl.slime.managed_submit_failed` (`SlimeManagedSubmitFailedError`)
+  - `carl.slime.run_not_found` (`SlimeRunNotFoundError`)
+  - `carl.constitutional.forward_failed` (`ConstitutionalForwardFailedError`)
+- **`respx>=0.21`** added to `[dev]` extras for httpx mock-driven entitlements tests.
+
+### Changed
+
+- `carl doctor` payload gains an `entitlements: {status, age_s, key_id}` block surfacing remote-tier health.
+- `carl resonant publish` accepts an optional `--slime-run-id <uuid>` flag → adds the `X-Carl-Slime-Run-Id` HTTP header.
+- CLI routing table in `CLAUDE.md` updated with the three new commands; `Release history` notes v0.20.0.
+
+### Tests
+
+- 11 new pytest stubs in `tests/test_entitlements.py`
+- 15 new in `tests/test_axon_forwarder.py`
+- 22 new in `tests/test_slime_submit.py`
+- 14 new in `tests/test_constitutional_forward.py`
+- 8 new in `tests/test_tier_resolver.py`
+- 5 new in `tests/test_cli.py`
+- 4 new in `packages/carl-core/tests/test_interaction_forwarder.py`
+- 1 import-cheapness regression test (`carl_studio.entitlements` doesn't pull pynacl eagerly)
+
+Suite baseline (post-release): ~135 v10-surface tests green in addition to the existing ~3770. ruff + pyright clean on changed files via direct CLI runs.
+
+### Cross-repo
+
+- `zero-rl-pipeline/platform/cli/gate.py` rewrite — try-import `EntitlementsClient` from carl-studio first, falls back to legacy `check-tier` Edge Function with deprecation warning. Preserves the public `Tier`, `get_tier`, `is_paid`, `is_free`, `requires_paid` API surface. Private repo, separate cadence.
+- `resonance` package — boundary verified, **zero changes required**. See `docs/private/v10_resonance_boundary.md`.
+
+### Provenance
+
+- Plan: `docs/superpowers/plans/put-together-a-plan-sleepy-crystal.md` (or symlinked equivalent) — 11 phases A → K, 30 tracked tasks, dispatched via `superpowers:subagent-driven-development`.
+- Security review caught + fixed in same arc: cross-org idempotency-key disclosure in carl.camp's `slime/submit` route.
+
 ## [Unreleased]
 
 ### Added
