@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "carl-core"
-version = "0.1.2"
+version = "0.2.0"
 description = "Coherence math primitives for CARL (Coherence-Aware Reinforcement Learning)"
 readme = "README.md"
 license = "MIT"
