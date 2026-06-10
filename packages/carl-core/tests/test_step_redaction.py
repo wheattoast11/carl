@@ -39,7 +39,7 @@ class TestScrubSecrets:
         assert "1234567890abcdef" not in out
 
     def test_anthropic_key_scrubbed_keeps_sk_ant(self) -> None:
-        text = "OPENAI=sk-abc ANTHROPIC=sk-ant-api03-XyZaBcDeFgHiJkLmNoPqRsTuVwXyZ"
+        text = "OPENAI=sk-abc ANTHROPIC=REDACTED_ROTATED_2026_06_10"
         out = _scrub_secrets(text)
         # The sk-ant- prefix should survive in the redacted preview, not
         # be truncated to plain "sk-".
@@ -108,7 +108,7 @@ class TestStepRedaction:
             input={
                 "req": {
                     "headers": {
-                        "Authorization": "Bearer sk-ant-api03-XyZaBcDeFgHiJkLmNo",
+                        "Authorization": "Bearer REDACTED_ROTATED_2026_06_10",
                     },
                     "body": {"question": "hello"},
                 },
