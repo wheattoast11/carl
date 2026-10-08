@@ -39,11 +39,12 @@ class TestScrubSecrets:
         assert "1234567890abcdef" not in out
 
     def test_anthropic_key_scrubbed_keeps_sk_ant(self) -> None:
-        text = "OPENAI=sk-abc ANTHROPIC=REDACTED_ROTATED_2026_06_10"
+        text = "OPENAI=sk-abc ANTHROPIC=sk-ant-" + "x" * 32
         out = _scrub_secrets(text)
         # The sk-ant- prefix should survive in the redacted preview, not
         # be truncated to plain "sk-".
         assert "sk-ant<redacted>" in out
+        assert "x" * 32 not in out
 
     def test_hf_token_scrubbed(self) -> None:
         text = "token=hf_AbCdEfGhIjKlMnOpQrStUv in env"
