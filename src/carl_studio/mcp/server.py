@@ -53,8 +53,7 @@ from carl_studio.mcp.protocol import CARLMCPServer
 mcp = CARLMCPServer("carl-studio", version=__version__)
 
 logger.info(
-    "carl-studio MCP server loaded: per-request session state via "
-    "MCPServerConnection (H2, v0.7.1)."
+    "carl-studio MCP server loaded: per-request session state via MCPServerConnection (H2, v0.7.1)."
 )
 
 # ---------------------------------------------------------------------------
@@ -136,6 +135,7 @@ async def _run_tool(
     """
     if tool_name in {"authenticate", "sync_data"}:
         from carl_studio.consent import consent_gate
+
         consent_gate("telemetry")
     start = time.monotonic()
     try:
@@ -152,6 +152,7 @@ async def _run_tool(
     duration_ms = (time.monotonic() - start) * 1000.0
     _record_tool_event(tool_name, success=True, duration_ms=duration_ms)
     return result
+
 
 # ---------------------------------------------------------------------------
 # Skills availability — graceful degradation if optional deps missing
@@ -261,34 +262,18 @@ def _tier_error(feature: str, ctx: "Context | None" = None) -> str:
 
 def _build_skill_runner() -> "SkillRunner":
     from carl_studio.skills.runner import build_skill_runner
+
     return build_skill_runner()
 
 
 @mcp.tool()
-async def start_training(config_yaml: str) -> str:
+async def start_training(config_yaml: str, prepared_plan_id: str | None = None) -> str:
     """Start a CARL training run from a YAML config string.
     Returns JSON with run_id and initial status.
     """
 
     async def _body() -> str:
-        import yaml
-        from carl_studio.types.config import TrainingConfig
-        from carl_studio.training.trainer import CARLTrainer
-
-        raw = yaml.safe_load(config_yaml) or {}
-        config = TrainingConfig(**raw)
-        trainer = CARLTrainer(config)
-        run = await trainer.train()
-
-        return json.dumps(
-            {
-                "run_id": run.id,
-                "phase": run.phase.value,
-                "hub_job_id": run.hub_job_id,
-                "model": config.base_model,
-                "method": config.method.value,
-            }
-        )
+        return json.dumps(await _start_training_body(config_yaml, prepared_plan_id))
 
     return await _run_tool("start_training", _body)
 
@@ -433,6 +418,44 @@ async def validate_config(config_yaml: str) -> str:
 
 
 @mcp.tool()
+async def prepare_training(
+    config_yaml: str,
+    project_root: str | None = None,
+    goal: str | None = None,
+) -> str:
+    """Prepare an experiment without training, provider access or publication."""
+
+    async def _body() -> str:
+        import yaml
+        from functools import partial
+        from pathlib import Path
+        from carl_studio.training.preparation import prepare_training as prepare_config
+        from carl_studio.training.preparation import run_in_worker
+        from carl_studio.types.config import TrainingConfig
+        from carl_studio.types.preparation import TrainingGoal
+
+        try:
+            raw = yaml.safe_load(config_yaml) or {}
+            config = TrainingConfig.model_validate(raw)
+        except (ValueError, yaml.YAMLError):
+            from carl_core.errors import ValidationError
+
+            raise ValidationError(
+                "Invalid training configuration", code="carl.preparation.config"
+            ) from None
+        if goal is not None:
+            config.goal = (config.goal or TrainingGoal()).model_copy(update={"description": goal})
+        prepared = await run_in_worker(
+            partial(prepare_config, config, project_root=Path(project_root) if project_root else None)
+        )
+        result = prepared.model_dump(mode="json")
+        result["ready"] = prepared.ready
+        return json.dumps(result)
+
+    return await _run_tool("prepare_training", _body)
+
+
+@mcp.tool()
 async def generate_bundle(config_yaml: str) -> str:
     """Generate a self-contained training script for HF Jobs from a config.
     Returns the Python script as a string.
@@ -473,9 +496,7 @@ async def authenticate(jwt: str, ctx: Context | None = None) -> str:
 
     async def _body() -> str:
         if not jwt or not isinstance(jwt, str):
-            return json.dumps(
-                {"error": "jwt must be a non-empty string", "authenticated": False}
-            )
+            return json.dumps({"error": "jwt must be a non-empty string", "authenticated": False})
 
         try:
             # Server-side JWT verification via Supabase Edge Function
@@ -502,9 +523,7 @@ async def authenticate(jwt: str, ctx: Context | None = None) -> str:
                 jwt=jwt,
                 tier=tier,
                 user_id=user_id,
-                authenticated_at=datetime.fromtimestamp(
-                    int(time.time()), tz=timezone.utc
-                ),
+                authenticated_at=datetime.fromtimestamp(int(time.time()), tz=timezone.utc),
             )
             _set_session(new_session)
 
@@ -529,8 +548,7 @@ async def authenticate(jwt: str, ctx: Context | None = None) -> str:
                     "error": f"Server verification failed: {e}",
                     "authenticated": False,
                     "hint": (
-                        "Ensure carl.camp is reachable, or check your JWT "
-                        "with 'carl camp account'"
+                        "Ensure carl.camp is reachable, or check your JWT with 'carl camp account'"
                     ),
                 }
             )
@@ -659,9 +677,7 @@ async def run_skill(
 
     async def _body() -> str:
         if not _skills_available:
-            return json.dumps(
-                {"error": "Skills not installed. pip install carl-studio[skills]"}
-            )
+            return json.dumps({"error": "Skills not installed. pip install carl-studio[skills]"})
 
         try:
             inputs = json.loads(inputs_json) if inputs_json else {}
@@ -692,9 +708,7 @@ async def run_skill(
             return result.model_dump_json()
         except Exception as e:
             runner.close()
-            return json.dumps(
-                {"error": str(e), "skill_name": skill_name, "success": False}
-            )
+            return json.dumps({"error": str(e), "skill_name": skill_name, "success": False})
 
     return await _run_tool("run_skill", _body)
 
@@ -713,9 +727,7 @@ async def list_skills() -> str:
 
     async def _body() -> str:
         if not _skills_available:
-            return json.dumps(
-                {"error": "Skills not installed. pip install carl-studio[skills]"}
-            )
+            return json.dumps({"error": "Skills not installed. pip install carl-studio[skills]"})
 
         runner = _build_skill_runner()
         skills_list = [
@@ -840,9 +852,7 @@ async def sync_data(
             return _tier_error("sync.cloud", ctx)
 
         if direction not in ("push", "pull"):
-            return json.dumps(
-                {"error": f"Invalid direction '{direction}'. Use 'push' or 'pull'."}
-            )
+            return json.dumps({"error": f"Invalid direction '{direction}'. Use 'push' or 'pull'."})
 
         # Parse entity_types — comma-separated or single
         types_list = [t.strip() for t in entity_types.split(",") if t.strip()] or ["runs"]
@@ -905,28 +915,48 @@ from carl_studio.mcp.tasks import async_task, register_task_tools  # noqa: E402
 from carl_studio.mcp.output_schemas import register_output_schemas  # noqa: E402
 
 
-async def _start_training_body(config_yaml: str) -> dict[str, object]:
+async def _start_training_body(
+    config_yaml: str, prepared_plan_id: str | None = None
+) -> dict[str, object]:
     """Shared training body — reused by sync ``start_training`` and the async version."""
     import yaml
     from carl_studio.types.config import TrainingConfig
-    from carl_studio.training.trainer import CARLTrainer
+    from carl_studio.training.pipeline import submit_training
 
-    raw: dict[str, object] = yaml.safe_load(config_yaml) or {}
-    config = TrainingConfig(**raw)  # type: ignore[arg-type]
-    trainer = CARLTrainer(config)
-    run = await trainer.train()
+    try:
+        raw = yaml.safe_load(config_yaml) or {}
+        config = TrainingConfig.model_validate(raw)
+    except (ValueError, yaml.YAMLError):
+        from carl_core.errors import ValidationError
+
+        raise ValidationError(
+            "Invalid training configuration", code="carl.preparation.config"
+        ) from None
+    from carl_studio.harness.runtime import get_runtime
+    from carl_core.errors import PermissionError as CARLPermissionError
+
+    context = get_runtime().context
+    if context.depth > 0 and not context.allow_write:
+        raise CARLPermissionError(
+            "Training requires an authorized write scope", code="carl.training.permission"
+        )
+    run = await submit_training(config, prepared_plan_id=prepared_plan_id)
     return {
         "run_id": run.id,
         "phase": run.phase.value,
         "hub_job_id": run.hub_job_id,
         "model": config.base_model,
         "method": config.method.value,
+        "checkpoint": run.checkpoint,
+        "acceptance": run.acceptance.model_dump(mode="json") if run.acceptance else None,
     }
 
 
 @mcp.tool()
 @async_task("submit_async_training")
-async def submit_async_training(config_yaml: str) -> dict[str, object]:
+async def submit_async_training(
+    config_yaml: str, prepared_plan_id: str | None = None
+) -> dict[str, object]:
     """Submit a CARL training run asynchronously.
 
     Returns a task handle immediately. Poll ``tasks_get(task_id)`` to
@@ -934,7 +964,7 @@ async def submit_async_training(config_yaml: str) -> dict[str, object]:
     ``start_training`` shape (``run_id``, ``phase``, ``hub_job_id``,
     ``model``, ``method``).
     """
-    return await _start_training_body(config_yaml)
+    return await _start_training_body(config_yaml, prepared_plan_id)
 
 
 @mcp.tool(name="carl.presence.self")

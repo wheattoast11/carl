@@ -10,7 +10,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from carl_studio.types.preparation import TrainingGoal
 
 
 class ComputeTarget(str, Enum):
@@ -196,8 +198,18 @@ class ObservationConfig(BaseModel):
 class TrainingConfig(BaseModel):
     """Full training configuration for a carl-studio run."""
 
+    model_config = ConfigDict(hide_input_in_errors=True)
+
     # Identity
     run_name: str = Field(description="Human-readable run name")
+    adapter: str = Field(default="trl", description="Registered training adapter")
+    goal: TrainingGoal | None = None
+    output_dir: Path | None = None
+    base_model_revision: str | None = None
+    sft_adapter: str | None = None
+    starting_adapters: list[str] = Field(default_factory=list)
+    pipeline: bool = False
+    resume_from_checkpoint: str | None = None
     base_model: str = Field(description="HuggingFace model ID (e.g. 'your-org/your-model')")
     output_repo: str = Field(
         description="HuggingFace repo to push results (e.g. 'your-org/your-model-phase1')"

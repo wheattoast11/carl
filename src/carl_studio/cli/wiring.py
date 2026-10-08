@@ -297,9 +297,7 @@ try:
 
     camp_app.add_typer(contract_app, name="contract")
 except ImportError:
-    _make_stub(
-        camp_app, "contract", doc="Contract commands require the full carl-studio package."
-    )
+    _make_stub(camp_app, "contract", doc="Contract commands require the full carl-studio package.")
 
 
 # ---------------------------------------------------------------------------
@@ -455,14 +453,8 @@ try:
         # router is not needed (e.g. on ``carl <verb>``).
         from carl_studio.cli.entry import route
 
-        # The callback fires with ``sys.argv`` already stripped of the
-        # program name and of any consumed group-level options. The
-        # router inspects the full slice so it can reach the positional
-        # prompt / ``-p`` shapes that Typer's callback context does not
-        # expose directly.
-        import sys as _sys
-
-        handled = route(list(_sys.argv[1:]))
+        # Click's arguments belong to this invocation, unlike process argv.
+        handled = route(list(ctx.args))
         if handled:
             return
 
@@ -471,8 +463,7 @@ try:
         # to v0.17.x for operators who rely on the existing output.
         typer.echo(ctx.get_help())
         typer.echo(
-            "\nUse `carl chat` for an interactive session or "
-            "`carl ask \"<prompt>\"` for one-shot."
+            '\nUse `carl chat` for an interactive session or `carl ask "<prompt>"` for one-shot.'
         )
 
 except ImportError:

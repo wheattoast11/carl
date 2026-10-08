@@ -15,6 +15,8 @@ stdlib + carl_studio types only.
 from __future__ import annotations
 
 import logging
+import asyncio
+import math
 import re
 import uuid
 from pathlib import Path
@@ -139,10 +141,13 @@ class CARLTrainer:
         resume_from_checkpoint: bool | str | None = None,
         interaction_chain: InteractionChain | None = None,
         training_step_interval: int = 100,
+        task_reward_funcs: list[Any] | None = None,
+        task_reward_weights: list[float] | None = None,
+        task_reward_stages: list[str] | None = None,
     ) -> None:
         self.config = config
         self.skip_credits = bool(skip_credits)
-        self.resume_from_checkpoint = resume_from_checkpoint
+        self.resume_from_checkpoint = resume_from_checkpoint or config.resume_from_checkpoint
         self.run = TrainingRun(
             id=uuid.uuid4().hex[:12],
             config=config,
@@ -152,15 +157,34 @@ class CARLTrainer:
         self._tokenizer: Any = None
         self._cascade_manager: Any = None
         self._reward_fns: list[Any] = []
+        from threading import Event
+
+        self._cancel_requested = Event()
+        if task_reward_funcs is not None:
+            from carl_studio.training.preparation import checked_reward
+
+            if not task_reward_funcs:
+                raise ValueError("Task rewards must be nonempty")
+            self._task_reward_funcs = [checked_reward(function) for function in task_reward_funcs]
+        else:
+            self._task_reward_funcs = None
+        self._task_reward_weights = task_reward_weights or [1.0] * len(task_reward_funcs or [])
+        self._task_reward_stages = task_reward_stages or ["A"] * len(task_reward_funcs or [])
+        if len(self._task_reward_weights) != len(task_reward_funcs or []) or len(
+            self._task_reward_stages
+        ) != len(task_reward_funcs or []):
+            raise ValueError("Task reward bindings must align")
+        if any(weight <= 0 or not math.isfinite(weight) for weight in self._task_reward_weights):
+            raise ValueError("Task reward weights must be finite and positive")
+        if any(stage not in {"A", "B"} for stage in self._task_reward_stages):
+            raise ValueError("Task reward stage must be A or B")
         # --- InteractionChain plumbing -------------------------------------
         # When a chain is provided, the trainer emits TRAINING_STEP (every
         # ``training_step_interval`` global steps), CHECKPOINT (on save) and
         # a bracketing ``training.start``/``training.complete`` step pair.
         self.chain: InteractionChain | None = interaction_chain
         if training_step_interval < 1:
-            raise ValueError(
-                f"training_step_interval must be >= 1, got {training_step_interval}"
-            )
+            raise ValueError(f"training_step_interval must be >= 1, got {training_step_interval}")
         self._step_interval = int(training_step_interval)
 
     def _record(
@@ -206,10 +230,27 @@ class CARLTrainer:
                 return await self._train_remote()
             else:
                 return await self._train_local()
+        except asyncio.CancelledError:
+            self._cancel_requested.set()
+            self.run.phase = RunPhase.PAUSED
+            if self.is_remote:
+                from carl_core.errors import CARLError
+
+                raise CARLError(
+                    "Remote submission requires reconciliation", code="carl.training.reconcile"
+                ) from None
+            raise
         except Exception as exc:
             self.run.phase = RunPhase.FAILED
-            self.run.error_message = f"{type(exc).__name__}: {exc}"
-            logger.error("Training failed: %s", exc, exc_info=True)
+            self.run.error_message = (
+                f"{type(exc).__name__}: training failed"
+                if self.config.goal is not None
+                else f"{type(exc).__name__}: {exc}"
+            )
+            if self.config.goal is not None:
+                logger.error("Training failed: %s", type(exc).__name__)
+            else:
+                logger.error("Training failed: %s", exc, exc_info=True)
             return self.run
 
     async def watch(
@@ -771,6 +812,15 @@ class CARLTrainer:
                 )
                 logger.info("Model loaded via AutoModelForCausalLM (Unsloth not available)")
 
+        for adapter in cfg.starting_adapters:
+            from peft import PeftModel
+
+            self._model = PeftModel.from_pretrained(self._model, adapter).merge_and_unload()
+        if cfg.sft_adapter:
+            from peft import PeftModel
+
+            self._model = PeftModel.from_pretrained(self._model, cfg.sft_adapter).merge_and_unload()
+
         # Suppress Qwen3.5 thinking mode if requested — model generates
         # <think>...</think> prefix by default, burning completion budget.
         if cfg.disable_thinking and hasattr(self._model, "generation_config"):
@@ -839,6 +889,7 @@ class CARLTrainer:
         raised — masking the caller's original exception would be worse
         than losing the crash-state snapshot.
         """
+
         def _safe_capture(label: str, fn: Any) -> Any:
             """Call fn() and return its result; log and return None on any failure."""
             try:
@@ -913,7 +964,6 @@ class CARLTrainer:
     async def _run_sft(self) -> None:
         """Run SFT training with TRL SFTTrainer."""
         try:
-            from datasets import load_dataset
             from peft import LoraConfig as PeftLoraConfig
             from trl import SFTConfig, SFTTrainer
         except ImportError as exc:
@@ -922,11 +972,13 @@ class CARLTrainer:
         cfg = self.config
         hf_token = self._get_hf_token()
 
-        dataset = load_dataset(cfg.dataset_repo, split=cfg.dataset_split, token=hf_token)
+        dataset = self._load_training_dataset(cfg.dataset_repo, cfg.dataset_split, hf_token)
 
         eval_dataset = None
         if cfg.eval_dataset_repo:
-            eval_dataset = load_dataset(cfg.eval_dataset_repo, split=cfg.eval_split, token=hf_token)
+            eval_dataset = self._load_training_dataset(
+                cfg.eval_dataset_repo, cfg.eval_split, hf_token
+            )
 
         peft_config = PeftLoraConfig(
             r=cfg.lora.r,
@@ -937,7 +989,7 @@ class CARLTrainer:
             task_type="CAUSAL_LM",
         )
 
-        output_dir = f"carl-sft-{self.run.id}"
+        output_dir = str(cfg.output_dir or (Path.home() / ".carl" / "runs" / self.run.id / "model"))
         self._announce_existing_checkpoint(output_dir)
 
         training_args = self._build_sft_training_args(
@@ -955,11 +1007,8 @@ class CARLTrainer:
 
         resume = self._resolve_resume_arg(output_dir)
         try:
-            if resume is None:
-                trainer.train()
-            else:
-                trainer.train(resume_from_checkpoint=resume)
-        except (Exception, KeyboardInterrupt) as exc:
+            await self._fit(trainer, resume)
+        except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
             self._save_carl_checkpoint(trainer, output_dir, exc)
             self._record(
                 ActionType.CHECKPOINT,
@@ -970,6 +1019,7 @@ class CARLTrainer:
             )
             raise
 
+        self._retain_checkpoint(trainer, output_dir)
         self._record(
             ActionType.CHECKPOINT,
             "sft.save",
@@ -998,7 +1048,6 @@ class CARLTrainer:
             pass  # Unsloth not installed; standard TRL path
 
         try:
-            from datasets import load_dataset
             from peft import LoraConfig as PeftLoraConfig
             from trl import GRPOConfig, GRPOTrainer
         except ImportError as exc:
@@ -1007,11 +1056,13 @@ class CARLTrainer:
         cfg = self.config
         hf_token = self._get_hf_token()
 
-        dataset = load_dataset(cfg.dataset_repo, split=cfg.dataset_split, token=hf_token)
+        dataset = self._load_training_dataset(cfg.dataset_repo, cfg.dataset_split, hf_token)
 
         eval_dataset = None
         if cfg.eval_dataset_repo:
-            eval_dataset = load_dataset(cfg.eval_dataset_repo, split=cfg.eval_split, token=hf_token)
+            eval_dataset = self._load_training_dataset(
+                cfg.eval_dataset_repo, cfg.eval_split, hf_token
+            )
 
         # Build reward chain with cascade wrapping
         self._reward_fns = self._build_rewards(self._model, self._tokenizer)
@@ -1028,7 +1079,7 @@ class CARLTrainer:
             task_type="CAUSAL_LM",
         )
 
-        output_dir = f"carl-grpo-{self.run.id}"
+        output_dir = str(cfg.output_dir or (Path.home() / ".carl" / "runs" / self.run.id / "model"))
         self._announce_existing_checkpoint(output_dir)
 
         training_args = self._build_grpo_training_args(
@@ -1048,11 +1099,8 @@ class CARLTrainer:
 
         resume = self._resolve_resume_arg(output_dir)
         try:
-            if resume is None:
-                trainer.train()
-            else:
-                trainer.train(resume_from_checkpoint=resume)
-        except (Exception, KeyboardInterrupt) as exc:
+            await self._fit(trainer, resume)
+        except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
             self._save_carl_checkpoint(trainer, output_dir, exc)
             self._record(
                 ActionType.CHECKPOINT,
@@ -1063,6 +1111,7 @@ class CARLTrainer:
             )
             raise
 
+        self._retain_checkpoint(trainer, output_dir)
         self._record(
             ActionType.CHECKPOINT,
             "grpo.save",
@@ -1248,6 +1297,13 @@ class CARLTrainer:
             (task_rewards["conciseness"], {"A", "B"}, 0.5),
             (carl_fn, {"B"}, 1.5),
         ]
+        if self._task_reward_funcs is not None:
+            reward_specs = [
+                (function, {"A", "B"} if stage == "A" else {"B"}, weight)
+                for function, weight, stage in zip(
+                    self._task_reward_funcs, self._task_reward_weights, self._task_reward_stages
+                )
+            ] + [(carl_fn, {"B"}, 1.5)]
 
         wrapped: list[Any] = []
         for fn, stages, weight in reward_specs:
@@ -1256,6 +1312,86 @@ class CARLTrainer:
             wrapped.append(weighted_fn)
 
         return wrapped
+
+    async def _fit(self, trainer: Any, resume: bool | str | None) -> None:
+        """Keep the event loop responsive and wait for cancellation cleanup."""
+        from transformers import TrainerCallback
+        from carl_studio.training.preparation import run_in_worker
+
+        stop = self._cancel_requested
+
+        class StopCallback(TrainerCallback):
+            def on_step_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> Any:
+                if stop.is_set():
+                    control.should_training_stop = True
+                    control.should_save = True
+                return control
+
+        trainer.add_callback(StopCallback())
+
+        def fit() -> None:
+            if resume is None:
+                trainer.train()
+            else:
+                trainer.train(resume_from_checkpoint=resume)
+
+        await run_in_worker(fit, on_cancel=stop.set)
+        if stop.is_set():
+            raise asyncio.CancelledError()
+
+    def _load_training_dataset(self, source: str, split: str, token: str | None) -> Any:
+        from datasets import Dataset, load_dataset
+
+        path = Path(source)
+        if not path.is_file():
+            return load_dataset(source, split=split, token=token)
+        from carl_studio.training.preparation import normalize_samples, read_samples
+
+        samples = normalize_samples(read_samples(path), str(path.resolve()))
+        rows = []
+        for sample in samples:
+            row = dict(sample.metadata)
+            row.update(
+                {
+                    "prompt": sample.prompt,
+                    "verification": sample.verification.model_dump(),
+                    "id": sample.id,
+                }
+            )
+            if sample.golden_solution is not None:
+                row["completion"] = [{"role": "assistant", "content": sample.golden_solution}]
+            rows.append(row)
+        return Dataset.from_list(rows)
+
+    def _retain_checkpoint(self, trainer: Any, output_dir: str) -> None:
+        """Save the actual candidate before evaluation or publication."""
+        from carl_core.hashing import content_hash
+
+        from carl_studio.experiment.types import Artifact
+        from carl_studio.training.preparation import file_hash
+
+        trainer.save_model(output_dir)
+        self._tokenizer.save_pretrained(output_dir)
+        root = Path(output_dir).resolve()
+        manifest = {
+            str(path.relative_to(root)): file_hash(path)
+            for path in sorted(root.rglob("*"))
+            if path.is_file()
+        }
+        if not manifest:
+            raise ValueError("Training did not produce a checkpoint")
+        self.run.checkpoint = str(root)
+        self.run.current_step = int(getattr(trainer.state, "global_step", 0))
+        self.run.resource_usage["training_steps"] = float(self.run.current_step)
+        self.run.artifacts.append(
+            Artifact(
+                name="checkpoint",
+                path=str(root),
+                artifact_type="checkpoint",
+                produced_at=self.run.id,
+                checksum=content_hash(manifest),
+            )
+        )
 
     def _load_task_rewards(self) -> dict[str, Any]:
         """Load task reward functions from carl_studio.training.rewards.

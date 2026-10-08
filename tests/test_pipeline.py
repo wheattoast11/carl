@@ -71,8 +71,9 @@ def test_pipeline_validation_failure_missing_token() -> None:
     pipeline = SendItPipeline(_make_config(compute_target="l4x1"))
 
     # Force no HF token discoverable.
-    with patch("huggingface_hub.get_token", return_value=None), patch(
-        "os.environ.get", return_value=None
+    with (
+        patch("huggingface_hub.get_token", return_value=None),
+        patch("os.environ.get", return_value=None),
     ):
         run = asyncio.run(pipeline.run())
 
@@ -111,8 +112,9 @@ def test_pipeline_emits_validate_events() -> None:
     )
 
     # Force validation failure so we stop early.
-    with patch("huggingface_hub.get_token", return_value=None), patch(
-        "os.environ.get", return_value=None
+    with (
+        patch("huggingface_hub.get_token", return_value=None),
+        patch("os.environ.get", return_value=None),
     ):
         asyncio.run(pipeline.run())
 
@@ -135,12 +137,11 @@ def test_skip_credits_propagates_to_trainer_single_stage() -> None:
     )
 
     # Bypass validation + instantiate a mock trainer that records the args.
-    with patch.object(pipeline, "_validate", return_value=[]), patch(
-        "carl_studio.training.trainer.CARLTrainer"
-    ) as mock_trainer_cls:
-        fake_run = TrainingRun(
-            id="fake", config=pipeline.config, phase=RunPhase.COMPLETE
-        )
+    with (
+        patch.object(pipeline, "_validate", return_value=[]),
+        patch("carl_studio.training.trainer.CARLTrainer") as mock_trainer_cls,
+    ):
+        fake_run = TrainingRun(id="fake", config=pipeline.config, phase=RunPhase.COMPLETE)
         mock_trainer = MagicMock()
         mock_trainer.train_and_watch = AsyncMock(return_value=fake_run)
         mock_trainer.is_remote = True
@@ -178,10 +179,11 @@ def test_skip_credits_propagates_to_both_trainers_in_full_pipeline() -> None:
         trainer.is_remote = False  # Skip the watch() call.
         return trainer
 
-    with patch.object(pipeline, "_validate", return_value=[]), patch(
-        "carl_studio.training.trainer.CARLTrainer", side_effect=fake_trainer_cls
-    ), patch.object(pipeline, "_check_gate", return_value=True), patch.object(
-        pipeline, "_push_model", new=AsyncMock()
+    with (
+        patch.object(pipeline, "_validate", return_value=[]),
+        patch("carl_studio.training.trainer.CARLTrainer", side_effect=fake_trainer_cls),
+        patch.object(pipeline, "_check_gate", return_value=True),
+        patch.object(pipeline, "_push_model", new=AsyncMock()),
     ):
         asyncio.run(pipeline.run())
 
@@ -217,8 +219,9 @@ def test_sft_failure_aborts_before_grpo() -> None:
         trainer.is_remote = False
         return trainer
 
-    with patch.object(pipeline, "_validate", return_value=[]), patch(
-        "carl_studio.training.trainer.CARLTrainer", side_effect=fake_trainer_cls
+    with (
+        patch.object(pipeline, "_validate", return_value=[]),
+        patch("carl_studio.training.trainer.CARLTrainer", side_effect=fake_trainer_cls),
     ):
         run = asyncio.run(pipeline.run())
 
@@ -240,11 +243,111 @@ def test_sft_gate_failure_aborts_before_grpo() -> None:
         trainer.is_remote = False
         return trainer
 
-    with patch.object(pipeline, "_validate", return_value=[]), patch(
-        "carl_studio.training.trainer.CARLTrainer", side_effect=fake_trainer_cls
-    ), patch.object(pipeline, "_check_gate", return_value=False):
+    with (
+        patch.object(pipeline, "_validate", return_value=[]),
+        patch("carl_studio.training.trainer.CARLTrainer", side_effect=fake_trainer_cls),
+        patch.object(pipeline, "_check_gate", return_value=False),
+    ):
         run = asyncio.run(pipeline.run())
 
     assert created == ["sft"], "GRPO should not run when SFT gate fails"
     assert run.phase == RunPhase.FAILED
     assert "SFT eval gate failed" in (run.error_message or "")
+
+
+def test_final_gate_failure_prevents_push() -> None:
+    pipeline = SendItPipeline(_make_config(method="grpo"))
+
+    def trainer(config: TrainingConfig, **_kwargs: Any) -> Any:
+        result = MagicMock()
+        result.is_remote = False
+        result.train = AsyncMock(
+            return_value=TrainingRun(id="stage", config=config, phase=RunPhase.COMPLETE)
+        )
+        return result
+
+    push = AsyncMock()
+    with (
+        patch.object(pipeline, "_validate", return_value=[]),
+        patch("carl_studio.training.trainer.CARLTrainer", side_effect=trainer),
+        patch.object(pipeline, "_check_gate", side_effect=[True, False]),
+        patch.object(pipeline, "_push_model", push),
+    ):
+        run = asyncio.run(pipeline.run())
+    assert run.phase == RunPhase.FAILED
+    push.assert_not_awaited()
+
+
+def test_single_stage_gate_failure_prevents_push() -> None:
+    pipeline = SendItPipeline(_make_config())
+    trainer = MagicMock()
+    trainer.train_and_watch = AsyncMock(
+        return_value=TrainingRun(id="stage", config=pipeline.config, phase=RunPhase.COMPLETE)
+    )
+    push = AsyncMock()
+    with (
+        patch.object(pipeline, "_validate", return_value=[]),
+        patch("carl_studio.training.trainer.CARLTrainer", return_value=trainer),
+        patch.object(pipeline, "_check_gate", return_value=False) as gate,
+        patch.object(pipeline, "_push_model", push),
+    ):
+        run = asyncio.run(pipeline.run())
+    gate.assert_called_once()
+    assert run.phase == RunPhase.FAILED
+    push.assert_not_awaited()
+
+
+def test_gate_uses_stage_artifact_and_heldout_data() -> None:
+    config = _make_config(method="grpo", eval_dataset_repo="heldout/tasks", eval_split="validation")
+    stage_config = config.model_copy(update={"method": "sft"})
+    run = TrainingRun(
+        id="sft", config=stage_config, phase=RunPhase.COMPLETE, checkpoint="stage/checkpoint"
+    )
+    with (
+        patch("carl_studio.eval.runner.EvalRunner") as runner,
+        patch("carl_studio.eval.runner.EvalGate") as gate,
+    ):
+        gate.return_value.check.return_value = True
+        SendItPipeline(config)._check_gate(run)
+    observed = runner.call_args.args[0]
+    assert observed.checkpoint == "stage/checkpoint"
+    assert observed.dataset == "heldout/tasks"
+    assert observed.dataset_split == "validation"
+    assert observed.phase == "auto"
+
+
+def test_stage_gate_keeps_declared_goal_and_starting_adapter() -> None:
+    from carl_studio.types.preparation import TrainingGoal
+
+    config = _make_config(
+        method="sft",
+        sft_adapter="original-A",
+        tokenizer_source="selected-tokenizer",
+        max_completion_length=128,
+        goal=TrainingGoal(
+            primary_metric="error_rate",
+            direction="lower",
+            threshold=0.2,
+            coherence_phi_floor=0.4,
+            discontinuity_min=0.4,
+            discontinuity_max=0.6,
+            max_eval_samples=12,
+        ),
+    )
+    run = TrainingRun(id="stage", config=config, phase=RunPhase.COMPLETE, checkpoint="SFT-B")
+    with (
+        patch("carl_studio.eval.runner.EvalRunner") as runner,
+        patch("carl_studio.eval.runner.EvalGate") as gate,
+    ):
+        gate.return_value.check.return_value = True
+        SendItPipeline(config, evaluator=lambda *_: {})._check_gate(run)
+    observed = runner.call_args.args[0]
+    assert observed.sft_adapter == "original-A"
+    assert observed.tokenizer_source == "selected-tokenizer"
+    assert observed.threshold == 0.2
+    assert observed.metric_direction == "lower"
+    assert observed.coherence_phi_floor == 0.4
+    assert observed.discontinuity_min == 0.4
+    assert observed.discontinuity_max == 0.6
+    assert observed.max_samples == 12
+    assert observed.max_new_tokens == 128

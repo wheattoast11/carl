@@ -31,6 +31,10 @@ class Bundler:
 
     def generate(self, config: TrainingConfig) -> str:
         """Generate a self-contained training script."""
+        if config.goal is not None:
+            raise ValueError(
+                "Prepared goals require a backend that carries their reward and evaluation bindings"
+            )
         if config.method.value in ("grpo",):
             return self._generate_grpo(config)
         elif config.method.value == "sft":

@@ -1,0 +1,478 @@
+{
+  "last_updated": "2026-10-08",
+  "author": "Codex",
+  "applies_to": "carl-studio 0.21.0",
+  "artifact_contract": "ConstructionReceipt",
+  "construction_contract": "docs/plans/2026-10-08-carl-prepared-training.md",
+  "baseline": "5be38462a9c3dba089e24f1386a945dc2469b99c",
+  "branch": "codex/carl-prepared-training",
+  "pre_existing_dirty": [],
+  "owned_files": [
+    ".claude/skills/terminals/carl.md",
+    "README.md",
+    "docs/carl-prepared-training-receipt.json",
+    "docs/carl-prepared-training-verification.md",
+    "docs/plans/2026-10-08-carl-prepared-training.md",
+    "scripts/witness_native_harness.py",
+    "skills/carl/SKILL.md",
+    "src/carl_studio/__init__.py",
+    "src/carl_studio/adapters/protocol.py",
+    "src/carl_studio/adapters/registry.py",
+    "src/carl_studio/adapters/trl_adapter.py",
+    "src/carl_studio/bundler.py",
+    "src/carl_studio/cli/entry.py",
+    "src/carl_studio/cli/project_data.py",
+    "src/carl_studio/cli/shared.py",
+    "src/carl_studio/cli/training.py",
+    "src/carl_studio/cli/wiring.py",
+    "src/carl_studio/eval/runner.py",
+    "src/carl_studio/experiment/manager.py",
+    "src/carl_studio/mcp/output_schemas.py",
+    "src/carl_studio/mcp/protocol.py",
+    "src/carl_studio/mcp/server.py",
+    "src/carl_studio/mcp/tasks.py",
+    "src/carl_studio/run_diff.py",
+    "src/carl_studio/training/acceptance.py",
+    "src/carl_studio/training/pipeline.py",
+    "src/carl_studio/training/preparation.py",
+    "src/carl_studio/training/trainer.py",
+    "src/carl_studio/types/config.py",
+    "src/carl_studio/types/preparation.py",
+    "src/carl_studio/types/run.py",
+    "tests/test_mcp_tasks.py",
+    "tests/test_mcp_v2_wire.py",
+    "tests/test_pipeline.py",
+    "tests/test_prepared_training.py",
+    "tests/test_run_diff.py"
+  ],
+  "source_sha256": {
+    ".claude/skills/terminals/carl.md": "22fe5b356980c6ca4465a78ec85187701f0214d59c06fc40a4ae285647ac1136",
+    "README.md": "83511abd82c39409198de295cd64b3bcbddbe4b80010d2793faaddce71d112ca",
+    "scripts/witness_native_harness.py": "e83b3b590d9b6d18de2cfc71e3dc830570b1ae86dfec000efd916fc278dbb8fc",
+    "skills/carl/SKILL.md": "3b0042b3d8db2796b2a90149b17440f2bff496657d66d7e6ce962566539b26e7",
+    "src/carl_studio/__init__.py": "5676ceae188261610fe454e0175f99d9fc8aefb7b4caa64a0f16141315cfb4fe",
+    "src/carl_studio/adapters/protocol.py": "19172f3e106084170e060c6abfcd61e87b44f9b9ba894371ab058550444250f5",
+    "src/carl_studio/adapters/registry.py": "065281d6affa0bb1e5d63641b93ef7f04953df7ab1f52f525e970af749d738cf",
+    "src/carl_studio/adapters/trl_adapter.py": "f3c4a9b3843a7e1caabb2917b95e31f477e85efda16ec5596544e43efd124748",
+    "src/carl_studio/bundler.py": "c4cd4706013544e1de5f14e02b402022c68961cb5e490dc8e95901356e81f03a",
+    "src/carl_studio/cli/entry.py": "d2ef0cc96deba7c3ff8e4415d5a8e5c6e4d9a7603b3055419181157990236273",
+    "src/carl_studio/cli/project_data.py": "05d800f79be1b87db2c57a2a183e7f533dce3366cfe5842663cea9f0fcd4423d",
+    "src/carl_studio/cli/shared.py": "d6b4a218f25a2f2363fe99445ae0e2f670899602feef7fc1ebb42a4848aacf8b",
+    "src/carl_studio/cli/training.py": "670a33567137f21b9bf81b85b070b27313e5bdd695bfbefd3e3046f323ac7797",
+    "src/carl_studio/cli/wiring.py": "cf0c7f5893f5a4fd5527cfebe81321d00784816d147cc438375f53406d243ff6",
+    "src/carl_studio/eval/runner.py": "be8d8118e8d412cc7849fffe5717fd20edf31ee9762df58318ca3c45985bf226",
+    "src/carl_studio/experiment/manager.py": "0a0d9663136d27f4786334ba2b0dae9a2d1687773bd06cdf412b2ee4b106927b",
+    "src/carl_studio/mcp/output_schemas.py": "4d907752a53da8322267a717ec2428e6f367442b33525a9bf44b618a6a50bb01",
+    "src/carl_studio/mcp/protocol.py": "854b3c6a123f9509257775e349fdf19bc40c6b2e74598895d7a0759914537f5a",
+    "src/carl_studio/mcp/server.py": "3a196f8eede2f5c95333d7d5607f23ea9023cec6333191af6d9d9acc715cc1e8",
+    "src/carl_studio/mcp/tasks.py": "a6d3a3a4f10381e0d8335f1f65c16e0400d366f551557d21fa5e151c3b80150d",
+    "src/carl_studio/run_diff.py": "f9dbcd4ae1f33fe592b30275e91fb83dac2761bd416b56d67076e956d840a6ee",
+    "src/carl_studio/training/acceptance.py": "83971e4018606c646f990f3542216875be62af1c05c06f69285e0d0bc60a26da",
+    "src/carl_studio/training/pipeline.py": "0f5f07548707946bb5541159dc359b8c8af6644b39f99a5a03ae56ca4d9a55f3",
+    "src/carl_studio/training/preparation.py": "b6073c9395a801c3ec0e65921a5e683f429525669febd5f845f0f17a1ca66372",
+    "src/carl_studio/training/trainer.py": "40c6dc1b76360dd3fe0bff01f3d67490aeb49638bda9631fc654bd30c7fe03c6",
+    "src/carl_studio/types/config.py": "1d4d250a020d70560e9132a25d36c8ee51a116eb1d6900eb6562dbf0b41e9aee",
+    "src/carl_studio/types/preparation.py": "09d09571c0d1095fd2522d69bab971bfab3abc35ddf3afd53c2fd8729a1fc06c",
+    "src/carl_studio/types/run.py": "5f307c04d2d43fdc34395333d4e6eba76940da342cdd7d71594aaa8bf5bcd3cc",
+    "tests/test_mcp_tasks.py": "fb9a8f4ce1d194050df7cf88abc672a7be1e2e66ddeb201df2efc1479c4c20f1",
+    "tests/test_mcp_v2_wire.py": "63a6d2cd44e3cc4d3a3d3e054e0ba36104fb520062410e3cc87140ad11c2fecb",
+    "tests/test_pipeline.py": "3592cfca535837a800a462b31ea635cb69ce638007e739514998ac178a91d4ba",
+    "tests/test_prepared_training.py": "c3b79a6d44bbc73c7d52c37e5256ee6aa5d2691b3e337e2c83b9240ee6401741",
+    "tests/test_run_diff.py": "67b717b93b0b04cfc6827c4d61604f778a3cdcc3d885b7049196e52745e27044"
+  },
+  "verification": {
+    "suite": {
+      "command": "HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 .venv/bin/python -m pytest tests/ packages/carl-core/tests/ -q --tb=short -p no:cacheprovider",
+      "passed": 4378,
+      "skipped": 29,
+      "warnings": 77,
+      "elapsed_seconds": 88.39,
+      "evidence": "Executed offline tests with model/trainer/generation fixtures"
+    },
+    "pyright": {
+      "command": ".venv/bin/pyright src/carl_studio/types/preparation.py src/carl_studio/training/preparation.py src/carl_studio/training/acceptance.py",
+      "errors": 0,
+      "warnings": 0
+    },
+    "ruff": {
+      "command": ".venv/bin/ruff check src/carl_studio/types/preparation.py src/carl_studio/training/preparation.py src/carl_studio/training/acceptance.py tests/test_prepared_training.py tests/test_pipeline.py tests/test_mcp_v2_wire.py",
+      "status": "passed",
+      "changed_set_baseline_diagnostics": 164,
+      "changed_set_current_diagnostics": 160,
+      "introduced_diagnostics": []
+    },
+    "trl_config_constructors": {
+      "version": "1.14.2",
+      "methods": [
+        "SFT",
+        "GRPO"
+      ],
+      "max_steps": 64,
+      "push_to_hub": false,
+      "model_loading": false,
+      "warning": "Optional bitsandbytes CPU kernel trust warning; trust settings unchanged"
+    },
+    "wheel_python_files_matched": 297,
+    "built_wheel_import": "passed",
+    "optional_imports": "lazy",
+    "native_preparation": [
+      {
+        "host": "codex",
+        "receipt": "/var/home/zero/carl/build/native-probes/codex-prepare-8ce477/receipt.json",
+        "elapsed_s": 1.92,
+        "source_hashes_match": true
+      },
+      {
+        "host": "claude",
+        "receipt": "/var/home/zero/carl/build/native-probes/claude-prepare-4aca6f/receipt.json",
+        "elapsed_s": 3.12,
+        "source_hashes_match": true
+      },
+      {
+        "host": "opencode",
+        "receipt": "/var/home/zero/carl/build/native-probes/opencode-prepare-cf0630/receipt.json",
+        "elapsed_s": 4.54,
+        "source_hashes_match": true
+      }
+    ],
+    "native_provider": "synthetic localhost",
+    "model_training_executed": false
+  },
+  "artifacts": {
+    "wheel": {
+      "path": "build/prepared-training/carl_studio-0.21.0-py3-none-any.whl",
+      "sha256": "f040079c70c493da354b1ea5f1ecdf20cf0b2bc2ff647ac9b12b9e2c61a40757"
+    },
+    "sdist": {
+      "path": "build/prepared-training/carl_studio-0.21.0.tar.gz",
+      "sha256_record": "build/prepared-training/artifact-receipt.json"
+    }
+  },
+  "review": {
+    "status": "complete",
+    "verdict": "Ready with fixes",
+    "reviewers": [
+      "correctness",
+      "project-standards",
+      "testing",
+      "maintainability",
+      "agent-native",
+      "security",
+      "performance",
+      "api-contract",
+      "reliability",
+      "adversarial"
+    ],
+    "actionable_findings": [
+      {
+        "#": 1,
+        "autofix_class": "gated_auto",
+        "confidence": 100,
+        "file": "src/carl_studio/cli/training.py",
+        "first_evidence": "src/carl_studio/cli/training.py:713:    if prepared_plan_id is not None or training_config.goal is not None:",
+        "independent_reviewers": [
+          "api-contract",
+          "correctness"
+        ],
+        "line": 713,
+        "owner": "downstream-resolver",
+        "pre_existing": false,
+        "requires_verification": true,
+        "reviewers": [
+          "api-contract",
+          "correctness"
+        ],
+        "severity": "P1",
+        "suggested_fix": "Handle --dry-run before prepared submission; assert submit_training is not called.",
+        "title": "Prepared dry runs execute training",
+        "why_it_matters": "A prepared dry run starts baseline evaluation and training before reaching the dry-run guard.",
+        "evidence": [
+          "src/carl_studio/cli/training.py:713:    if prepared_plan_id is not None or training_config.goal is not None:"
+        ],
+        "validated": true
+      },
+      {
+        "#": 2,
+        "autofix_class": "manual",
+        "confidence": 100,
+        "file": "src/carl_studio/training/pipeline.py",
+        "first_evidence": "src/carl_studio/eval/runner.py:1323 -- tokenizer = AutoTokenizer.from_pretrained(self.config.checkpoint)",
+        "independent_reviewers": [
+          "adversarial",
+          "correctness"
+        ],
+        "line": 582,
+        "owner": "downstream-resolver",
+        "pre_existing": false,
+        "requires_verification": true,
+        "reviewers": [
+          "adversarial",
+          "correctness"
+        ],
+        "severity": "P1",
+        "suggested_fix": "Propagate optional tokenizer_source through EvalConfig and every stage gate.",
+        "title": "Prepared baseline ignores the selected tokenizer",
+        "why_it_matters": "The baseline uses its checkpoint tokenizer while training and the candidate may use the selected override, invalidating comparison or failing chat formatting.",
+        "evidence": [
+          "src/carl_studio/eval/runner.py:1323 -- tokenizer = AutoTokenizer.from_pretrained(self.config.checkpoint)"
+        ],
+        "validated": true
+      },
+      {
+        "#": 3,
+        "autofix_class": "manual",
+        "confidence": 75,
+        "file": "src/carl_studio/training/pipeline.py",
+        "first_evidence": "src/carl_studio/training/pipeline.py:325 -- if not self._check_gate(run):",
+        "independent_reviewers": [
+          "performance"
+        ],
+        "line": 325,
+        "owner": "downstream-resolver",
+        "pre_existing": false,
+        "requires_verification": true,
+        "reviewers": [
+          "performance"
+        ],
+        "severity": "P1",
+        "suggested_fix": "Run stage evaluation gates in a shielded executor and await cleanup on cancellation.",
+        "title": "Pipeline evaluation gates stall status and cancellation",
+        "why_it_matters": "Synchronous model evaluation stalls the async pipeline, preventing status and cancellation processing.",
+        "evidence": [
+          "src/carl_studio/training/pipeline.py:325 -- if not self._check_gate(run):"
+        ],
+        "validated": true
+      },
+      {
+        "#": 4,
+        "autofix_class": "gated_auto",
+        "confidence": 100,
+        "file": "skills/carl/SKILL.md",
+        "first_evidence": "skills/carl/SKILL.md:15 -- Use the returned `prepared_plan_id` with `start_training` or",
+        "independent_reviewers": [
+          "agent-native",
+          "api-contract"
+        ],
+        "line": 15,
+        "owner": "downstream-resolver",
+        "pre_existing": false,
+        "requires_verification": true,
+        "reviewers": [
+          "agent-native",
+          "api-contract"
+        ],
+        "severity": "P2",
+        "suggested_fix": "Pass returned plan_id as prepared_plan_id; update canonical and projected guidance.",
+        "title": "Canonical skill names the wrong preparation response field",
+        "why_it_matters": "Agents are told to consume a field absent from the preparation result.",
+        "evidence": [
+          "skills/carl/SKILL.md:15 -- Use the returned `prepared_plan_id` with `start_training` or"
+        ],
+        "validated": true
+      },
+      {
+        "#": 5,
+        "autofix_class": "gated_auto",
+        "confidence": 75,
+        "file": "src/carl_studio/mcp/server.py",
+        "first_evidence": "src/carl_studio/mcp/server.py:446 -- prepared = prepare_config(config, project_root=Path(project_root) if project_root else None)",
+        "independent_reviewers": [
+          "performance"
+        ],
+        "line": 446,
+        "owner": "downstream-resolver",
+        "pre_existing": false,
+        "requires_verification": true,
+        "reviewers": [
+          "performance"
+        ],
+        "severity": "P2",
+        "suggested_fix": "Offload preparation and validation hashing to a worker with awaited cleanup.",
+        "title": "Checkpoint hashing blocks the MCP event loop",
+        "why_it_matters": "Exact hashing of model files runs synchronously on the MCP event loop and delays task controls.",
+        "evidence": [
+          "src/carl_studio/mcp/server.py:446 -- prepared = prepare_config(config, project_root=Path(project_root) if project_root else None)"
+        ],
+        "validated": true
+      },
+      {
+        "#": 6,
+        "autofix_class": "gated_auto",
+        "confidence": 75,
+        "file": "src/carl_studio/training/pipeline.py",
+        "first_evidence": "src/carl_studio/training/pipeline.py:566 -- evaluator = resolve_callable(prepared.goal.evaluator, root)",
+        "independent_reviewers": [
+          "security"
+        ],
+        "line": 566,
+        "owner": "downstream-resolver",
+        "pre_existing": false,
+        "requires_verification": true,
+        "reviewers": [
+          "security"
+        ],
+        "severity": "P2",
+        "suggested_fix": "Sanitize evaluator/reward/policy resolution failures before telemetry or task persistence.",
+        "title": "CWE-532 callable import errors escape sanitized boundary",
+        "why_it_matters": "A project module import exception can expose private text in MCP telemetry or asynchronous task failures.",
+        "evidence": [
+          "src/carl_studio/training/pipeline.py:566 -- evaluator = resolve_callable(prepared.goal.evaluator, root)"
+        ],
+        "validated": true
+      },
+      {
+        "#": 7,
+        "autofix_class": "gated_auto",
+        "confidence": 75,
+        "file": "src/carl_studio/training/pipeline.py",
+        "first_evidence": "src/carl_studio/training/pipeline.py:660 -- run = await pipeline.run()",
+        "independent_reviewers": [
+          "reliability"
+        ],
+        "line": 660,
+        "owner": "downstream-resolver",
+        "pre_existing": false,
+        "requires_verification": true,
+        "reviewers": [
+          "reliability"
+        ],
+        "severity": "P2",
+        "suggested_fix": "Retain the active pipeline stage TrainingRun before awaiting its execution.",
+        "title": "Pipeline cancellation persists placeholder instead of active stage",
+        "why_it_matters": "Cancellation saves a placeholder run instead of the active stage checkpoint and configuration needed for resume.",
+        "evidence": [
+          "src/carl_studio/training/pipeline.py:660 -- run = await pipeline.run()"
+        ],
+        "validated": true
+      },
+      {
+        "#": 8,
+        "autofix_class": "gated_auto",
+        "confidence": 75,
+        "file": "src/carl_studio/training/preparation.py",
+        "first_evidence": "src/carl_studio/training/preparation.py:650 -- config=config.model_dump(mode=\"json\"),",
+        "independent_reviewers": [
+          "security-extra"
+        ],
+        "line": 650,
+        "owner": "downstream-resolver",
+        "pre_existing": false,
+        "requires_verification": true,
+        "reviewers": [
+          "security-extra"
+        ],
+        "severity": "P2",
+        "suggested_fix": "Reject literal credential-shaped passthrough fields with a constant error; preserve numeric token budgets.",
+        "title": "CWE-200 preparation echoes and persists credential passthrough values",
+        "why_it_matters": "Unrestricted extra_args can contain literal credentials that preparation persists and returns through MCP.",
+        "evidence": [
+          "src/carl_studio/training/preparation.py:650 -- config=config.model_dump(mode=\"json\"),"
+        ],
+        "validated": true
+      }
+    ],
+    "testing_gaps": [
+      "The new running-worker cancellation branches in mcp/tasks.py:830-854 lack tool-level coverage: existing tests/test_mcp_tasks.py tool tests cover pending, terminal, and unknown tasks only. Add an owned running task whose cleanup is observable and verify cancellation waits for cleanup; also cover a running task absent from _live_tasks returning execution_not_owned without changing its persisted status.",
+      "Both new cancellation tests stop their fake worker by directly reading CARLTrainer._cancel_requested. Real TRL training instead stops when the registered callback sets control.should_training_stop, so these tests remain green if callback registration or its control update breaks. A callback-driven fake would cover the cancellation mechanism that prevents training from continuing after cancellation. Have the fake trainer invoke its registered on_step_end callback and terminate only when its returned control.should_training_stop becomes true; assert should_save too. Bound the thread and task waits so a broken callback fails instead of hanging the test process."
+    ],
+    "coverage": {
+      "local_personas": "All 10 terminal outcomes collected; security supplemental outcome collected.",
+      "cross_model": "Not started: explicit local-only task authorization; local adversarial fallback completed.",
+      "validators": "One fresh independent batch validated all 8 findings; no shortcut or dropped findings.",
+      "standards": "Root AGENTS.md and CLAUDE.md fallback; no designated CODING_STANDARDS or declared packs.",
+      "untracked_exclusions": [],
+      "mode_aware_demotions": 1,
+      "verification": "Parent reports frozen-byte 4368 passed,29 skipped; offline wheel/sdist build;297 packaged Python files byte-match; lightweight installed imports; native prepare loops across3hosts. Reviewers inspected sources; did not rerun training.",
+      "source_identity": "Base-to-working-tree diff includes staged and unstaged changes."
+    },
+    "run_id": "carl-prepared-20261008"
+  },
+  "review_closure": {
+    "status": "complete",
+    "date": "2026-10-08",
+    "scope": "Closure of prior eight CE findings only",
+    "findings": [
+      {
+        "#": 1,
+        "status": "closed",
+        "evidence_class": "current source and test-source inspection",
+        "source": "src/carl_studio/cli/training.py:726-751",
+        "evidence": "Prepared dry-run returns before submission; test_prepared_dry_run_does_not_execute_training."
+      },
+      {
+        "#": 2,
+        "status": "closed",
+        "evidence_class": "current source and test-source inspection",
+        "source": "src/carl_studio/training/pipeline.py:599; src/carl_studio/eval/runner.py:1224,1326",
+        "evidence": "Selected tokenizer propagated through measurements and stage gates; owner-loop tokenizer assertions."
+      },
+      {
+        "#": 3,
+        "status": "closed",
+        "evidence_class": "current source and test-source inspection",
+        "source": "src/carl_studio/training/pipeline.py:231,285,332,380-383",
+        "evidence": "All stage gates await run_in_worker; responsive cancellation regression."
+      },
+      {
+        "#": 4,
+        "status": "closed",
+        "evidence_class": "current source and test-source inspection",
+        "source": "skills/carl/SKILL.md:15; .claude/skills/terminals/carl.md:15",
+        "evidence": "Both guides map returned plan_id to prepared_plan_id."
+      },
+      {
+        "#": 5,
+        "status": "closed",
+        "evidence_class": "current source and test-source inspection",
+        "source": "src/carl_studio/mcp/server.py:448-450; src/carl_studio/training/pipeline.py:570,654,679",
+        "evidence": "Preparation and validation await context-preserving worker; legacy/auto wire responsiveness test."
+      },
+      {
+        "#": 6,
+        "status": "closed",
+        "evidence_class": "current source and test-source inspection",
+        "source": "src/carl_studio/training/pipeline.py:645-652,723-729",
+        "evidence": "Callable import resolution inside constant-error boundary; invented import canary regression."
+      },
+      {
+        "#": 7,
+        "status": "closed",
+        "evidence_class": "current source and test-source inspection",
+        "source": "src/carl_studio/training/pipeline.py:208,261,322,718-729",
+        "evidence": "Active stage run retained before awaits and persisted on cancellation; actual-stage identity/checkpoint test."
+      },
+      {
+        "#": 8,
+        "status": "closed",
+        "evidence_class": "current source and test-source inspection",
+        "source": "src/carl_studio/training/preparation.py:410-418",
+        "evidence": "Credential-shaped fields refused before serialization; api_key canary refusal and numeric token-budget acceptance test."
+      }
+    ],
+    "residuals": [],
+    "additional_coverage": [
+      "Owned task cancellation waits for cleanup: tests/test_mcp_tasks.py:371-393.",
+      "Unowned running task retains status: tests/test_mcp_tasks.py:395-401.",
+      "Stop/save callback exercised: tests/test_prepared_training.py:688-708.",
+      "Existing send-it tier gate precedes prepared dispatch: cli/training.py:714-726."
+    ],
+    "verification": "Parent reports earlier 8 repair checks and owning160 passed; latest expanded result pending. Closure reviewer ran no tests/training/network.",
+    "training_qualification": "Source and synthetic/mocked regression evidence remain distinct from actual model training."
+  },
+  "effects_not_executed": [
+    "model training",
+    "paid provider calls",
+    "GPU model workload",
+    "public publication",
+    "deployment",
+    "migration",
+    "host plugin installation",
+    "git push"
+  ],
+  "rollback": "Revert the explicit feature commit; preserve owner records and sibling Tin files",
+  "reviewed_transcript": {
+    "sha256": "9defa22397d360565470d560f04f5bfa35e28504014d8dfc4eb507d32459d2fc",
+    "deleted": true,
+    "raw_content_retained": false
+  }
+}

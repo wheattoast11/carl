@@ -19,7 +19,8 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any
+from collections.abc import Callable
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -61,6 +62,7 @@ class EvalConfig(BaseModel):
     threshold: float = Field(
         default=0.5, ge=0.0, le=1.0, description="Pass threshold for primary metric"
     )
+    metric_direction: Literal["higher", "lower"] = "higher"
     max_samples: int | None = Field(default=None, ge=1, description="Cap number of eval samples")
     batch_size: int = Field(default=1, ge=1, description="Inference batch size")
     device: str = Field(default="auto", description="Device: 'auto', 'cpu', 'cuda', 'cuda:0', etc.")
@@ -76,6 +78,8 @@ class EvalConfig(BaseModel):
         default=None,
         description="SFT adapter to merge before GRPO adapter",
     )
+    starting_adapters: list[str] = Field(default_factory=list)
+    tokenizer_source: str | None = None
 
     # Coherence gate: CARL's reward/eval isomorphism. The eval gate MUST check
     # the same coherence field the training rewards optimize for — otherwise a
@@ -220,11 +224,13 @@ class EvalGate:
         Side effect: writes a human-readable ``gate_reason`` back onto the
         report so callers/logs can see which dimension failed.
         """
-        primary_ok = report.primary_value >= self.threshold
-
-        require_coherence = (
-            self.config is not None and self.config.require_coherence_gate
+        lower = self.config is not None and self.config.metric_direction == "lower"
+        primary_ok = (
+            report.primary_value <= self.threshold if lower else report.primary_value >= self.threshold
         )
+        comparator = "<=" if lower else ">="
+
+        require_coherence = self.config is not None and self.config.require_coherence_gate
 
         if not require_coherence:
             report.gate_reason = (
@@ -252,18 +258,14 @@ class EvalGate:
             has_coherence = False
 
         phi_ok = phi >= self.config.coherence_phi_floor
-        disc_ok = (
-            self.config.discontinuity_min
-            <= disc
-            <= self.config.discontinuity_max
-        )
+        disc_ok = self.config.discontinuity_min <= disc <= self.config.discontinuity_max
         coherence_ok = has_coherence and phi_ok and disc_ok
 
         passed = primary_ok and coherence_ok
 
         if passed:
             report.gate_reason = (
-                f"PASS primary_value={report.primary_value:.3f}>={self.threshold:.3f} "
+                f"PASS primary_value={report.primary_value:.3f}{comparator}{self.threshold:.3f} "
                 f"phi={phi:.3f}>={self.config.coherence_phi_floor:.3f} "
                 f"disc={disc:.3f} in "
                 f"[{self.config.discontinuity_min:.2f},{self.config.discontinuity_max:.2f}]"
@@ -477,8 +479,7 @@ class EvalSandbox:
                 if any(m in cmd_str for m in _SHELL_METACHARS):
                     self.tool_failures += 1
                     return (
-                        "Error: shell metacharacters not permitted; "
-                        "use execute_code for pipelines"
+                        "Error: shell metacharacters not permitted; use execute_code for pipelines"
                     )
 
                 try:
@@ -804,10 +805,16 @@ class EvalRunner:
         config: EvalConfig,
         *,
         interaction_chain: InteractionChain | None = None,
+        evaluator: Callable[[list[str], list[dict[str, Any]]], dict[str, float]] | None = None,
+        primary_metric: str | None = None,
     ) -> None:
         self.config = config
         self.phase = config.phase if config.phase != "auto" else _detect_phase(config.checkpoint)
         self.chain: InteractionChain | None = interaction_chain
+        self.evaluator = evaluator
+        self.primary_metric = primary_metric
+        self.last_completions: list[str] = []
+        self.last_samples: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # InteractionChain helpers
@@ -883,12 +890,20 @@ class EvalRunner:
     def _run_single_turn_phase(self) -> EvalReport:
         """Phase 1 / Phase 2 single-turn generation path."""
         samples = self._load_dataset()
+        if not samples:
+            raise ValueError("Evaluation needs a nonempty held-out population")
         model, tokenizer = self._load_model_simple()
         completions = self._generate_single_turn(model, tokenizer, samples)
+        self.last_completions = completions
+        self.last_samples = samples
         metrics = self._compute_metrics(completions, samples)
         coherence = self._compute_coherence(model, tokenizer, completions)
 
-        primary_metric = _PRIMARY_METRIC.get(self.phase, "chain_completion_rate")
+        primary_metric = self.primary_metric or _PRIMARY_METRIC.get(
+            self.phase, "chain_completion_rate"
+        )
+        if self.evaluator is not None and primary_metric not in metrics:
+            raise ValueError("Evaluator did not report the declared primary metric")
         primary_value = metrics.get(primary_metric, 0.0)
 
         return EvalReport(
@@ -899,7 +914,11 @@ class EvalRunner:
             primary_metric=primary_metric,
             primary_value=primary_value,
             threshold=self.config.threshold,
-            passed=primary_value >= self.config.threshold,
+            passed=(
+                primary_value <= self.config.threshold
+                if self.config.metric_direction == "lower"
+                else primary_value >= self.config.threshold
+            ),
             coherence=coherence,
         )
 
@@ -1202,7 +1221,7 @@ class EvalRunner:
             model.generation_config.enable_thinking = False
 
         # Load tokenizer from adapter repo (has Qwen 3.5 chat template)
-        tokenizer_source = checkpoint
+        tokenizer_source = self.config.tokenizer_source or checkpoint
         processor = AutoProcessor.from_pretrained(
             tokenizer_source,
             token=hf_token,
@@ -1215,6 +1234,8 @@ class EvalRunner:
             not getattr(tokenizer, "chat_template", None)
             or "tool_call" not in tokenizer.chat_template
         ):
+            if self.config.tokenizer_source:
+                raise ValueError("The selected tokenizer needs a tool-call template")
             logger.warning(
                 "Tokenizer from %s missing tool template, trying Qwen/Qwen3.5-9B", tokenizer_source
             )
@@ -1237,7 +1258,7 @@ class EvalRunner:
         return model, tokenizer
 
     def _load_model_simple(self) -> tuple[Any, Any]:
-        """Load model and tokenizer for Phase 1/2 (no adapter stacking)."""
+        """Load the model, ordered adapters and tokenizer for Phase 1/2."""
         try:
             import torch
         except ImportError as exc:
@@ -1276,17 +1297,33 @@ class EvalRunner:
             from transformers import AutoModelForCausalLM
 
             model = AutoModelForCausalLM.from_pretrained(
-                self.config.checkpoint,
+                self.config.base_model or self.config.checkpoint,
                 torch_dtype=torch.bfloat16 if device != "cpu" else torch.float32,
                 device_map=device if device.startswith("cuda") else None,
             )
+            for adapter in self.config.starting_adapters:
+                from peft import PeftModel
+
+                model = PeftModel.from_pretrained(model, adapter).merge_and_unload()
+            if self.config.sft_adapter and self.config.checkpoint == self.config.base_model:
+                from peft import PeftModel
+
+                model = PeftModel.from_pretrained(model, self.config.sft_adapter).merge_and_unload()
+            elif self.config.base_model and self.config.checkpoint != self.config.base_model:
+                from peft import PeftModel
+
+                if self.config.sft_adapter:
+                    model = PeftModel.from_pretrained(
+                        model, self.config.sft_adapter
+                    ).merge_and_unload()
+                model = PeftModel.from_pretrained(model, self.config.checkpoint).merge_and_unload()
 
         if not device.startswith("cuda") and model.device.type != device:
             model = model.to(device)
 
         model.eval()
 
-        tokenizer = AutoTokenizer.from_pretrained(self.config.checkpoint)
+        tokenizer = AutoTokenizer.from_pretrained(self.config.tokenizer_source or self.config.checkpoint)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
@@ -1302,12 +1339,11 @@ class EvalRunner:
 
         # Local JSONL/JSON file
         if os.path.isfile(path) and path.endswith((".jsonl", ".json")):
-            samples: list[dict[str, Any]] = []
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        samples.append(json.loads(line))
+            from pathlib import Path
+
+            from carl_studio.training.preparation import read_samples
+
+            samples = read_samples(Path(path))
             if self.config.max_samples is not None:
                 samples = samples[: self.config.max_samples]
             return samples
@@ -1350,7 +1386,13 @@ class EvalRunner:
         for i in range(0, len(samples), self.config.batch_size):
             batch = samples[i : i + self.config.batch_size]
             for sample in batch:
-                prompt = sample.get("prompt") or sample.get("query") or sample.get("text", "")
+                prompt = (
+                    sample.get("prompt")
+                    or sample.get("query")
+                    or sample.get("question")
+                    or sample.get("problem_statement")
+                    or sample.get("text", "")
+                )
                 if isinstance(prompt, list):
                     if hasattr(tokenizer, "apply_chat_template"):
                         text = tokenizer.apply_chat_template(
@@ -1376,7 +1418,7 @@ class EvalRunner:
                 with torch.no_grad():
                     output_ids = model.generate(
                         **inputs,
-                        max_new_tokens=512,
+                        max_new_tokens=self.config.max_new_tokens,
                         do_sample=False,
                         pad_token_id=tokenizer.pad_token_id,
                     )
@@ -1404,6 +1446,23 @@ class EvalRunner:
         samples: list[dict[str, Any]],
     ) -> dict[str, float]:
         """Dispatch to phase-specific metric computation."""
+        if self.evaluator is not None:
+            import math
+
+            try:
+                metrics = self.evaluator(completions, samples)
+            except Exception:
+                raise ValueError("Evaluator execution failed") from None
+            if (
+                not isinstance(metrics, dict)
+                or not metrics
+                or any(
+                    not isinstance(value, (float, int)) or not math.isfinite(value)
+                    for value in metrics.values()
+                )
+            ):
+                raise ValueError("Evaluator returned invalid measurements")
+            return {key: float(value) for key, value in metrics.items()}
         if self.phase == "1":
             return _compute_phase1_metrics(completions, samples)
         elif self.phase == "2":
@@ -1421,8 +1480,6 @@ class EvalRunner:
         try:
             import torch
 
-            if not torch.cuda.is_available():
-                return None
         except ImportError:
             return None
 
@@ -1436,9 +1493,9 @@ class EvalRunner:
             cloud_values: list[float] = []
             disc_values: list[float] = []
 
-            subset = completions[:20]
+            subset = completions
             for text in subset:
-                if not text.strip() or len(text) < 10:
+                if not text.strip():
                     continue
                 try:
                     inputs = tokenizer(
@@ -1465,12 +1522,13 @@ class EvalRunner:
                     disc_values.append(snapshot.discontinuity_score)
 
                     del outputs, logits, inputs
-                    torch.cuda.empty_cache()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
                 except Exception as e:
-                    logger.warning("Coherence probe failed on sample: %s", e)
-                    continue
+                    logger.warning("Coherence probe failed: %s", type(e).__name__)
+                    return None
 
-            if not phi_values:
+            if not phi_values or len(phi_values) != len(completions):
                 return None
 
             return {
@@ -1479,7 +1537,7 @@ class EvalRunner:
                 "discontinuity_score": round(statistics.mean(disc_values), 4),
             }
         except Exception as e:
-            logger.warning("Coherence computation skipped: %s", e)
+            logger.warning("Coherence computation unavailable: %s", type(e).__name__)
             return None
 
 

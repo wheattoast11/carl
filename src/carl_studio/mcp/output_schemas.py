@@ -58,6 +58,8 @@ _START_TRAINING: dict[str, Any] = {
         "hub_job_id": {"type": ["string", "null"]},
         "model": {"type": "string"},
         "method": {"type": "string"},
+        "checkpoint": {"type": ["string", "null"]},
+        "acceptance": {"type": ["object", "null"]},
     },
     "additionalProperties": False,
 }
@@ -413,6 +415,17 @@ OUTPUT_SCHEMAS: dict[str, dict[str, Any]] = {
     "stop_training": _STOP_TRAINING,
     "list_backends": _LIST_BACKENDS,
     "validate_config": _VALIDATE_CONFIG,
+    "prepare_training": {
+        "type": "object",
+        "required": ["plan_id", "ready", "goal", "issues"],
+        "properties": {
+            "plan_id": {"type": "string"},
+            "ready": {"type": "boolean"},
+            "goal": {"type": "object"},
+            "issues": {"type": "array", "items": {"type": "object"}},
+        },
+        "additionalProperties": True,
+    },
     "generate_bundle": _GENERATE_BUNDLE,
     # Auth + tier + skills + a2a + sync
     "authenticate": _AUTHENTICATE,

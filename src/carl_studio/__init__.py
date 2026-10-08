@@ -8,6 +8,8 @@ The entire paradigm in one import::
 See also: carl.py (300-line seed crystal at the repo root)
 """
 
+from __future__ import annotations
+
 __version__ = "0.21.0"
 
 from typing import TYPE_CHECKING
@@ -27,6 +29,10 @@ __all__ = [
     "DEFECT_THRESHOLD",
     "CoherenceProbe",
     "TrainingConfig",
+    "TrainingGoal",
+    "TrainingPreparation",
+    "prepare_training",
+    "submit_training",
     "observe",
     "PhaseTransitionGate",
     # Lazy: CascadeRewardManager, CARLTrainer, Bundler, ComputeTarget, TrainingMethod
@@ -62,6 +68,10 @@ def __getattr__(name: str):
         "ComputeTarget": "carl_studio.types.config",
         "TrainingMethod": "carl_studio.types.config",
         "CARLTrainer": "carl_studio.training.trainer",
+        "TrainingGoal": "carl_studio.types.preparation",
+        "TrainingPreparation": "carl_studio.types.preparation",
+        "prepare_training": "carl_studio.training.preparation",
+        "submit_training": "carl_studio.training.pipeline",
         "observe": "carl_studio.observe",
         "Bundler": "carl_studio.bundler",
         "EvalConfig": "carl_studio.eval.runner",

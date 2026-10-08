@@ -60,6 +60,18 @@ SOURCE_HASHES = {
     n: hashlib.sha256((ROOT / "src/carl_studio/harness" / n).read_bytes()).hexdigest()
     for n in ("adapters.py", "runtime.py", "types.py")
 }
+SOURCE_HASHES.update(
+    {
+        path: hashlib.sha256((ROOT / "src/carl_studio" / path).read_bytes()).hexdigest()
+        for path in (
+            "mcp/server.py",
+            "mcp/output_schemas.py",
+            "mcp/protocol.py",
+            "training/preparation.py",
+            "types/preparation.py",
+        )
+    }
+)
 META = []
 STARTED = threading.Event()
 MODE = sys.argv[2] if len(sys.argv) > 2 else "complete"
@@ -110,18 +122,39 @@ class Handler(BaseHTTPRequestHandler):
         )
         STARTED.set()
         serialized = json.dumps(body)
+        META[-1]["prepared_result_present"] = "Eprep_" in serialized
+        desired_tool = "prepare_training" if MODE == "prepare" else "get_coherence_metrics"
+        tool_arguments = (
+            {
+                "config_yaml": json.dumps(
+                    {
+                        "run_name": "native-preparation",
+                        "base_model": "fixture/source",
+                        "dataset_repo": "fixture/train",
+                        "eval_dataset_repo": "fixture/eval",
+                        "output_repo": "fixture/candidate",
+                        "method": "sft",
+                        "compute_target": "local",
+                        "max_steps": 4,
+                        "push_to_hub": False,
+                    }
+                )
+            }
+            if MODE == "prepare"
+            else {"logits_summary": '{"embedding_dim":3072}'}
+        )
         META[-1]["metrics_result_present"] = all(
             k in serialized for k in ("kappa", "sigma", "t_star", "embedding_dim")
         )
-        chosen = next((n for n in names if n and "get_coherence_metrics" in n), None)
+        chosen = next((n for n in names if n and desired_tool in n), None)
         chosen_scope = None
         if chosen is None:
             for t in tools:
                 for x in t.get("tools", []):
-                    if x.get("name") == "get_coherence_metrics":
+                    if x.get("name") == desired_tool:
                         chosen = x["name"]
                         chosen_scope = t["name"]
-        call_tool = MODE == "metrics" and len(META) == 1 and chosen is not None
+        call_tool = MODE in {"metrics", "prepare"} and len(META) == 1 and chosen is not None
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Connection", "close")
@@ -173,9 +206,7 @@ class Handler(BaseHTTPRequestHandler):
                             "index": 0,
                             "delta": {
                                 "type": "input_json_delta",
-                                "partial_json": json.dumps(
-                                    {"logits_summary": '{"embedding_dim":3072}'}
-                                ),
+                                "partial_json": json.dumps(tool_arguments),
                             },
                         },
                     )
@@ -269,7 +300,7 @@ class Handler(BaseHTTPRequestHandler):
                         "id": "fc_carl",
                         "call_id": "tool_carl",
                         "name": chosen,
-                        "arguments": json.dumps({"logits_summary": '{"embedding_dim":3072}'}),
+                        "arguments": json.dumps(tool_arguments),
                         "status": "completed",
                     }
                     if chosen_scope:
@@ -400,7 +431,7 @@ async def main():
             if not states or states[-1] != state:
                 states.append(state)
             if value.get("pending_input"):
-                rt.reply(tid, value["pending_input"]["request_id"], MODE == "metrics")
+                rt.reply(tid, value["pending_input"]["request_id"], MODE in {"metrics", "prepare"})
                 answers += 1
             if MODE == "cancel" and STARTED.is_set() and not cancelled:
                 await asyncio.sleep(0.2)
@@ -445,6 +476,13 @@ async def main():
             and not META[0]["metrics_result_present"]
             and any(m["metrics_result_present"] for m in META[1:])
         ), "Native CARL tool acceptance failed"
+    elif MODE == "prepare":
+        assert (
+            receipt["status"] == "completed"
+            and receipt["result_match"]
+            and not META[0]["prepared_result_present"]
+            and any(item["prepared_result_present"] for item in META[1:])
+        ), "Native preparation tool acceptance failed"
     elif MODE == "cancel":
         assert receipt["status"] == "cancelled" and not cancel_errors, (
             "Native cancellation acceptance failed"

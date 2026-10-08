@@ -20,6 +20,9 @@ Memory tiering (mempalace-inspired):
 from __future__ import annotations
 
 import json
+import os
+import re
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -68,9 +71,7 @@ class ExperimentManager:
         (exp_dir / "artifacts").mkdir(exist_ok=True)
 
         # Save hypothesis
-        (exp_dir / "hypothesis.json").write_text(
-            hypothesis.model_dump_json(indent=2)
-        )
+        (exp_dir / "hypothesis.json").write_text(hypothesis.model_dump_json(indent=2))
 
         # Save experiment state
         self._save(exp)
@@ -149,18 +150,115 @@ class ExperimentManager:
             state = d / "experiment.json"
             if state.exists():
                 exp = Experiment.model_validate_json(state.read_text())
-                results.append({
-                    "id": exp.id,
-                    "title": exp.hypothesis.title,
-                    "status": exp.status.value,
-                    "verdict": exp.judgment.verdict.value if exp.judgment else "-",
-                })
+                results.append(
+                    {
+                        "id": exp.id,
+                        "title": exp.hypothesis.title,
+                        "status": exp.status.value,
+                        "verdict": exp.judgment.verdict.value if exp.judgment else "-",
+                    }
+                )
         return results
+
+    def save_preparation(self, preparation: Any) -> None:
+        """Retain prepared inputs as an artifact of the existing experiment."""
+        exp_dir = self.base_dir / preparation.plan_id
+        exp_dir.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(exp_dir, 0o700)
+        payload = preparation.model_dump_json(indent=2)
+        target = exp_dir / "preparation.json"
+        if target.exists():
+            existing = self.load_preparation(preparation.plan_id)
+            if existing.config != preparation.config or existing.sources != preparation.sources:
+                raise ValueError("Prepared experiment identity conflict")
+            if not (exp_dir / "experiment.json").is_file():
+                self._save(
+                    Experiment(
+                        id=existing.plan_id,
+                        hypothesis=existing.hypothesis,
+                        config=existing.config,
+                        tags=["prepared-training"],
+                    )
+                )
+            return
+        temporary = exp_dir / ("preparation." + uuid.uuid4().hex + ".tmp")
+        with temporary.open("x") as stream:
+            os.chmod(temporary, 0o600)
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(target)
+        exp = Experiment(
+            id=preparation.plan_id,
+            hypothesis=preparation.hypothesis,
+            config=preparation.config,
+            tags=["prepared-training"],
+        )
+        self._save(exp)
+        self._update_index()
+
+    def load_preparation(self, plan_id: str) -> Any:
+        """Read the typed preparation artifact without loading training code."""
+        from carl_studio.types.preparation import TrainingPreparation
+
+        if not re.fullmatch(r"Eprep_[0-9a-f]{24}", plan_id):
+            raise ValueError("Invalid prepared experiment ID")
+        return TrainingPreparation.model_validate_json(
+            (self.base_dir / plan_id / "preparation.json").read_text()
+        )
+
+    def claim_training(self, plan_id: str, *, resume: bool = False) -> None:
+        """Claim a prepared experiment once before starting its effects."""
+        self.load_preparation(plan_id)
+        exp_dir = self.base_dir / plan_id
+        admission = exp_dir / "execution.admission"
+        descriptor = os.open(admission, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.close(descriptor)
+            exp = self.load(plan_id)
+            if exp.config.get("execution_active"):
+                raise ValueError("Execution custody requires reconciliation before resume")
+            claim = exp_dir / "execution.claim"
+            if resume and claim.exists():
+                run = self.load_training_result(plan_id)
+                if run is None or run.phase.value not in {"paused", "failed"}:
+                    raise ValueError("Execution custody requires reconciliation before resume")
+                claim.rename(claim.with_name("execution." + uuid.uuid4().hex + ".claim"))
+            with claim.open("x") as stream:
+                os.chmod(claim, 0o600)
+                stream.write(json.dumps({"pid": os.getpid(), "plan_id": plan_id}))
+            exp.config["execution_active"] = True
+            self._save(exp)
+        finally:
+            admission.unlink()
+
+    def save_training_result(self, plan_id: str, run: Any) -> None:
+        """Retain the training result at its original experiment owner."""
+        exp = self.load(plan_id)
+        exp.run_id = run.id
+        exp.artifacts = list(run.artifacts)
+        exp.config["training_result"] = run.model_dump(mode="json")
+        exp.config["execution_active"] = False
+        self._save(exp)
+
+    def load_training_result(self, plan_id: str) -> Any:
+        """Return an existing result instead of repeating a training effect."""
+        from carl_studio.types.run import TrainingRun
+
+        exp = self.load(plan_id)
+        data = exp.config.get("training_result")
+        return TrainingRun.model_validate(data) if data is not None else None
 
     def _save(self, exp: Experiment) -> None:
         exp_dir = self.base_dir / exp.id
         exp_dir.mkdir(exist_ok=True)
-        (exp_dir / "experiment.json").write_text(exp.model_dump_json(indent=2))
+        temporary = exp_dir / ("experiment." + uuid.uuid4().hex + ".tmp")
+        with temporary.open("x") as stream:
+            os.chmod(temporary, 0o600)
+            stream.write(exp.model_dump_json(indent=2))
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(exp_dir / "experiment.json")
 
     def _write_readme(self, exp: Experiment) -> None:
         """Auto-generate a human-readable experiment summary."""
@@ -187,14 +285,16 @@ class ExperimentManager:
             lines.append(f"- **{p.id}** [{icon}]: {p.claim}")
 
         if exp.judgment:
-            lines.extend([
-                "",
-                "## Judgment",
-                "",
-                f"**Verdict:** {exp.judgment.verdict.value}",
-                f"**Confidence:** {exp.judgment.confidence:.2f}",
-                f"**Notes:** {exp.judgment.notes}",
-            ])
+            lines.extend(
+                [
+                    "",
+                    "## Judgment",
+                    "",
+                    f"**Verdict:** {exp.judgment.verdict.value}",
+                    f"**Confidence:** {exp.judgment.confidence:.2f}",
+                    f"**Notes:** {exp.judgment.notes}",
+                ]
+            )
 
         exp_dir = self.base_dir / exp.id
         (exp_dir / "README.md").write_text("\n".join(lines))

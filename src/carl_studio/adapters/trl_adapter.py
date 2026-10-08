@@ -8,7 +8,7 @@ trainer. It is always reported as available.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from carl_core.connection import (
     ConnectionDirection,
@@ -162,3 +162,11 @@ class TRLAdapter(TrainingConnection):
         state.raw["hub_job_id"] = getattr(run, "hub_job_id", None)
         save_state(state)
         return state.to_job()
+
+    training_capabilities: ClassVar[dict[str, Any]] = {
+        "methods": ["sft", "grpo"],
+        "task_rewards": True,
+        "artifacts": True,
+        "coherence": "full_logits",
+        "cancellation": "cooperative",
+    }

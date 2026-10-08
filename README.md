@@ -78,6 +78,34 @@ Full extras matrix, reproducible installs via `uv.lock`, and conflict rules (e.g
 
 ## Agent plugin
 
+CARL is a training and reinforcement-learning agent and harness for improving
+models toward your goals and policies through your existing AI tools and
+training pipeline. It prepares the inputs, adds coherence signals, evaluates
+the candidate against its starting model, and returns a reusable artifact.
+
+In your agent, ask CARL to improve a model for a particular task. CARL prepares
+the experiment before training and shows the inputs, limits and missing pieces.
+Task results, policy checks, coherence and cost stay visible separately.
+
+For the first qualified local TRL integration:
+
+```bash
+carl train --prepare --goal "Improve held-out task success" --config carl.yaml
+carl train --prepared-plan Eprep_YOUR_PLAN_ID --config carl.yaml
+```
+
+Preparation reads local model bytes and JSON/JSONL task examples, binds the
+held-out split and grader, and records a repeatable experiment. It does not
+download a model, install packages, submit a job or publish. Its readiness
+response distinguishes source checks from actual training and evaluation.
+Declare output policies in the goal's `policies` list. Existing execution
+permissions remain in force. Public publication is separate.
+
+The MCP equivalents are `prepare_training`, `start_training` and
+`submit_async_training`, with the prepared experiment ID on submission.
+Python callers can provide `task_reward_funcs` to `CARLTrainer` and `evaluator`
+plus `primary_metric` to `EvalRunner` without replacing their training loop.
+
 From a CARL checkout:
 
 ```bash

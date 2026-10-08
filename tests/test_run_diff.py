@@ -60,6 +60,29 @@ def test_summarize_run_handles_missing_result_fields():
     assert summary.status == "training"
 
 
+def test_goal_comparison_reads_persisted_acceptance_and_keeps_metrics_distinct():
+    def row(run_id, value, metric="task_success_rate"):
+        return {
+            "id": run_id,
+            "status": "complete",
+            "result": {
+                "acceptance": {
+                    "status": "accepted",
+                    "candidate": {"primary_metric": metric, "primary_value": value},
+                    "policy_passed": True,
+                },
+                "resource_usage": {"elapsed_seconds": 12.5},
+            },
+        }
+
+    report = compute_diff(row("a", 0.2), [], row("b", 0.8), [])
+    assert report.goal_value_delta == pytest.approx(0.6)
+    assert report.b.acceptance_status == "accepted"
+    assert report.b.policy_passed is True
+    assert report.b.elapsed_seconds == 12.5
+    assert compute_diff(row("a", 0.2), [], row("b", 0.8, "error_rate"), []).goal_value_delta is None
+
+
 def test_summarize_run_handles_json_string_result():
     payload = {
         "phi_mean": 0.55,
