@@ -46,11 +46,10 @@ from carl_core.connection import (
 )
 from carl_core.interaction import InteractionChain
 
-from carl_studio.consent import consent_gate
 from carl_studio.mcp.session import MCPSession
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer as FastMCP
 
 
 _STDIO = "stdio"
@@ -117,9 +116,13 @@ class MCPServerConnection(AsyncBaseConnection):
         transport: str = _STDIO,
         chain: InteractionChain | None = None,
         connection_id: str | None = None,
+        host: str = "127.0.0.1",
+        port: int = 8100,
     ) -> None:
         normalized = _validate_transport(transport)
         self._transport_choice: str = normalized
+        self._host = host
+        self._port = port
         # Per-instance spec so the transport and endpoint metadata reflect
         # the caller's choice. ``ConnectionSpec`` is frozen, so we build a
         # fresh one rather than mutating the class default.
@@ -207,7 +210,7 @@ class MCPServerConnection(AsyncBaseConnection):
             if self._transport_choice == _STDIO:
                 await fastmcp.run_stdio_async()
             else:  # _HTTP
-                await fastmcp.run_streamable_http_async()
+                await fastmcp.run_streamable_http_async(host=self._host, port=self._port)
 
     # ------------------------------------------------------------------
     # AsyncBaseConnection hooks
@@ -256,7 +259,6 @@ class MCPServerConnection(AsyncBaseConnection):
         operators see the block at FSM entry instead of deep inside a
         tool call with half the state already captured.
         """
-        consent_gate("telemetry")
         return None
 
     async def _close(self) -> None:

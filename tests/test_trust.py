@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 from carl_studio.db import LocalDB
@@ -205,9 +206,7 @@ def test_trust_registry_current_acknowledged_root_none_when_unset(
 def test_trust_registry_handles_non_resolving_path(
     registry: TrustRegistry, tmp_path: Path
 ) -> None:
-    class BrokenPath(Path):
-        _flavour = type(Path())._flavour
-
+    class BrokenPath(type(tmp_path)):
         def resolve(self, strict: bool = False):
             raise OSError("boom")
 
@@ -219,9 +218,7 @@ def test_trust_registry_handles_non_resolving_path(
 def test_trust_registry_untrusted_when_resolve_fails(
     registry: TrustRegistry, tmp_path: Path
 ) -> None:
-    class BrokenPath(Path):
-        _flavour = type(Path())._flavour
-
+    class BrokenPath(type(tmp_path)):
         def resolve(self, strict: bool = False):
             raise OSError("boom")
 
@@ -265,7 +262,7 @@ def test_trust_status_shows_no_project_when_missing(
 
     result = runner.invoke(app, ["status"])
     assert result.exit_code == 0
-    assert "(not in project)" in result.output
+    assert "(not in project)" in unstyle(result.output)
 
 
 def test_trust_disable_interactive_confirm_disables(

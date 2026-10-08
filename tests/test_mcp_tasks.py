@@ -72,6 +72,19 @@ class TestMCPTaskStore(unittest.TestCase):
     def test_get_unknown_returns_none(self) -> None:
         assert self.store.get("does-not-exist") is None
 
+    def test_cancelled_cannot_be_overwritten_by_late_results(self) -> None:
+        task = self.store.create("tool", {})
+        assert self.store.cancel(task.task_id)
+        self.store.mark_running(task.task_id)
+        self.store.mark_progress(task.task_id, 0.5)
+        self.store.mark_failed(task.task_id, RuntimeError("late failure"))
+        self.store.mark_completed(task.task_id, {"late": True})
+        fetched = self.store.get(task.task_id)
+        assert fetched is not None
+        assert fetched.status == "cancelled"
+        assert fetched.result is None
+        assert fetched.error is None
+
     def test_mark_running_transitions_status(self) -> None:
         task = self.store.create("tool", {})
         self.store.mark_running(task.task_id)
@@ -370,7 +383,7 @@ class TestTaskToolFactories(unittest.IsolatedAsyncioTestCase):
 class TestRegisterTaskTools(unittest.IsolatedAsyncioTestCase):
     async def test_tools_registered_on_fastmcp(self) -> None:
         pytest.importorskip("mcp")
-        from mcp.server.fastmcp import FastMCP
+        from mcp.server.mcpserver import MCPServer as FastMCP
 
         from carl_studio.mcp.tasks import register_task_tools
 

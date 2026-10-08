@@ -1,0 +1,15 @@
+{
+  "name": "carl-local",
+  "owner": {
+    "name": "Tej Desai"
+  },
+  "metadata": {
+    "description": "Coherence-Aware Reinforcement Learning and bidirectional local agent workflows."
+  },
+  "plugins": [
+    {
+      "name": "carl",
+      "source": "./"
+    }
+  ]
+}

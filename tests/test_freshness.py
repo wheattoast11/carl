@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -195,7 +196,9 @@ class TestNeedsCheck:
 class TestCheckPackages:
     def test_stale_package_detected_emits_typed_issue(self):
         report = FreshnessReport()
-        with patch("importlib.metadata.version", return_value="0.12.0"):
+        with patch("importlib.metadata.version", return_value="0.12.0"), patch(
+            "carl_core.dependency_probe.importlib.import_module", return_value=SimpleNamespace()
+        ):
             _check_packages(report)
         # Per spec: code == "carl.freshness.stale_pkg", severity == warn.
         stale = [i for i in report.issues if i.code == CODE_STALE_PKG]
@@ -234,7 +237,9 @@ class TestCheckPackages:
         from carl_studio.freshness import CODE_DEP_CORRUPT, SEVERITY_ERROR
 
         report = FreshnessReport()
-        with patch("importlib.metadata.version", return_value=None):
+        with patch("importlib.metadata.version", return_value=None), patch(
+            "carl_core.dependency_probe.importlib.import_module", return_value=SimpleNamespace()
+        ):
             _check_packages(report)
 
         corrupt_issues = [i for i in report.issues if i.code == CODE_DEP_CORRUPT]

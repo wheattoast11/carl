@@ -163,7 +163,7 @@ class TestSyncGate:
 
 
 class TestMCPConnectGate:
-    def test_mcp_connect_blocked_when_telemetry_off(
+    def test_local_mcp_opens_but_remote_auth_requires_telemetry(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         pytest.importorskip("mcp")
@@ -172,9 +172,16 @@ class TestMCPConnectGate:
 
         async def go() -> None:
             conn = MCPServerConnection(transport="stdio")
-            with pytest.raises(ConsentError) as exc:
-                await conn.open()
-            assert exc.value.context["flag"] == "telemetry"
+            await conn.open()
+            from carl_studio.mcp.server import authenticate, bind_connection
+            bind_connection(conn)
+            try:
+                with pytest.raises(ConsentError) as exc:
+                    await authenticate("synthetic-token")
+                assert exc.value.context["flag"] == "telemetry"
+            finally:
+                bind_connection(None)
+                await conn.close()
 
         asyncio.run(go())
 

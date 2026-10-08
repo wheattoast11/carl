@@ -40,9 +40,9 @@
     "gen-ledger-vectors": "python3 scripts/gen_ledger_vectors.py"
   },
   "devDependencies": {
-    "@types/node": "^20.11.30",
-    "tsx": "^4.19.2",
-    "typescript": "^5.4.5"
+    "@types/node": "24.19.1",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
   },
   "keywords": [
     "carl",

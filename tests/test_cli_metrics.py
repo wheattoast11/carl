@@ -11,6 +11,7 @@ import threading
 import time
 
 import pytest
+from click import unstyle
 from typer.testing import CliRunner
 
 
@@ -41,8 +42,9 @@ def test_metrics_serve_help_lists_flags() -> None:
     runner = CliRunner()
     result = runner.invoke(metrics_app, ["serve", "--help"])
     assert result.exit_code == 0
-    assert "--port" in result.output
-    assert "--host" in result.output
+    output = unstyle(result.output)
+    assert "--port" in output
+    assert "--host" in output
 
 
 def test_metrics_serve_binds_and_shuts_down() -> None:

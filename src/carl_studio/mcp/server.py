@@ -29,8 +29,9 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
-from mcp.server.fastmcp import Context as _FastMCPContext, FastMCP
+from mcp.server.mcpserver import Context as _FastMCPContext
 
+from carl_studio import __version__
 from carl_studio.mcp.session import SESSION_MAX_AGE, MCPSession
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
@@ -43,11 +44,13 @@ if TYPE_CHECKING:  # pragma: no cover - import only for type hints
 # state. Exporting a concrete ``Any``-parameterised alias lets tool
 # signatures read ``ctx: Context | None = None`` without drowning pyright
 # in ``reportMissingTypeArgument`` noise on every tool.
-Context = _FastMCPContext[Any, Any, Any]
+Context = _FastMCPContext[Any, Any]
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("carl-studio")
+from carl_studio.mcp.protocol import CARLMCPServer
+
+mcp = CARLMCPServer("carl-studio", version=__version__)
 
 logger.info(
     "carl-studio MCP server loaded: per-request session state via "
@@ -131,6 +134,9 @@ async def _run_tool(
     transport-level failures; tool bodies do their own error handling
     and already emit ``{"error": ...}`` payloads.
     """
+    if tool_name in {"authenticate", "sync_data"}:
+        from carl_studio.consent import consent_gate
+        consent_gate("telemetry")
     start = time.monotonic()
     try:
         result = await body()
@@ -152,8 +158,7 @@ async def _run_tool(
 # ---------------------------------------------------------------------------
 
 try:
-    from carl_studio.skills.runner import SkillRunner, SkillRegistry
-    from carl_studio.skills.builtins import BUILTIN_SKILLS
+    from carl_studio.skills.runner import SkillRunner
 
     _skills_available = True
 except ImportError:
@@ -255,16 +260,8 @@ def _tier_error(feature: str, ctx: "Context | None" = None) -> str:
 
 
 def _build_skill_runner() -> "SkillRunner":
-    """Build a SkillRunner with all builtins registered."""
-    runner = SkillRunner()  # type: ignore[possibly-undefined]
-    for skill in BUILTIN_SKILLS:  # type: ignore[possibly-undefined]
-        runner.register(skill)
-    return runner
-
-
-# ---------------------------------------------------------------------------
-# Original 8 tools — unchanged
-# ---------------------------------------------------------------------------
+    from carl_studio.skills.runner import build_skill_runner
+    return build_skill_runner()
 
 
 @mcp.tool()
@@ -981,6 +978,10 @@ async def carl_presence_self(window: int = 8) -> dict[str, object]:
 # FastMCP instance. Legacy synchronous tools keep their original
 # decorators; the new tools live alongside them in the same registry.
 register_task_tools(mcp)
+
+from carl_studio.mcp.harness_tools import register_harness_tools
+
+register_harness_tools(mcp)
 
 # Attach output schemas to every registered tool (legacy + new).
 register_output_schemas(mcp)

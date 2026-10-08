@@ -1,0 +1,54 @@
+{
+  "status": "prepared",
+  "date": "2026-10-08",
+  "branch": "release/v0.21.0",
+  "integrated_feature": "99ec3e27ed5881c94a55086d38c9fa5bc97bfc42",
+  "current_main": "b1e7ce59199da5e848747885ef5d0fbad825920e",
+  "versions": {
+    "carl-studio": "0.21.0",
+    "carl-core": "0.3.0"
+  },
+  "source_digest": "8f7ff3a309c6de1e964356229c4253cbeacf433d4a8d2e8db98f58fd5009fbc8",
+  "artifacts": [
+    {
+      "path": "build/release-0.21.0/studio/carl_studio-0.21.0-py3-none-any.whl",
+      "sha256": "c12799ecc51328268ac5c1b47ce1779517a2807f7100c37d12347ff30f718009"
+    },
+    {
+      "path": "build/release-0.21.0/studio/carl_studio-0.21.0.tar.gz",
+      "sha256": "c5f572202eb968f7f1b9715af014ecf4b31b8cfb4823e1fd325a376722fae459"
+    },
+    {
+      "path": "build/release-0.21.0/core/carl_core-0.3.0-py3-none-any.whl",
+      "sha256": "bde6f2b54b74a7bcdb3a6f207afc1c37952d5345d4b251ddca851b39e8fda0b3"
+    },
+    {
+      "path": "build/release-0.21.0/core/carl_core-0.3.0.tar.gz",
+      "sha256": "ba8f80dbae0e2e0922c3f31a44f209059b267c06a59d77800aad22a09d02aa1d"
+    }
+  ],
+  "python_regressions": {
+    "passed": 4321,
+    "skipped": 29,
+    "warnings": 17
+  },
+  "targeted_release_protocol_tests": {
+    "passed": 40
+  },
+  "redaction_and_release_tests": {
+    "passed": 24
+  },
+  "fresh_wheel_mcp": {
+    "server_version": "0.21.0",
+    "tools": 27,
+    "inbound_delegate_available": true,
+    "metrics_success": true,
+    "source": "fresh installed release wheels",
+    "provider_calls": 0
+  },
+  "native_witnesses": "docs/carl-release-native-verification-2026-10-08.json",
+  "independent_review": "docs/carl-release-review-2026-10-08.json",
+  "dependency_audit": "docs/dependency-audit-2026-10-08.json",
+  "publisher_policy": "package tag only; core completes before studio",
+  "publication": "not yet executed"
+}

@@ -1,0 +1,139 @@
+{
+  "status": "complete",
+  "agent_id": "mcp_v2_migration_research",
+  "date": "2026-10-08",
+  "reviewed_at": "2026-10-08T14:32:47.644698+00:00",
+  "artifact_path": "/tmp/carl-release-review.json",
+  "scope": {
+    "branch": "release/v0.21.0",
+    "head": "03f1e99aadf0fe194b75c45d9d0caffe14e8166d",
+    "feature_base": "99ec3e2",
+    "studio_target": "0.21.0",
+    "core_target": "0.3.0"
+  },
+  "findings": [
+    {
+      "id": "R1",
+      "confidence": "high",
+      "status": "satisfied",
+      "source": ".github/workflows/publish.yml:4",
+      "requirement": "Use tag pushes as the sole publishing trigger; retain manual dispatch as build-only.",
+      "evidence": "Current workflow has push/workflow_dispatch only and no release-version resolver, commit, tag alignment, or release-published upload path."
+    },
+    {
+      "id": "R2",
+      "confidence": "high",
+      "status": "satisfied",
+      "source": "pyproject.toml:7",
+      "requirement": "Align studio0.21.0/core0.3.0 across manifests, __init__, lock roots, and plugin carriers; studio requires core>=0.3.0.",
+      "evidence": "Offline parsed current source versions and all carriers agree; both projects require Python>=3.12."
+    },
+    {
+      "id": "R3",
+      "confidence": "high",
+      "status": "satisfied",
+      "source": "src/carl_studio/harness/adapters.py:266",
+      "requirement": "Native Codex clientInfo must report the released studio version.",
+      "evidence": "Actual non-spawning CodexAdapter initialize capture returned clientInfo.version=0.21.0 from __version__."
+    },
+    {
+      "id": "R4",
+      "confidence": "high",
+      "status": "satisfied",
+      "source": "src/carl_studio/mcp/server.py:53",
+      "requirement": "MCP server must report the released studio version.",
+      "evidence": "Actual imported MCP object mcp.version=0.21.0."
+    },
+    {
+      "id": "R5",
+      "confidence": "high",
+      "status": "parent_release_gate",
+      "source": ".github/workflows/publish.yml:81",
+      "requirement": "Publish carl-core@0.3.0 first, await that exact job success and index availability, then publish v0.21.0 and await studio success.",
+      "evidence": "Studio floor is carl-core>=0.3.0; subpackage scoped-tag routing is present. No external publication state was checked in this offline review."
+    },
+    {
+      "id": "R6",
+      "confidence": "high",
+      "status": "parent_release_gate",
+      "source": "pyproject.toml:148",
+      "requirement": "Build fresh target-version studio/core wheel+sdist into version-specific directories; verify embedded metadata and protocol entrypoints, and upload only the intended versions.",
+      "evidence": "Inspected prior artifacts contain studio0.20.1/core0.2.0. Prior studio wheel includes harness modules, MCP protocol driver, and carl-mcp; portable plugin/skills are carried by sdist/repository, not wheel."
+    },
+    {
+      "id": "R7",
+      "confidence": "high",
+      "status": "parent_release_gate",
+      "source": ".github/workflows/publish.yml:57",
+      "requirement": "Attach the selected SBOM to the GitHub release after publisher success; validate the actual publisher install/build job.",
+      "evidence": "Tag-only workflow retains Actions SBOM upload; GitHub-release attachment step was removed with the release event. Publisher still installs the all-extra graph on Ubuntu."
+    }
+  ],
+  "source_sha256": {
+    ".github/workflows/publish.yml": "4c820957257180af49fde7e4f3fb8c3a53150b0112d6cbc1601fe624cffbe313",
+    "pyproject.toml": "8d09e5859f30e27d2d0ff291f97667385e48c265ed81e79e5253ebfe97881113",
+    "src/carl_studio/__init__.py": "96302bb86c6154398431abebafcdcc187a8454d9ded49aed77b60b21eb6bc459",
+    "package.json": "7c654b666251964cdf43e11a075ce8bfeb5591960ab8a5a34f01043d70ee0d68",
+    "plugin.json": "30dc70f3dc9a9c2b90c26909b0baebfc902cf042e8360370b9b41e363979b8f7",
+    ".claude-plugin/plugin.json": "f1496365adc859dd1ddd5e3bd1f7a9d2763756f34546bf0d52ccce36f73f1bfb",
+    ".codex-plugin/plugin.json": "72e4080483b752d089c33f2931ceab2a1fc6e02307787dbe745bb5e39836f694",
+    "packages/carl-core/pyproject.toml": "12b8f12551476498f0a59ac77892b072b5f2abf0dc6e38c53f1aef203ed86bd1",
+    "packages/carl-core/src/carl_core/__init__.py": "97cc90d63a43b979b0465cc26861d480fc1f1bab5b6f683e244610e7bc5aea46",
+    "uv.lock": "4f312f1e2355aac23b9d9b55ba5ccf1bf2ca57dad4c30d1e5ba5b799ac45807f",
+    "src/carl_studio/harness/adapters.py": "a654016b334ef0c64a1da60fb936164bae41e2e077817b432a5d113945599793",
+    "src/carl_studio/mcp/server.py": "524e98f39817970e5be57658df596d408548aa3037fb981a001f66ce7c1232f0",
+    "tests/test_release_version.py": "33c41b31f7aafee0c3e4b39989597647d42573b79b79f3d32c1a4222170de1ae"
+  },
+  "original_boundary_closures": {
+    "closed_ids": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "release_changed_owners": [
+      "src/carl_studio/harness/adapters.py"
+    ],
+    "change_class": "Codex clientInfo version metadata only; remaining 11 owners byte-identical to feature99ec3e2.",
+    "source_sha256": {
+      "src/carl_studio/harness/runtime.py": "22c3081a487feb7360eb345ed4ec780cb3e414ec7170a16a4da06bbbc5bcf9e7",
+      "src/carl_studio/harness/types.py": "735325c70e5e29a6f1c47e16a37b4fe85b30ec8ca0152dcd2e1a1bdb22e2d4ff",
+      "src/carl_studio/harness/adapters.py": "a654016b334ef0c64a1da60fb936164bae41e2e077817b432a5d113945599793",
+      "src/carl_studio/harness/bridge.py": "018fa337de721b4752b895e5cf6a5f9f545b2eee47168b48056c75590be7810e",
+      "src/carl_studio/handles/subprocess.py": "e70931d4adb053453ce761d0e5a2f2aae8d87a335d2360964351429eba06423d",
+      "src/carl_studio/mcp/tasks.py": "23b38616b2db945d691b41fb1d8d9098b102f1d89f06fef48565666be8112c31",
+      "src/carl_studio/mcp/harness_tools.py": "c8c81ba776acab36a81c83a2ed34dfe5b73b3b4abf35519797dca4adc5d31cde",
+      "src/carl_studio/plugin.py": "4e335b72acb3cb13915778b3c8ab98e4abf04629a28dbf05efb75c174395d1d9",
+      "src/carl_studio/a2a/task.py": "8b9a8becc9e21816c7d60fe9564e6843b5bcc0ef6994cf903d9b447a32cbfebb",
+      "src/carl_studio/a2a/bus.py": "67cde271fc8ead70341c32c78473aae30276afea9987e3312a118ebf5041d8cb",
+      "src/carl_studio/a2a/spec.py": "be618c6d6df2fc8ee6489650c1621c59ed6927d29e22a126aa5b24f1109d18e4",
+      "src/carl_studio/a2a/streaming.py": "7725ea1017d0ca7029f8dfa4465359eb87bb8e8c57f7ff97669055db2d1d626c"
+    }
+  },
+  "checks": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_release_version.py -q --tb=short -o cache_dir=/tmp/carl-release-review-pytest-cache",
+      "result": "7 passed in 0.09s",
+      "exit_code": 0
+    },
+    {
+      "command": "Actual imported MCP version and non-spawning Codex initialize-frame capture",
+      "result": "Both report0.21.0",
+      "exit_code": 0
+    },
+    {
+      "command": "resolve_target_version(source=published=tag=0.21.0)",
+      "result": "0.22.0 auto_minor; current workflow no longer invokes this second-event path",
+      "exit_code": 0
+    }
+  ],
+  "network_calls": 0,
+  "provider_calls": 0,
+  "repository_edits": 0,
+  "external_writes": 0
+}

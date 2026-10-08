@@ -86,6 +86,7 @@ REGISTERED_SUBCOMMANDS: frozenset[str] = frozenset(
         "login",
         "logout",
         "marketplace",
+        "plugin",
         "mcp",
         "metrics",
         "paper",

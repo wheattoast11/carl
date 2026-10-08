@@ -59,8 +59,9 @@ class TestFeatureTiers:
     def test_train_is_free(self):
         assert feature_tier("train") == Tier.FREE
 
-    def test_mcp_is_enterprise(self):
-        assert feature_tier("mcp") == Tier.ENTERPRISE
+    def test_local_mcp_is_free(self):
+        assert feature_tier("mcp") == Tier.FREE
+        assert feature_tier("mcp.serve") == Tier.FREE
 
     def test_unknown_feature_defaults_free(self):
         assert feature_tier("nonexistent_feature_xyz") == Tier.FREE

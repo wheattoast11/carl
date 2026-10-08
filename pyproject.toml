@@ -1,14 +1,14 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
 name = "carl-studio"
-version = "0.20.1"
+version = "0.21.0"
 description = "CARL (Coherence-Aware Reinforcement Learning) — information-theoretic reward signals for LLM training via token-level probability distributions"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [
     { name = "Tej Desai", email = "tej@terminals.tech" },
 ]
@@ -42,7 +42,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
@@ -51,20 +50,22 @@ classifiers = [
 ]
 
 dependencies = [
-    "carl-core>=0.2.0",
-    "pydantic>=2.9",
-    "pydantic-settings>=2.0",
-    "typer>=0.12",
-    "rich>=14.0",
-    "numpy",
-    "anyio>=4.0",
-    "pyyaml>=6.0",
+    "carl-core>=0.3.0",
+    "pydantic>=2.13.5,<3",
+    "pydantic-settings>=2.15.0,<3",
+    "typer>=0.27.3,<1",
+    "rich>=15.0.0,<16",
+    "numpy==2.3.5; python_version < '3.13'",
+    "numpy==2.4.6; python_version >= '3.13' and python_version < '3.14'",
+    "numpy==2.5.3; python_version >= '3.14'",
+    "anyio>=4.15.1,<5",
+    "pyyaml>=6.0.3,<7",
     # v0.20: entitlements client (EntitlementsClient), AXON forwarder, slime
     # submit client, and constitutional ledger forwarder all use httpx for
     # the carl.camp HTTP calls. Promoted from [dev] to runtime so a fresh
     # `pip install carl-studio` can `from carl_studio.entitlements import
     # EntitlementsClient` without a separate optional-dep install.
-    "httpx>=0.27",
+    "httpx>=0.28.1,<1",
 ]
 
 [project.urls]
@@ -77,32 +78,37 @@ Issues = "https://github.com/wheattoast11/carl/issues"
 # Meta-extra: the recommended starting point for most users.
 quickstart = ["carl-studio[training,hf,observe]"]
 training = [
-    "torch>=2.4",
-    "transformers>=5.0",
-    "trl>=1.0",
-    "peft>=0.15",
-    "datasets>=4.0",
-    "bitsandbytes",
-    "trackio",
+    "torch==2.13.0",
+    "transformers==5.12.1",
+    "trl>=1.14.2,<2",
+    "peft>=0.21.2,<1",
+    "datasets>=5.1.0,<6",
+    "bitsandbytes>=0.50.2,<1",
+    "trackio>=0.41.0,<1",
 ]
-observe = ["anthropic>=0.95", "gradio-client>=1.0"]
-hf = ["huggingface-hub>=1.0"]
-runpod = ["runpod>=1.7"]
-tinker = ["tinker>=0.16"]
-tui = ["textual>=1.0", "textual-plotext>=0.3"]
-mcp = ["mcp>=1.10"]
-research = ["arxiv>=3.0"]
-a2a = ["a2a-python>=0.0.1"]
+observe = ["anthropic>=1.12.0,<2", "gradio-client>=2.7.2,<3"]
+hf = ["huggingface-hub==1.33.0"]
+runpod = ["runpod>=1.12.0,<2"]
+tinker = ["tinker>=0.32.0,<1"]
+tui = ["textual>=8.2.8,<9", "textual-plotext>=1.0.1,<2"]
+mcp = ["mcp>=2.3.0,<3"]
+research = ["arxiv>=4.0.1,<5"]
+a2a = []
 # NOTE: `wallet` pulls coinbase-agentkit which pins x402<2, while the
 # standalone `x402` extra requires x402>=2.7. They are mutually exclusive;
 # pick one. The [tool.uv] `conflicts` table below encodes this so `uv lock`
 # can succeed. `[all]` includes `x402` (the standalone, newer rail) but not
 # `wallet`; install `[wallet]` separately if you need Coinbase AgentKit.
-wallet = ["coinbase-agentkit>=0.7", "cryptography>=42.0.0", "keyring>=24.0.0"]
-x402 = ["x402>=2.7"]
+wallet = [
+    "coinbase-agentkit==0.7.4; python_version < '3.14'",
+    "cryptography>=45.0.7,<46; python_version < '3.14'",
+    "cryptography>=50.0.2,<51; python_version >= '3.14'",
+    "keyring>=25.7.0,<26",
+]
+x402 = ["x402>=2.25.0,<3"]
 payments = ["stripe-agent-toolkit>=0.7"]
-metrics = ["prometheus-client>=0.25"]
-constitutional = ["pynacl>=1.5"]
+metrics = ["prometheus-client>=0.26.0,<1"]
+constitutional = ["pynacl>=1.6.2,<2"]
 # Slime (THUDM/slime) — Apache-2.0 RL framework (Megatron-LM + SGLang).
 # This extra pulls the rollout-side dep (sglang). Megatron-LM and slime
 # itself remain user-built per https://thudm.github.io/slime/ — slime
@@ -110,29 +116,34 @@ constitutional = ["pynacl>=1.5"]
 # flags that pip can't safely handle. Included in [all] for ergonomics;
 # SlimeAdapter.available() returns False until the user finishes the
 # source-build steps, with missing_dependencies() naming each gap.
-slime = ["sglang>=0.4"]
+slime = [
+    "sglang==0.5.21; sys_platform == 'linux' and python_version < '3.14'",
+    "cuda-tile==1.6.0rc5; sys_platform == 'linux' and python_version < '3.14'",
+    "flash-attn-4==4.0.0b34; sys_platform == 'linux' and python_version < '3.14'",
+]
 # Zero-knowledge secrets toolkit (v0.16). Aggregates the three new deps
 # required for the virtual-KVM flow (mint → clipboard → paste → wipe)
 # with audit via InteractionChain. pynacl + keyring also appear in other
 # extras; this aggregator lets users install the full secrets surface
 # without pulling wallet/constitutional transitively.
 secrets = [
-    "pynacl>=1.5",
-    "keyring>=24.0.0",
-    "pyperclip>=1.9.0",
+    "pynacl>=1.6.2,<2",
+    "keyring>=25.7.0,<26",
+    "pyperclip>=1.11.0,<2",
 ]
 # Interactive CLI UX (v0.17.1). Pulls questionary for arrow-key select /
 # confirm / password / path flows. `cli/ui.py` lazy-imports it and falls
 # back to `typer.prompt` when absent or on non-TTY stdin — the fallback
 # path is fully covered by tests. Industry-standard arrow-key UX (gh,
 # vite, claude-code, codex) without the prompt_toolkit Textual footprint.
-cli = ["questionary>=2.0,<3"]
-dev = ["pytest", "ruff", "pyright", "hypothesis>=6.100", "respx>=0.21"]
+cli = ["questionary>=2.1.1,<3"]
+dev = ["pytest>=9.1.1,<10", "pytest-asyncio>=1.4.0,<2", "ruff>=0.16.10,<1", "pyright>=1.1.414,<2", "hypothesis>=6.168.5,<7", "respx>=0.23.1,<1", "build==1.6.1", "cyclonedx-bom==7.5.0", "uv==0.12.23"]
 all = ["carl-studio[training,observe,hf,runpod,tinker,tui,mcp,research,a2a,x402,payments,metrics,constitutional,slime,secrets,cli,dev]"]
 
 [project.scripts]
 carl = "carl_studio.cli:app"
 carl-heartbeat = "carl_studio.heartbeat.daemon:main"
+carl-mcp = "carl_studio.mcp.__main__:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/carl_studio"]
@@ -153,6 +164,8 @@ carl-core = { workspace = true }
 # conflict lets `uv lock` produce an `all`-target lockfile while preserving
 # both as independently installable.
 [tool.uv]
+exclude-newer = "2026-10-08T00:35:32Z"
+prerelease = "if-necessary"
 conflicts = [
     [
         { extra = "wallet" },
@@ -161,6 +174,18 @@ conflicts = [
     [
         { extra = "wallet" },
         { extra = "all" },
+    ],
+    [
+        { extra = "wallet" },
+        { extra = "runpod" },
+    ],
+    [
+        { extra = "wallet" },
+        { extra = "constitutional" },
+    ],
+    [
+        { extra = "wallet" },
+        { extra = "secrets" },
     ],
 ]
 
@@ -176,11 +201,13 @@ markers = [
 ]
 
 [tool.pyright]
+venvPath = "."
+venv = ".venv"
 include = ["src", "packages/*/src", "packages/*/tests", "tests"]
 typeCheckingMode = "strict"
-pythonVersion = "3.11"
+pythonVersion = "3.12"
 extraPaths = ["packages/carl-core/src"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 100

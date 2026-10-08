@@ -32,9 +32,12 @@ Error codes under ``carl.subprocess.*``:
 from __future__ import annotations
 
 import os
+import select
+import signal
 import subprocess
+import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -48,7 +51,6 @@ from carl_core.resource_handles import (
 )
 
 from carl_studio.handles.data import DataToolkit
-
 
 __all__ = ["SubprocessToolkit", "SubprocessToolkitError"]
 
@@ -81,9 +83,7 @@ class SubprocessToolkit:
         default_ttl_s: int = _DEFAULT_TTL_S,
     ) -> SubprocessToolkit:
         return cls(
-            resource_vault=(
-                resource_vault if resource_vault is not None else ResourceVault()
-            ),
+            resource_vault=(resource_vault if resource_vault is not None else ResourceVault()),
             data_toolkit=data_toolkit,
             chain=chain,
             default_ttl_s=default_ttl_s,
@@ -99,6 +99,8 @@ class SubprocessToolkit:
         env: Mapping[str, str] | None = None,
         ttl_s: int | None = None,
         labels: dict[str, str] | None = None,
+        interactive: bool = False,
+        process_group: bool = False,
     ) -> dict[str, Any]:
         """Spawn a subprocess. argv MUST be a list — no shell interpolation.
 
@@ -112,7 +114,8 @@ class SubprocessToolkit:
         when callers disobey the contract).
         """
         if not isinstance(argv, list) or not all(
-            isinstance(a, str) for a in argv  # pyright: ignore[reportUnknownVariableType]
+            isinstance(a, str)
+            for a in argv  # pyright: ignore[reportUnknownVariableType]
         ):
             raise SubprocessToolkitError(
                 "argv must be a list[str] — shell strings rejected by design",
@@ -136,9 +139,10 @@ class SubprocessToolkit:
                 argv_list,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE if interactive else subprocess.DEVNULL,
                 cwd=cwd_str,
                 env=effective_env,
+                start_new_session=process_group and os.name == "posix",
             )
         except OSError as exc:
             raise SubprocessToolkitError(
@@ -148,6 +152,7 @@ class SubprocessToolkit:
                 cause=exc,
             ) from exc
 
+        proc._carl_process_group = process_group
         ref = self.resource_vault.put(
             backend=proc,
             kind="subprocess",
@@ -155,7 +160,7 @@ class SubprocessToolkit:
             uri=f"pid:{proc.pid}",
             labels={"argv0": argv_list[0], **(labels or {})},
             ttl_s=effective_ttl,
-            closer=_terminate_subprocess,
+            closer=lambda child: _terminate_subprocess(child, process_group=process_group),
         )
         desc = ref.describe()
         self.chain.record(
@@ -171,6 +176,58 @@ class SubprocessToolkit:
             success=True,
         )
         return {**desc, "pid": proc.pid}
+
+    def write_stdin(
+        self,
+        ref_id: str,
+        data: bytes,
+        *,
+        timeout_s: float = 5,
+        checkpoint: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
+        """Write a bounded protocol frame without recording its content."""
+        if len(data) > 1024 * 1024:
+            raise SubprocessToolkitError("stdin frame exceeds 1 MiB", code="carl.subprocess.frame")
+        proc = self._proc_from_id(ref_id)
+        if proc.stdin is None or proc.poll() is not None:
+            raise SubprocessToolkitError("stdin is closed", code="carl.subprocess.already_exited")
+        try:
+            fd = proc.stdin.fileno()
+            blocking = os.get_blocking(fd)
+            os.set_blocking(fd, False)
+            offset, deadline = 0, time.monotonic() + timeout_s
+            try:
+                while offset < len(data):
+                    if checkpoint is not None:
+                        checkpoint()
+                    if time.monotonic() >= deadline:
+                        raise SubprocessToolkitError(
+                            "stdin deadline expired", code="carl.subprocess.stdin_timeout"
+                        )
+                    if not select.select([], [fd], [], 0.05)[1]:
+                        continue
+                    try:
+                        offset += os.write(fd, data[offset : offset + 65536])
+                    except BlockingIOError:
+                        continue
+            finally:
+                os.set_blocking(fd, blocking)
+        except (BrokenPipeError, OSError) as exc:
+            raise SubprocessToolkitError(
+                "stdin write failed", code="carl.subprocess.stdin_failed"
+            ) from exc
+        self.chain.record(
+            ActionType.RESOURCE_ACT,
+            "subprocess.write_stdin",
+            input={"ref_id": ref_id, "bytes": len(data)},
+            output={},
+            success=True,
+        )
+        return {"ref_id": ref_id, "bytes": len(data)}
+
+    def protocol_process(self, ref_id: str) -> subprocess.Popen[bytes]:
+        """Resolve the owned process for a trusted protocol adapter."""
+        return self._proc_from_id(ref_id)
 
     # -- status ---------------------------------------------------------
 
@@ -251,17 +308,18 @@ class SubprocessToolkit:
         ref_id: str,
         *,
         grace_s: float = 5.0,
+        process_group: bool = False,
     ) -> dict[str, Any]:
         """SIGTERM then SIGKILL after ``grace_s``. Revokes the ref."""
         ref = self._ref_from_id(ref_id)
         proc = self.resource_vault.resolve(ref, privileged=True)
         outcome = "terminated"
         if proc.poll() is None:
-            proc.terminate()
+            _signal_process(proc, signal.SIGTERM, process_group)
             try:
                 proc.wait(timeout=grace_s)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                _signal_process(proc, signal.SIGKILL, process_group)
                 proc.wait(timeout=2.0)
                 outcome = "killed"
         else:
@@ -449,17 +507,32 @@ class SubprocessToolkit:
         return self.resource_vault.resolve(ref, privileged=True)
 
 
-def _terminate_subprocess(proc: subprocess.Popen[bytes]) -> None:
+def _terminate_subprocess(proc: subprocess.Popen[bytes], *, process_group: bool = False) -> None:
     """Closer callback run at revoke time. Best-effort + non-blocking."""
     try:
+        if process_group and os.name == "posix":
+            _signal_process(proc, signal.SIGTERM, True)
         if proc.poll() is None:
-            proc.terminate()
+            _signal_process(proc, signal.SIGTERM, process_group)
             try:
                 proc.wait(timeout=2.0)
             except subprocess.TimeoutExpired:
-                proc.kill()
-    except Exception:  # pragma: no cover
-        pass
+                _signal_process(proc, signal.SIGKILL, process_group)
+                proc.wait(timeout=2.0)
+    except (OSError, subprocess.TimeoutExpired):  # pragma: no cover
+        return
+
+
+def _signal_process(proc: subprocess.Popen[bytes], sig: int, process_group: bool) -> None:
+    if (process_group or getattr(proc, "_carl_process_group", False)) and os.name == "posix":
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            pass
+    elif sig == signal.SIGTERM:
+        proc.terminate()
+    else:
+        proc.kill()
 
 
 def _read_nonblocking(pipe: Any) -> bytes:

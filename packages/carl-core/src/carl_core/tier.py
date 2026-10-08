@@ -150,8 +150,8 @@ FEATURE_TIERS: dict[str, Tier] = {
     "bench.probes": Tier.PAID,  # Advanced probes (pressure, adaptation)
     "observe.claude_stream": Tier.PAID,  # Streaming Claude observations during training
     "eval.auto_schedule": Tier.PAID,  # Automatic eval scheduling on checkpoints
-    "mcp": Tier.PAID,
-    "mcp.serve": Tier.PAID,
+    "mcp": Tier.FREE,
+    "mcp.serve": Tier.FREE,
     "environments.custom": Tier.PAID,
     "compute.multi_backend": Tier.PAID,
     "orchestration": Tier.PAID,

@@ -1,14 +1,14 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling==1.32.4"]
 build-backend = "hatchling.build"
 
 [project]
 name = "carl-core"
-version = "0.2.0"
+version = "0.3.0"
 description = "Coherence math primitives for CARL (Coherence-Aware Reinforcement Learning)"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 authors = [
     { name = "Tej Desai", email = "tej@terminals.tech" },
 ]
@@ -28,7 +28,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
@@ -36,8 +35,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "numpy",
-    "pydantic>=2.9",
+    "numpy>=2.3.5,<3",
+    "pydantic>=2.13.5,<3",
 ]
 
 [project.urls]
@@ -52,8 +51,8 @@ packages = ["src/carl_core"]
 [tool.pyright]
 include = ["src"]
 typeCheckingMode = "strict"
-pythonVersion = "3.11"
+pythonVersion = "3.12"
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 100

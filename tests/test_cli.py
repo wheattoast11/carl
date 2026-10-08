@@ -284,6 +284,7 @@ def test_root_help_emphasizes_camp_and_lab_namespaces():
 
 
 def test_doctor_json_reports_project_blocker(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("carl_studio.cli.shared._module_available", lambda module: True)
     monkeypatch.setattr(settings_mod, "GLOBAL_CONFIG", tmp_path / "config.yaml")
     monkeypatch.setattr(settings_mod, "_find_local_config", lambda: None)
     monkeypatch.setattr(theme_mod, "THEME_FILE", tmp_path / "theme.yaml")

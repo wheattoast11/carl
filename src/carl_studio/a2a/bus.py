@@ -215,8 +215,28 @@ class LocalBus:
                 (task_id,),
             ).fetchone()
         if row is None:
-            return None
+            return self._delegated_task(task_id)
         return _task_from_row(row)
+
+    def _delegated_task(self, task_id: str) -> A2ATask | None:
+        """Observe a delegated task without creating a second execution owner."""
+        path = self._path.parent / "mcp_tasks.db"
+        if not path.exists():
+            return None
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT * FROM mcp_tasks WHERE task_id=? AND tool_name='delegate_agent'", (task_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        status = "done" if row["status"] == "completed" else row["status"]
+        return A2ATask(id=row["task_id"], skill="delegate_agent", status=A2ATaskStatus(status),
+                       progress=float(row["progress"]),
+                       inputs={}, result=json.loads(row["result"]) if row["result"] else None,
+                       error=row["error"], created_at=row["submitted_at"],
+                       updated_at=row["completed_at"] or row["submitted_at"],
+                       completed_at=row["completed_at"], sender="carl", receiver="native-harness")
 
     def update(self, task: A2ATask) -> None:
         """Persist the current state of a task (all mutable fields)."""
@@ -225,7 +245,7 @@ class LocalBus:
                 """UPDATE a2a_tasks
                    SET status = ?, result = ?, error = ?, updated_at = ?,
                        completed_at = ?, priority = ?
-                   WHERE id = ?""",
+                   WHERE id = ? AND status IN ('pending','running')""",
                 (
                     task.status.value,
                     json.dumps(task.result) if task.result is not None else None,
@@ -243,6 +263,11 @@ class LocalBus:
 
         No-op if the task is already in a terminal state or does not exist.
         """
+        projected = self._delegated_task(task_id)
+        if projected is not None:
+            from carl_core.errors import CARLError
+            raise CARLError("Use tasks_cancel on the submitting MCP connection",
+                            code="carl.agent.control_owner")
         now = _utcnow()
         with self._connect() as conn:
             conn.execute(

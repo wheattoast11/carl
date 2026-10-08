@@ -21,34 +21,22 @@ def mcp_serve(
     ctx: typer.Context = typer.Option(None, hidden=True),
     transport: str = typer.Option("stdio", "--transport", "-t", help="Transport: stdio or http"),
     port: int = typer.Option(8100, "--port", "-p", help="HTTP port (if transport=http)"),
+    host: str = typer.Option("127.0.0.1", "--host", help="HTTP bind address"),
 ) -> None:
     """[experimental] Start the CARL Studio MCP server (9 tools for AI agents)."""
     c = get_console()
     _warn_legacy_command_alias(c, ctx, "carl lab mcp")
-    from carl_studio.tier import check_tier, tier_message
-
-    allowed, _, _ = check_tier("mcp.serve")
-    if not allowed:
-        c.error_with_hint(
-            tier_message("mcp.serve") or "MCP server requires CARL Paid.",
-            hint="Upgrade with: carl camp upgrade",
-            signup_url="https://carl.camp/pricing",
-            code="tier:mcp.serve",
-        )
-        raise typer.Exit(1)
     try:
-        from carl_studio.mcp import mcp as mcp_server
+        from carl_studio.mcp.__main__ import serve
     except ImportError as exc:
         _render_extra_install_hint(c, "mcp", "MCP server support is not installed.", exc)
         raise typer.Exit(1)
 
-    if transport == "stdio":
-        mcp_server.run(transport="stdio")
-    elif transport == "http":
-        mcp_server.run(transport="streamable-http", host="0.0.0.0", port=port)
-    else:
+    if transport not in {"stdio", "http"}:
         c.error(f"Unknown transport '{transport}'. Use stdio or http.")
         raise typer.Exit(1)
+    import asyncio
+    asyncio.run(serve(transport, host=host, port=port))
 
 
 # ---------------------------------------------------------------------------

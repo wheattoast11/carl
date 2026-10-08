@@ -124,7 +124,7 @@ async def _send_via_sdk(
     # Keyword-order matches the MCP SDK 1.10+ surface we verified at
     # implementation time. ``requestedSchema`` is the camelCase parameter
     # name used by the JSON-RPC wire format and the Python binding.
-    return await session.elicit(message=prompt, requestedSchema=schema)
+    return await session.elicit_form(message=prompt, requested_schema=schema)
 
 
 def marshal_sdk_result(raw: Any) -> ElicitationResponse:

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+CARL_CHECKOUT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+cd -- "$CARL_CHECKOUT"
+uv run --no-project --with 'uv==0.12.23' uv sync --locked --python 3.12 --extra mcp --extra cli --inexact
+exec "$CARL_CHECKOUT/.venv/bin/carl" plugin install "$@"

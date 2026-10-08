@@ -19,11 +19,7 @@ Rules
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:  # pragma: no cover
-    from mcp.server.fastmcp import FastMCP
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Schema building blocks
@@ -457,78 +453,21 @@ LEGACY_TOOL_NAMES: tuple[str, ...] = (
 )
 
 
-def register_output_schemas(mcp_instance: "FastMCP | Any") -> dict[str, dict[str, Any]]:
-    """Attach output schemas to every registered tool on ``mcp_instance``.
+def register_output_schemas(mcp_instance: Any) -> dict[str, dict[str, Any]]:
+    """Query public tool declarations and retain CARL schema introspection."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
 
-    FastMCP 1.10+ accepts an ``output_schema`` kwarg on ``@mcp.tool()``.
-    Our existing ``server.py`` registers tools without that kwarg because
-    the decorators ran at import time against an older SDK signature; we
-    patch the schemas on after the fact.
+    async def registered() -> set[str]:
+        return {tool.name for tool in await mcp_instance.list_tools()}
 
-    Strategy
-    --------
-    1. If the tool manager has a ``set_output_schema(name, schema)`` API,
-       call it. (Reserved for future SDK versions.)
-    2. Otherwise, attach the schemas to a module-level
-       ``_carl_output_schemas`` attribute so clients/tests can retrieve
-       them via introspection.
-
-    Returns the dict of schemas actually attached (excludes tools the
-    instance doesn't know about).
-    """
-    attached: dict[str, dict[str, Any]] = {}
-    manager = getattr(mcp_instance, "_tool_manager", None)
-
-    # Helper: find the tool object by name through whichever API is present.
-    def _get_tool(name: str) -> Any:
-        if manager is None:
-            return None
-        getter = getattr(manager, "get_tool", None)
-        if callable(getter):
-            try:
-                return getter(name)
-            except Exception:
-                return None
-        tools = getattr(manager, "_tools", None)
-        if isinstance(tools, dict):
-            typed_tools: dict[str, Any] = tools  # type: ignore[assignment]
-            return typed_tools.get(name)
-        return None
-
-    for name, schema in OUTPUT_SCHEMAS.items():
-        tool_obj = _get_tool(name)
-        if tool_obj is None:
-            # Tool not registered on this FastMCP instance — skip silently.
-            continue
-        # Prefer the official attribute if the SDK exposes it.
-        if hasattr(tool_obj, "output_schema"):
-            try:
-                setattr(tool_obj, "output_schema", schema)
-            except Exception:
-                pass
-        # Always stash our own attribute so downstream code and tests have
-        # a stable surface independent of SDK version.
-        try:
-            setattr(tool_obj, "_carl_output_schema", schema)
-        except Exception:
-            pass
-        attached[name] = schema
-
-    # Mirror onto the FastMCP instance itself for global introspection.
-    existing = getattr(mcp_instance, "_carl_output_schemas", None)
-    if isinstance(existing, dict):
-        typed_existing: dict[str, Any] = existing  # type: ignore[assignment]
-        typed_existing.update(attached)
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        names = asyncio.run(registered())
     else:
-        try:
-            setattr(mcp_instance, "_carl_output_schemas", dict(attached))
-        except Exception:
-            pass
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            names = executor.submit(lambda: asyncio.run(registered())).result(timeout=5)
+    attached = {name: schema for name, schema in OUTPUT_SCHEMAS.items() if name in names}
+    mcp_instance._carl_output_schemas = attached
     return attached
-
-
-__all__ = [
-    "LEGACY_TOOL_NAMES",
-    "OUTPUT_SCHEMAS",
-    "register_output_schemas",
-]

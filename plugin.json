@@ -1,0 +1,22 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "carl",
+  "version": "0.21.0",
+  "description": "Coherence-Aware Reinforcement Learning and bidirectional local agent workflows.",
+  "author": {
+    "name": "Tej Desai"
+  },
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "CARL",
+        "shortDescription": "Train, evaluate, and delegate",
+        "longDescription": "Use CARL's local observe, train, eval, and skill workflows. Delegate bounded work to Codex, Claude Code, or OpenCode and retrieve progress and results.",
+        "developerName": "Tej Desai",
+        "category": "Developer",
+        "defaultPrompt": "Use CARL for this task."
+      }
+    }
+  }
+}

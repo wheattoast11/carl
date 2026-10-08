@@ -39,7 +39,7 @@ class FakeElicitResult:
 
 
 class StubSession:
-    """Captures the (message, requestedSchema) pair and returns a canned result."""
+    """Captures the (message, requested_schema) pair and returns a canned result."""
 
     def __init__(
         self,
@@ -53,13 +53,13 @@ class StubSession:
         self.raise_exc = raise_exc
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
-    async def elicit(
+    async def elicit_form(
         self,
         *,
         message: str,
-        requestedSchema: dict[str, Any],
+        requested_schema: dict[str, Any],
     ) -> FakeElicitResult:
-        self.calls.append((message, dict(requestedSchema)))
+        self.calls.append((message, dict(requested_schema)))
         if self.delay_s:
             await asyncio.sleep(self.delay_s)
         if self.raise_exc is not None:
