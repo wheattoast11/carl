@@ -3,6 +3,9 @@
 Every test here corresponds to a bug that was found in production
 and had ZERO test coverage. These are the tests that matter.
 """
+
+from __future__ import annotations
+
 import threading
 
 import numpy as np
@@ -198,9 +201,14 @@ class TestCascadeTrainerContract:
 # ---------------------------------------------------------------------------
 
 class TestCarlRewardTraceStorage:
-    def test_make_carl_reward_has_last_traces(self):
+    def test_make_carl_reward_has_last_traces(self, monkeypatch):
         """make_carl_reward closure must expose _last_traces for callbacks."""
+        import sys
+        from types import SimpleNamespace
+
         from carl_studio.training.rewards.composite import make_carl_reward
+
+        monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(no_grad=lambda: lambda fn: fn))
 
         # Use a trivial mock model
         class MockModel:

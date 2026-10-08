@@ -75,7 +75,7 @@ class _DummyTokenizer:
 # ---------------------------------------------------------------------------
 
 
-def _patch_torch_module() -> ModuleType:
+def _patch_torch_module(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Install a stub ``torch`` module so make_carl_reward can import it.
 
     make_carl_reward uses ``import torch`` at function-entry time (to attach
@@ -92,17 +92,17 @@ def _patch_torch_module() -> ModuleType:
         return existing
     mod = ModuleType("torch")
 
-    def no_grad(fn: Any) -> Any:  # pragma: no cover - trivial passthrough
-        return fn
+    def no_grad(fn: Any = None) -> Any:
+        return fn if fn is not None else lambda function: function
 
     mod.no_grad = no_grad  # type: ignore[attr-defined]
-    sys.modules["torch"] = mod
+    monkeypatch.setitem(sys.modules, "torch", mod)
     return mod
 
 
-def test_reward_class_static_dispatches_carl_reward() -> None:
+def test_reward_class_static_dispatches_carl_reward(monkeypatch: pytest.MonkeyPatch) -> None:
     """reward_class='static' constructs a plain CARLReward internally."""
-    _patch_torch_module()
+    _patch_torch_module(monkeypatch)
     with patch.object(
         sys.modules["carl_studio.training.rewards.composite"],
         "CARLReward",
@@ -122,9 +122,9 @@ def test_reward_class_static_dispatches_carl_reward() -> None:
         assert mock_par.call_count == 0
 
 
-def test_reward_class_phase_adaptive_dispatches_par() -> None:
+def test_reward_class_phase_adaptive_dispatches_par(monkeypatch: pytest.MonkeyPatch) -> None:
     """reward_class='phase_adaptive' constructs PhaseAdaptiveCARLReward."""
-    _patch_torch_module()
+    _patch_torch_module(monkeypatch)
     with patch.object(
         sys.modules["carl_studio.training.rewards.composite"],
         "CARLReward",
@@ -144,9 +144,9 @@ def test_reward_class_phase_adaptive_dispatches_par() -> None:
         assert mock_static.call_count == 0
 
 
-def test_reward_class_unknown_raises() -> None:
+def test_reward_class_unknown_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """Typo in YAML should fail loudly, not silently fall back."""
-    _patch_torch_module()
+    _patch_torch_module(monkeypatch)
     with pytest.raises(ValueError, match="reward_class"):
         make_carl_reward(
             model=_DummyModel(),
@@ -404,7 +404,7 @@ def test_prebuilt_cascade_instance_is_respected_verbatim() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_trainer_build_rewards_threads_full_cascade_config() -> None:
+def test_trainer_build_rewards_threads_full_cascade_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """CARLTrainer._build_rewards must honor every new YAML field.
 
     Smoke test for the integration contract: every knob added to
@@ -426,7 +426,7 @@ def test_trainer_build_rewards_threads_full_cascade_config() -> None:
     )
     trainer = CARLTrainer(cfg, skip_credits=True)
 
-    _patch_torch_module()
+    _patch_torch_module(monkeypatch)
     with patch(
         "carl_studio.training.rewards.composite.make_carl_reward",
         wraps=make_carl_reward,

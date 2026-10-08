@@ -12,6 +12,7 @@ jobs:
   python:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python: ["3.12", "3.13"]
     steps:
@@ -23,7 +24,7 @@ jobs:
         with:
           version: "0.12.23"
       - run: uv lock --check
-      - run: uv sync --locked --extra dev --extra mcp --extra cli --extra observe --extra hf --extra constitutional --extra secrets
+      - run: uv sync --locked --extra dev --extra training --extra mcp --extra cli --extra observe --extra hf --extra constitutional --extra secrets
       - run: uv run --locked --no-sync pytest tests/ packages/carl-core/tests/ -q --tb=short
       - run: uv run --locked --no-sync python scripts/check_moat_boundary.py
       - run: uv run --locked --no-sync python -m build

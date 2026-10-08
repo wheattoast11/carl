@@ -24,6 +24,7 @@ from typing import Any
 
 import pytest
 import typer
+from click import unstyle
 from typer.testing import CliRunner
 
 from carl_studio.cli import entry as entry_mod
@@ -384,9 +385,10 @@ class TestChatCmdInitialMessageKwarg:
         _wired()
         result = runner.invoke(app, ["chat", "--help"])
         assert result.exit_code == 0
-        assert "--initial-message" not in result.output
-        assert "--initial_message" not in result.output
-        assert "--session" in result.output
+        output = unstyle(result.output)
+        assert "--initial-message" not in output
+        assert "--initial_message" not in output
+        assert "--session" in output
 
 
 class TestPublicSurface:
