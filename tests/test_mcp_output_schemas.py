@@ -90,7 +90,7 @@ class TestOutputSchemaRegistry(unittest.TestCase):
 class TestRegisterOutputSchemas(unittest.TestCase):
     def test_attaches_schemas_onto_fastmcp_tools(self) -> None:
         pytest.importorskip("mcp")
-        from mcp.server.fastmcp import FastMCP
+        from mcp.server.mcpserver import MCPServer as FastMCP
 
         m = FastMCP("test-schemas")
 
@@ -113,7 +113,7 @@ class TestRegisterOutputSchemas(unittest.TestCase):
 
     def test_ignores_unknown_tools_silently(self) -> None:
         pytest.importorskip("mcp")
-        from mcp.server.fastmcp import FastMCP
+        from mcp.server.mcpserver import MCPServer as FastMCP
 
         m = FastMCP("empty-schemas")
         # No tools registered — should succeed and attach nothing.

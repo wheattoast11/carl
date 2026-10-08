@@ -7,7 +7,7 @@ Keep this file short, current, and grounded in code truth.
 
 - `carl-studio` is an MIT-licensed Python package and CLI for
   **Coherence-Aware Reinforcement Learning**.
-- Python requirement: `>=3.11`.
+- Python requirement: `>=3.12`.
 - `pyproject.toml` is the source of truth for packaging, dependencies, Ruff, and Pyright.
 - `README.md` is for users. `AGENTS.md` is the agent execution guide.
 
@@ -152,7 +152,7 @@ Run pytest from the repo root. `tests/conftest.py` depends on repo-relative path
 - `src/carl_studio/cli/init.py` — `carl init` / `carl camp init` one-shot wizard. First-run marker `~/.carl/.initialized`.
 - `src/carl_studio/cli/flow.py` — `carl flow "/a /b /c"` operation chainer (trace → `~/.carl/interactions/<id>.jsonl`).
 - `src/carl_studio/cli/operations.py` — flow op registry (doctor, start, init, ask, chat, flow, ship, review, simplify, train, eval, infer, publish, push, diagnose). **Flow ops vs top-level commands:** `doctor`, `chat`, `init`, `flow`, `train`, `eval`, `publish`, `push`, `update`, `env`, `agent`, `contract`, `metrics`, `run` are both flow ops AND top-level CLI commands. `ship`, `review`, `simplify`, `ask`, `diagnose`, `start`, `infer` are ONLY flow ops — invoke via `carl flow "/ship"`, not `carl ship`.
-- `src/carl_studio/mcp/server.py` — FastMCP server.
+- `src/carl_studio/mcp/server.py` — MCP 2 server through public `CARLMCPServer` APIs.
 - `src/carl_studio/db.py` — local SQLite state under `~/.carl`.
 - `src/carl_studio/settings.py` — layered config from env, `~/.carl/config.yaml`, and `carl.yaml`.
 - `src/carl_studio/admin.py` — hardware-gated access to the private runtime.
@@ -289,12 +289,8 @@ The plan that drove the implementation: `docs/v17_cli_ux_and_dep_probe_plan.md`.
 - `python -m build` works.
 - Single pytest node IDs work from the repo root.
 - Repo-wide Ruff and Pyright currently have pre-existing noise; validate touched files first.
-- Test baseline (post v0.18.3 PyPI publish + carl --version + bearer fix, 2026-04-25):
-  **~3770 tests pass; 16 pre-existing `test_heartbeat.py` fixture-
-  collision errors surface ONLY in full-suite runs.** v0.18 surface
-  (router + sessions + trust + project-context + init + resonant +
-  parity + bearer-resolution + version-flag): **181 tests green in ~1.4s**
-  (164 pre-existing + 8 journey + 6 bearer + 3 version).
+- Verified local baseline (2026-10-07): **4,318 passed, 29 skipped** in the
+  complete Python 3.12 all-extra environment; `docs/carl-plugin-verification.md` holds the final count.
 - **Live on PyPI (2026-04-25):** `carl-studio==0.18.3`, `carl-core==0.1.2`.
   Earlier 0.18.1 / 0.18.2 are install-broken (carl-core 404 at install
   time); yank candidates.
@@ -759,3 +755,13 @@ reward composition, policy features, and hardware-attested head fitting.
 - **uv workspace excludes `packages/emlt-codec-ts`** (TypeScript
   sibling, no `pyproject.toml`). Don't drop the exclude or `uv lock`
   fails.
+
+## Local plugin and native harnesses
+
+The canonical skill is `skills/carl/SKILL.md`; root `plugin.json` and `mcp.json`
+provide the portable package. `carl plugin` owns native projections and installation.
+`harness/` implements caller-bound Codex, Claude Code, and OpenCode delegation
+through Session, SubprocessToolkit, MCPTaskStore, and ToolDispatcher.
+Local MCP startup and user-directed delegation are FREE. Existing autonomy,
+remote telemetry consent, and paid-service gates remain at their effect owners.
+Verification and exact dependency exceptions: `docs/carl-plugin-verification.md`.

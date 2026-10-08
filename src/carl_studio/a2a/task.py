@@ -35,6 +35,7 @@ class A2ATask(BaseModel):
     updated_at: str = Field(default_factory=_utcnow)
     completed_at: str | None = None
     priority: int = 0
+    progress: float | None = None
 
     def mark_running(self) -> "A2ATask":
         """Transition to RUNNING. No-op if already terminal."""

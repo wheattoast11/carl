@@ -67,6 +67,10 @@ app.command(name="init")(init_cmd)
 app.command(name="flow")(flow_cmd)
 # `carl queue` — user-facing sticky-note work inbox. Not optional.
 app.add_typer(queue_app, name="queue")
+
+from .plugin import plugin_app
+
+app.add_typer(plugin_app, name="plugin")
 # v0.19 anticipatory coherence (FREE tier) — trinity + substrate health.
 from .forecast import forecast_app  # noqa: E402
 from .substrate import substrate_app  # noqa: E402

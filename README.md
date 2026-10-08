@@ -76,6 +76,35 @@ pip install 'carl-studio[quickstart]'
 Full extras matrix, reproducible installs via `uv.lock`, and conflict rules (e.g.
 `wallet` vs `x402`) live in [`docs/INSTALL.md`](docs/INSTALL.md).
 
+## Agent plugin
+
+From a CARL checkout:
+
+```bash
+./scripts/install-plugin
+source .venv/bin/activate
+carl plugin doctor
+```
+
+The installer detects Codex, Claude Code, and OpenCode, registers their CARL MCP
+connection, and installs the canonical `carl` skill. Use `$carl` in Codex and
+`/carl` in Claude Code; the native Claude plugin also exposes `/carl:carl`.
+Other Agent Skills/MCP clients can consume the portable package in this directory.
+
+Local plugin access is FREE. CARL can delegate user-directed work to these
+installed harnesses with progress, native permission replies, cancellation, and
+verified result artifacts. Scheduled autonomy and paid services keep their gates.
+
+```bash
+carl lab agent harnesses
+carl lab agent delegate codex < instruction.txt
+carl plugin update
+carl plugin uninstall
+```
+
+Python 3.12+ is required. Installation preserves foreign skills and unrelated host
+configuration. [Plugin details and verification](docs/carl-plugin-verification.md).
+
 ## CLI quickstart
 
 ```bash

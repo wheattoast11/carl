@@ -120,8 +120,8 @@ class TestFeatureRegistry:
         assert FEATURE_TIERS["train.send_it"] is Tier.PAID
         assert FEATURE_TIERS["train.auto_gate"] is Tier.PAID
         assert FEATURE_TIERS["train.scheduled"] is Tier.PAID
-        assert FEATURE_TIERS["mcp"] is Tier.PAID
-        assert FEATURE_TIERS["mcp.serve"] is Tier.PAID
+        assert FEATURE_TIERS["mcp"] is Tier.FREE
+        assert FEATURE_TIERS["mcp.serve"] is Tier.FREE
         assert FEATURE_TIERS["dashboard"] is Tier.PAID
         assert FEATURE_TIERS["sync.cloud"] is Tier.PAID
         assert FEATURE_TIERS["marketplace.publish"] is Tier.PAID

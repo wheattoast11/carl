@@ -7,7 +7,6 @@ from typing import Any
 import typer
 
 from carl_studio.console import get_console
-from carl_studio.skills.builtins import BUILTIN_SKILLS
 from carl_studio.skills.runner import SkillRunner
 
 skills_app = typer.Typer(
@@ -18,10 +17,8 @@ skills_app = typer.Typer(
 
 
 def _get_runner() -> SkillRunner:
-    r = SkillRunner()
-    for s in BUILTIN_SKILLS:
-        r.register(s)
-    return r
+    from carl_studio.skills.runner import build_skill_runner
+    return build_skill_runner()
 
 
 @skills_app.command(name="list")

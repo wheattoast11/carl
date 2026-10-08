@@ -1,0 +1,9 @@
+{
+  "name": "carl",
+  "version": "0.20.1",
+  "description": "Coherence-Aware Reinforcement Learning and bidirectional local agent workflows.",
+  "author": {
+    "name": "Tej Desai"
+  },
+  "mcpServers": "./.mcp.json"
+}

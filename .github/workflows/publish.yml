@@ -35,21 +35,21 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
-      - run: pip install build
+          version: "0.12.23"
       - name: Verify lockfile is up-to-date
         run: uv lock --check
       - name: Sync locked dependencies
-        run: uv sync --locked --all-extras --no-install-workspace || uv sync --locked --extra all
+        run: uv sync --locked --extra all
       # --- Release path: resolve_version may bump pyproject + commit ---
       - name: Resolve release version (release path only)
         if: github.event_name == 'release'
@@ -95,13 +95,12 @@ jobs:
             exit 1
           fi
           echo "Tag $TAG_VER matches pyproject version $py_ver"
-      - run: python -m build
+      - run: uv run --locked --no-sync python -m build
       - name: Generate SBOM (CycloneDX)
         run: |
-          pip install cyclonedx-bom
-          cyclonedx-py environment --output-format json --output-file sbom.json
+          uv run --locked --no-sync cyclonedx-py environment --output-format json --output-file sbom.json
       - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sbom
           path: sbom.json
@@ -116,7 +115,7 @@ jobs:
       # or push a tag instead.
       - name: Publish to PyPI
         if: github.event_name == 'release' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
       - name: Dry-run summary (workflow_dispatch always skips upload)
         if: github.event_name == 'workflow_dispatch'
         run: |
@@ -136,13 +135,13 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
-      - run: pip install build tomli
+      - run: pip install build==1.6.1
 
       - name: Parse tag into package + version
         id: parse
@@ -172,7 +171,7 @@ jobs:
           PKG_DIR: ${{ steps.parse.outputs.package_dir }}
           EXPECTED: ${{ steps.parse.outputs.version }}
         run: |
-          actual=$(python -c "import tomli; print(tomli.loads(open('$PKG_DIR/pyproject.toml','rb').read().decode())['project']['version'])")
+          actual=$(python -c "import os, pathlib, tomllib; print(tomllib.loads(pathlib.Path(os.environ['PKG_DIR'], 'pyproject.toml').read_text())['project']['version'])")
           if [ "$actual" != "$EXPECTED" ]; then
             echo "Version mismatch: tag says $EXPECTED, pyproject says $actual"
             exit 1
@@ -183,6 +182,6 @@ jobs:
         working-directory: ${{ steps.parse.outputs.package_dir }}
         run: python -m build
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: ${{ steps.parse.outputs.package_dir }}/dist/

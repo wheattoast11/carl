@@ -363,6 +363,11 @@ class AgentEvent(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+from carl_studio.harness.tool_schemas import tool_schemas as _harness_tool_schemas
+
+TOOLS.extend(_harness_tool_schemas())
+
+
 def _validate_tool_args(
     tool_name: str,
     tool_args: dict[str, Any],
@@ -538,12 +543,10 @@ class CARLAgent:
             # at 60s with a 10s connect budget so a single wedged TCP
             # handshake can't block the agent indefinitely.
             try:
-                import httpx
-
                 self._client = anthropic.Anthropic(
                     api_key=api_key or None,
                     max_retries=4,
-                    timeout=httpx.Timeout(60.0, connect=10.0),
+                    timeout=anthropic.Timeout(60.0, connect=10.0),
                 )
             except ImportError:  # pragma: no cover — httpx ships with anthropic
                 # Fallback: if httpx is somehow absent, still get the retry
@@ -715,11 +718,13 @@ class CARLAgent:
         try:
             from carl_core.interaction import ActionType
 
+            from carl_studio.harness.types import trace_projection
+            safe_input, safe_output = trace_projection(name, tool_input, output)
             chain.record(
                 ActionType.TOOL_CALL,
                 f"agent.chat:tool:{name}",
-                input={"tool_name": name, "args": tool_input},
-                output={"outcome": outcome, "result": output},
+                input={"tool_name": name, "args": safe_input},
+                output={"outcome": outcome, "result": safe_output},
                 success=success,
                 duration_ms=duration_ms,
             )
@@ -1779,6 +1784,31 @@ class CARLAgent:
             "dispatch_cli",
             lambda a: self._tool_dispatch_cli(a),
         )
+
+        for schema in _harness_tool_schemas():
+            name = schema["name"]
+            dispatcher.register_simple(name, lambda args, tool=name: self._tool_harness(tool, args))
+
+    def _tool_harness(self, name: str, arguments: dict[str, Any]) -> str:
+        from carl_studio.harness.adapters import list_harnesses
+        if name == "list_agent_harnesses":
+            return json.dumps({"harnesses": list_harnesses()})
+        bridge = getattr(self, "_harness_bridge", None)
+        if bridge is None:
+            from carl_core.interaction import InteractionChain
+
+            from carl_studio.harness.bridge import HarnessBridge
+            from carl_studio.session import Session
+            chain = self._get_chain() or InteractionChain()
+            bridge = HarnessBridge(Session(chain=chain), Path(self._workdir), allow_write=True)
+            self._harness_bridge = bridge
+        return json.dumps(bridge.invoke(name, arguments), default=str)
+
+    def close(self) -> None:
+        """Release native delegates owned by this chat agent."""
+        bridge = getattr(self, "_harness_bridge", None)
+        if bridge is not None:
+            bridge.close()
 
     # ------------------------------------------------------------------
     # Tool handlers

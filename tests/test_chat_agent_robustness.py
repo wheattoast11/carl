@@ -1578,7 +1578,6 @@ class TestRateLimitErrorHandling:
         """
         try:
             import anthropic
-            import httpx
         except ImportError:
             pytest.skip("anthropic SDK not installed")
 
@@ -1598,4 +1597,4 @@ class TestRateLimitErrorHandling:
         # Timeout should be an ``httpx.Timeout`` so a wedged handshake
         # cannot stall the agent indefinitely.
         timeout = captured_kwargs.get("timeout")
-        assert isinstance(timeout, httpx.Timeout)
+        assert isinstance(timeout, anthropic.Timeout)

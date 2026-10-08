@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-04-19
+last_updated: 2026-10-07
 author: Tej Desai
-applies_to: v0.8.0
+applies_to: carl-studio 0.20.1
 ---
 
 # Install
@@ -41,7 +41,7 @@ at a remote run.
 | `tui` | `carl observe --live` (Textual TUI) | `pip install 'carl-studio[tui]'` |
 | `runpod` | RunPod compute backend | `pip install 'carl-studio[runpod]'` |
 | `tinker` | Tinker compute backend | `pip install 'carl-studio[tinker]'` |
-| `mcp` | MCP server (`carl mcp serve`) | `pip install 'carl-studio[mcp]'` |
+| `mcp` | MCP server (`carl-mcp` / `carl lab mcp`) | `pip install 'carl-studio[mcp]'` |
 | `research` | `carl research ...` and `carl lab research ...` (arxiv) | `pip install 'carl-studio[research]'` |
 | `a2a` | Agent-to-agent protocol | `pip install 'carl-studio[a2a]'` |
 | `wallet` | Coinbase AgentKit wallet + keyring | `pip install 'carl-studio[wallet]'` |
@@ -56,7 +56,7 @@ Two extras are **mutually exclusive** because their upstream dependency graphs
 disagree on a pinned version of `x402`:
 
 - `wallet` — pulls `coinbase-agentkit`, which pins `x402<2`
-- `x402` — requires `x402>=2.7` (the newer standalone rail)
+- `x402` — requires `x402>=2.25` (the newer standalone rail)
 
 You must pick one. The `[all]` meta-extra includes `x402` (the newer rail) and
 deliberately excludes `wallet`. If you need Coinbase AgentKit, install it
@@ -87,3 +87,33 @@ CI enforces the lockfile with `uv lock --check` before publish. An SBOM
 
 None of the install paths require credentials. Runtime credentials (HF, Claude,
 RunPod, Stripe, etc.) are described in [`docs/auth.md`](auth.md).
+
+## October 7 compatibility snapshot
+
+Python 3.12+ is the package baseline. One `uv.lock` serves the lightweight and
+all-extra installs. The installer preserves existing extras in the same project
+environment. SGLang is included on Linux Python 3.12/3.13; other platforms keep
+the adapter's documented dependency-availability behavior.
+
+SGLang 0.5.21 constrains Torch to 2.13.0, Transformers to 5.12.1, and tokenizers
+to 0.22.2. Hub stays at 1.33.0. Mistral requires NumPy below 2.4 on Python 3.12,
+so that interpreter uses 2.3.5; Python 3.13 uses 2.4.6 and Python 3.14+ uses 2.5.3.
+CUDA Tile 1.6.0rc5 and FlashAttention 4 beta are required upstream exceptions.
+
+Legacy wallet support remains opt-in on Python 3.12/3.13. Its AgentKit/NilQL/BCL
+graph retains older CFFI, cryptography, PyNaCl, Paramiko, and x402 versions. It
+cannot be combined with all, x402, RunPod, constitutional, or secrets extras.
+Python 3.14+ retains wallet encryption/state support without AgentKit creation.
+Exact advisory matches and applicability are recorded in the dependency review.
+
+## Native plugin witnesses
+
+```bash
+python scripts/witness_native_harness.py codex metrics
+python scripts/witness_native_harness.py claude metrics
+python scripts/witness_native_harness.py opencode metrics
+```
+
+These use actual installed binaries, synthetic credentials, disposable profiles,
+and localhost providers. `cancel` replaces `metrics` to exercise interruption.
+They require local socket access and do not qualify a paid provider or GPU model.

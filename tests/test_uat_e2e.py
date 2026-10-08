@@ -1132,7 +1132,7 @@ class TestTierGateIntegration:
         """Features that require PAID tier."""
         from carl_studio.tier import Tier, tier_allows
 
-        paid_features = ["train.send_it", "mcp"]
+        paid_features = ["train.send_it", "train.scheduled"]
         for feature in paid_features:
             assert not tier_allows(Tier.FREE, feature), f"FREE should not allow {feature}"
             assert tier_allows(Tier.PAID, feature), f"PAID should allow {feature}"
@@ -1925,18 +1925,18 @@ class TestFailurePathJourneys:
         )
 
         # Journey step 2: check_tier reports disallowed with guidance.
-        allowed, effective, required = check_tier("mcp")
+        allowed, effective, required = check_tier("train.send_it")
         assert allowed is False
         assert effective == Tier.FREE
         assert required == Tier.PAID
 
         # Journey step 3: invoking a @tier_gate(PAID) function raises
         # TierGateError, which is our typed tier error.
-        @tier_gate(Tier.PAID, feature="mcp")
+        @tier_gate(Tier.PAID, feature="train.send_it")
         def _paid_only() -> str:
             return "secret"
 
-        with pytest.raises(TierGateError, match="mcp"):
+        with pytest.raises(TierGateError, match="train.send_it"):
             _paid_only()
 
     # ------------------------------------------------------------------

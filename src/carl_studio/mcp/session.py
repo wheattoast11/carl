@@ -150,48 +150,17 @@ def session_to_dict(session: MCPSession) -> dict[str, str]:
     }
 
 
-def extract_session(conn: "MCPServerConnection | None") -> Any:
-    """Best-effort lookup of a ``ServerSession``-like object on the connection.
-
-    This is the canonical helper used by both :mod:`carl_studio.mcp.elicitation`
-    and :mod:`carl_studio.mcp.sampling` to reach the active FastMCP
-    ``ServerSession`` (the wire-level send/receive seam, **not**
-    :class:`MCPSession` which is carl-studio's auth-state snapshot).
-
-    Resolution order:
-
-    1. ``conn._session_override`` — test-harness hook that lets unit tests
-       attach a stub ``ServerSession`` without standing up a live FastMCP
-       request context.
-    2. ``conn.fastmcp.get_context().session`` — the public FastMCP 1.10+
-       accessor for the in-flight request's ``ServerSession``.
-
-    Returns ``None`` when no session is resolvable (connection is ``None``,
-    FastMCP absent, or we are outside a request context).
-    """
-    if conn is None:
-        return None
-
-    override = getattr(conn, "_session_override", None)
-    if override is not None:
-        return override
-
-    fastmcp = getattr(conn, "fastmcp", None)
-    if fastmcp is None:
-        return None
-
-    ctx_getter = getattr(fastmcp, "get_context", None)
-    if callable(ctx_getter):
+def extract_session(conn: MCPServerConnection | None, ctx: Any = None) -> Any:
+    """Resolve an injected request session or the existing test override."""
+    if ctx is None:
+        from carl_studio.mcp.protocol import ACTIVE_CONTEXT
+        ctx = ACTIVE_CONTEXT.get()
+    if ctx is not None:
         try:
-            ctx = ctx_getter()
-        except Exception:
-            ctx = None
-        if ctx is not None:
-            session = getattr(ctx, "session", None)
-            if session is not None:
-                return session
-
-    return None
+            return ctx.session
+        except (AttributeError, ValueError):
+            return None
+    return getattr(conn, "_session_override", None) if conn is not None else None
 
 
 __all__ = [

@@ -112,7 +112,7 @@ def task_to_jsonrpc_result(task: Any) -> dict[str, Any]:
         "failed": "failed",
         "cancelled": "canceled",
     }
-    return {
+    result = {
         "id": task.id,
         "status": {
             "state": status_map.get(task.status, task.status),
@@ -123,6 +123,13 @@ def task_to_jsonrpc_result(task: Any) -> dict[str, Any]:
             "receiver": task.receiver,
         },
     }
+    if getattr(task, "result", None) is not None:
+        result["result"] = task.result
+    if getattr(task, "error", None) is not None:
+        result["error"] = task.error
+    if getattr(task, "progress", None) is not None:
+        result["metadata"]["progress"] = task.progress
+    return result
 
 
 def message_send_to_task(params: dict[str, Any]) -> dict[str, Any]:
