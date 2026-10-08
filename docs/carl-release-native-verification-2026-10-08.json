@@ -1,0 +1,91 @@
+{
+  "date": "2026-10-08",
+  "evidence_class": "actual native binaries with synthetic localhost providers",
+  "cases": [
+    {
+      "host": "claude",
+      "mode": "cancel",
+      "status": "cancelled",
+      "elapsed_s": 2.48,
+      "permission_replies": 0,
+      "result_match": null,
+      "cancel_errors": [],
+      "source_hashes": {
+        "adapters.py": "a654016b334ef0c64a1da60fb936164bae41e2e077817b432a5d113945599793",
+        "runtime.py": "22c3081a487feb7360eb345ed4ec780cb3e414ec7170a16a4da06bbbc5bcf9e7",
+        "types.py": "735325c70e5e29a6f1c47e16a37b4fe85b30ec8ca0152dcd2e1a1bdb22e2d4ff"
+      }
+    },
+    {
+      "host": "claude",
+      "mode": "metrics",
+      "status": "completed",
+      "elapsed_s": 2.51,
+      "permission_replies": 1,
+      "result_match": true,
+      "cancel_errors": [],
+      "source_hashes": {
+        "adapters.py": "a654016b334ef0c64a1da60fb936164bae41e2e077817b432a5d113945599793",
+        "runtime.py": "22c3081a487feb7360eb345ed4ec780cb3e414ec7170a16a4da06bbbc5bcf9e7",
+        "types.py": "735325c70e5e29a6f1c47e16a37b4fe85b30ec8ca0152dcd2e1a1bdb22e2d4ff"
+      }
+    },
+    {
+      "host": "codex",
+      "mode": "cancel",
+      "status": "cancelled",
+      "elapsed_s": 1.83,
+      "permission_replies": 0,
+      "result_match": null,
+      "cancel_errors": [],
+      "source_hashes": {
+        "adapters.py": "a654016b334ef0c64a1da60fb936164bae41e2e077817b432a5d113945599793",
+        "runtime.py": "22c3081a487feb7360eb345ed4ec780cb3e414ec7170a16a4da06bbbc5bcf9e7",
+        "types.py": "735325c70e5e29a6f1c47e16a37b4fe85b30ec8ca0152dcd2e1a1bdb22e2d4ff"
+      }
+    },
+    {
+      "host": "codex",
+      "mode": "metrics",
+      "status": "completed",
+      "elapsed_s": 1.51,
+      "permission_replies": 1,
+      "result_match": true,
+      "cancel_errors": [],
+      "source_hashes": {
+        "adapters.py": "a654016b334ef0c64a1da60fb936164bae41e2e077817b432a5d113945599793",
+        "runtime.py": "22c3081a487feb7360eb345ed4ec780cb3e414ec7170a16a4da06bbbc5bcf9e7",
+        "types.py": "735325c70e5e29a6f1c47e16a37b4fe85b30ec8ca0152dcd2e1a1bdb22e2d4ff"
+      }
+    },
+    {
+      "host": "opencode",
+      "mode": "cancel",
+      "status": "cancelled",
+      "elapsed_s": 3.42,
+      "permission_replies": 0,
+      "result_match": null,
+      "cancel_errors": [],
+      "source_hashes": {
+        "adapters.py": "a654016b334ef0c64a1da60fb936164bae41e2e077817b432a5d113945599793",
+        "runtime.py": "22c3081a487feb7360eb345ed4ec780cb3e414ec7170a16a4da06bbbc5bcf9e7",
+        "types.py": "735325c70e5e29a6f1c47e16a37b4fe85b30ec8ca0152dcd2e1a1bdb22e2d4ff"
+      }
+    },
+    {
+      "host": "opencode",
+      "mode": "metrics",
+      "status": "completed",
+      "elapsed_s": 3.62,
+      "permission_replies": 1,
+      "result_match": true,
+      "cancel_errors": [],
+      "source_hashes": {
+        "adapters.py": "a654016b334ef0c64a1da60fb936164bae41e2e077817b432a5d113945599793",
+        "runtime.py": "22c3081a487feb7360eb345ed4ec780cb3e414ec7170a16a4da06bbbc5bcf9e7",
+        "types.py": "735325c70e5e29a6f1c47e16a37b4fe85b30ec8ca0152dcd2e1a1bdb22e2d4ff"
+      }
+    }
+  ],
+  "model_or_paid_provider_calls": 0
+}

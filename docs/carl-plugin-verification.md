@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-10-07
+last_updated: 2026-10-08
 author: CARL project
 applies_to: carl-studio
 ---
@@ -49,6 +49,15 @@ Record command, exit status, count, and evidence class for each executed check.
 Keep source inspection, fake-provider native execution, and live provider evidence separate.
 
 ## Evidence
+
+Release 0.21.0 continuation (October 8): the feature was folded into current
+main with core 0.3.0. Version manifests and native protocol identities agree.
+The integrated suite passed 4,321 tests with 29 skips. All six native release
+witnesses passed, and fresh release wheels exposed 27 MCP tools and executed
+coherence metrics. Release-specific source/artifact bindings are recorded in
+`carl-release-preparation-2026-10-08.json`; the advisory lookup against the
+release lock is `dependency-audit-2026-10-08.json`. The October 7 evidence below
+remains the historical implementation record.
 
 Execution used Python 3.12.12 and the complete all-extra environment.
 The release/advisory lookup checked 371 registry entries and is bound to

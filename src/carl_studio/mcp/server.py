@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, TypeVar
 
 from mcp.server.mcpserver import Context as _FastMCPContext
 
+from carl_studio import __version__
 from carl_studio.mcp.session import SESSION_MAX_AGE, MCPSession
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type hints
@@ -49,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 from carl_studio.mcp.protocol import CARLMCPServer
 
-mcp = CARLMCPServer("carl-studio")
+mcp = CARLMCPServer("carl-studio", version=__version__)
 
 logger.info(
     "carl-studio MCP server loaded: per-request session state via "

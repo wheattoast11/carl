@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.21.0] - 2026-10-08
+
+- CARL now installs as the `carl` plugin and skill for Codex, Claude Code, OpenCode, and portable MCP clients.
+- Hosts can use CARL tools; CARL can delegate bounded native work with permission replies, progress, acknowledged continuation, cancellation, and verified result artifacts.
+- Local MCP access is FREE; autonomy, remote telemetry, and paid services retain their effect-owner gates.
+- Python 3.12+ and carl-core 0.3.0 are required. The compatible dependency graph includes MCP 2.3, current training SDKs, and TypeScript 7 codec tooling.
+- Publishing now runs once per package tag. Creating a GitHub release entry does not republish or advance the package version.
+- Retained dependency advisory exceptions are documented in `docs/dependency-review-2026-10-07.md`.
+
 ## [0.20.0] — 2026-05-09 — v0.10 carl.camp parity (entitlements + AXON + slime + ledger)
 
 Closes the long-deferred carl.camp ↔ carl-studio parity arc. End-to-end signed remote tier verification, AXON event forwarding, managed slime training submit, constitutional ledger forward path, and a refresh of `zero-rl-pipeline`'s tier-gate consumer.

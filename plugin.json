@@ -1,9 +1,11 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "carl",
-  "version": "0.20.1",
+  "version": "0.21.0",
   "description": "Coherence-Aware Reinforcement Learning and bidirectional local agent workflows.",
-  "author": {"name": "Tej Desai"},
+  "author": {
+    "name": "Tej Desai"
+  },
   "license": "MIT",
   "extensions": {
     "com.openai": {

@@ -252,6 +252,8 @@ class CodexAdapter:
     """Codex app-server's native turn, approval, and interruption protocol."""
 
     def run(self, link: JSONProcess, request: DelegationRequest, approve: Approval) -> str:
+        from carl_studio import __version__
+
         self.link = link
         self.thread_id: str | None = None
         self.turn_id: str | None = None
@@ -261,7 +263,7 @@ class CodexAdapter:
             {
                 "id": 0,
                 "method": "initialize",
-                "params": {"clientInfo": {"name": "carl", "version": "0.20.1"}},
+                "params": {"clientInfo": {"name": "carl", "version": __version__}},
             }
         )
         self._response(0)

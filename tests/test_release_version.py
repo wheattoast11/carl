@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import ast
+import json
+import tomllib
 from pathlib import Path
+
+import yaml
 
 from scripts.release_version import (
     Version,
@@ -66,3 +71,49 @@ def test_apply_version_updates_both_files(tmp_path: Path):
     assert {path.name for path in changed} == {"pyproject.toml", "__init__.py"}
     assert 'version = "0.4.0"' in (tmp_path / "pyproject.toml").read_text()
     assert '__version__ = "0.4.0"' in (tmp_path / "src" / "carl_studio" / "__init__.py").read_text()
+
+
+def test_release_manifests_match_studio_source_version():
+    root = Path(__file__).resolve().parents[1]
+    version = str(read_source_version(root))
+    for name in (
+        "plugin.json",
+        ".claude-plugin/plugin.json",
+        ".codex-plugin/plugin.json",
+        "package.json",
+    ):
+        manifest = json.loads((root / name).read_text())
+        assert manifest["version"] == version, name
+    assert json.loads((root / "package.json").read_text())["terminals"]["version"] == version
+
+
+def test_studio_requires_the_released_core_version():
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
+    core = tomllib.loads((root / "packages/carl-core/pyproject.toml").read_text())["project"]
+    tree = ast.parse((root / "packages/carl-core/src/carl_core/__init__.py").read_text())
+    declared = next(
+        ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "__version__" for target in node.targets
+        )
+    )
+    assert declared == core["version"]
+    assert f"carl-core>={core['version']}" in project["dependencies"]
+
+
+def test_publishing_has_one_tag_trigger_and_manual_build_only():
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.load(
+        (root / ".github/workflows/publish.yml").read_text(), Loader=yaml.BaseLoader
+    )
+    assert set(workflow["on"]) == {"push", "workflow_dispatch"}
+    assert set(workflow["on"]["push"]["tags"]) == {"v*", "carl-*@*"}
+    publish = next(
+        step
+        for step in workflow["jobs"]["publish-root"]["steps"]
+        if step.get("name") == "Publish to PyPI"
+    )
+    assert publish["if"] == "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
