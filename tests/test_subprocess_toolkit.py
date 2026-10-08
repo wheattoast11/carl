@@ -58,6 +58,55 @@ def test_spawn_rejects_non_str_elements() -> None:
     assert exc.value.code == "carl.subprocess.invalid_argv"
 
 
+def test_duplex_stdin_does_not_enter_chain() -> None:
+    chain, tk = _build_toolkit()
+    desc = tk.spawn(
+        [_python_exe(), "-c", "import sys; print(sys.stdin.readline().strip())"],
+        interactive=True,
+        process_group=True,
+    )
+    tk.write_stdin(desc["ref_id"], b"delegation-canary\n")
+    result = tk.wait(desc["ref_id"], timeout_s=5.0)
+    payload = base64.b64decode(
+        tk.data_toolkit.read(result["stdout_ref"]["ref_id"], length=1024)["bytes_b64"]
+    )
+    assert payload == b"delegation-canary\n"
+    assert "delegation-canary" not in str(chain.to_dict())
+
+
+def test_process_group_closer_reaps_descendants(tmp_path: Any) -> None:
+    if sys.platform == "win32":
+        pytest.skip("POSIX process group witness")
+    _, tk = _build_toolkit()
+    marker = tmp_path / "child-alive"
+    source = (
+        "import subprocess,sys,time; "
+        "subprocess.Popen([sys.executable,'-c',"
+        "'import time,pathlib; time.sleep(0.5); pathlib.Path('+repr(sys.argv[1])+').touch()']); "
+        "print('ready',flush=True); time.sleep(30)"
+    )
+    desc = tk.spawn([_python_exe(), "-c", source, str(marker)], process_group=True)
+    time.sleep(0.15)
+    tk.terminate(desc["ref_id"], grace_s=0.2)
+    time.sleep(0.6)
+    assert not marker.exists()
+
+
+def test_nonreading_stdin_times_out_and_remains_reapable() -> None:
+    _, tk = _build_toolkit()
+    handle = tk.spawn([_python_exe(), "-c", "import time; time.sleep(30)"],
+                      interactive=True, process_group=True)
+    started = time.monotonic()
+    try:
+        with pytest.raises(SubprocessToolkitError) as error:
+            tk.write_stdin(handle["ref_id"], b"x" * 200000, timeout_s=0.2)
+        assert error.value.code == "carl.subprocess.stdin_timeout"
+        assert time.monotonic() - started < 2
+    finally:
+        tk.terminate(handle["ref_id"], grace_s=0.2, process_group=True)
+    assert tk.list_processes() == []
+
+
 # ---------------------------------------------------------------------------
 # happy-path spawn / wait
 # ---------------------------------------------------------------------------

@@ -238,10 +238,10 @@ def run(
     Use --loop to run as a persistent worker process.
     """
     from carl_studio.a2a.bus import LocalBus
-    from carl_studio.skills.runner import SkillRunner
+    from carl_studio.skills.runner import build_skill_runner
 
     bus = LocalBus()
-    runner = SkillRunner()
+    runner = build_skill_runner()
 
     def _process_batch() -> int:
         tasks = bus.poll(receiver=receiver, limit=limit)
@@ -647,3 +647,8 @@ def _resolve_bearer_token() -> str | None:
         return LocalDB().get_auth("jwt")
     except Exception:
         return None
+
+
+from carl_studio.harness.cli import register_commands as _register_harness_commands
+
+_register_harness_commands(agent_app)

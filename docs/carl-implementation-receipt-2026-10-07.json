@@ -1,0 +1,411 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-10-08T04:30:47.369080+00:00",
+  "baseline": "3d8deda1d52702f7364520f7f8990efed67a698d",
+  "pre_existing_dirty": [],
+  "branch": "feat/carl-bidirectional-plugin-20261007",
+  "source_digest": "cb55fa98ab56ed61a2280d9a1317f30ba31dbfcdd32454c907b192a3e950237b",
+  "release_snapshot": "2026-10-08T00:35:32Z",
+  "changed_files": [
+    {
+      "path": ".claude-plugin/marketplace.json",
+      "sha256": "52c19211d6616335bbf335583a35113dff05a9e605aa641e380db1627eb80cd5"
+    },
+    {
+      "path": ".claude-plugin/plugin.json",
+      "sha256": "a2523f61c42b381779ff2cb8ab049e87577c3dd699a2f37f10198d96e257004b"
+    },
+    {
+      "path": ".claude/skills/terminals/carl.md",
+      "sha256": "05abb0eb1a60b7168a84ecd81fc64b6e8dbe978faf4bdbd1be271f045c555042"
+    },
+    {
+      "path": ".codex-plugin/plugin.json",
+      "sha256": "b739edf4a1cad04cc14e665b255bb1cf73e051e8c2f0070b9ca1e3dabcdf4a68"
+    },
+    {
+      "path": ".github/workflows/moat-boundary-check.yml",
+      "sha256": "193f5609b22da58a8467471f815cfcfd4d8fd9e21df79083dbe3d8422bdcf5f7"
+    },
+    {
+      "path": ".github/workflows/publish.yml",
+      "sha256": "1a8c44cc52fda811acaa5077447ef11407fe3a78def84bf5b92b2008f6898ecd"
+    },
+    {
+      "path": ".github/workflows/verify.yml",
+      "sha256": "af61175783676588a125793c314d167bc89d9aaa1019ab6c55452b3ce802b191"
+    },
+    {
+      "path": ".mcp.json",
+      "sha256": "adbfa31f5534ab7bdf9f3ba5a4238c1fce1d8eb1a2d40d251eba89574b06e8e5"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "af535c096247cea6061e56f825732914481b099488cbaaee71ad81ad62ac74ee"
+    },
+    {
+      "path": "CLAUDE.md",
+      "sha256": "56b94bd3c6de1c831c115a2089e8610e73d92b9aba9d4ead5353d5697817fdf3"
+    },
+    {
+      "path": "README.md",
+      "sha256": "b2e6d10d97d65f1ad5b87cebd1d81baa8bd0e90e35a66d0d7c1c1b1582059d96"
+    },
+    {
+      "path": "docs/INSTALL.md",
+      "sha256": "ab282c4c4c6b59a7958a709aa44654c586877baea5fa5ce547e02bba5ed2aa9d"
+    },
+    {
+      "path": "docs/carl-installed-verification-2026-10-07.json",
+      "sha256": "523b9fb2c0b57833fc9fe89c8f05e52f421d20871966996eee53881851db81ba"
+    },
+    {
+      "path": "docs/carl-native-verification-2026-10-07.json",
+      "sha256": "2e64f4d0a883f75dd70396fd87cd18bee551307be2b749d8003639b682f752f0"
+    },
+    {
+      "path": "docs/carl-plugin-verification.md",
+      "sha256": "b0dee01d6121b3ad45da3aa9017fd46068fe1646fc196f04330fb897913dcf0f"
+    },
+    {
+      "path": "docs/carl-review-closure-2026-10-07.json",
+      "sha256": "4b8337f637ac2ed171f9c579b662457819cc8c28c2324d5a06ef8216befa64fa"
+    },
+    {
+      "path": "docs/dependency-audit-2026-10-07.json",
+      "sha256": "61c2f359fd8908a9ae4476eeedcb3260a61479a587635561b037cf808110bc0d"
+    },
+    {
+      "path": "docs/dependency-review-2026-10-07.md",
+      "sha256": "d628d35a3114a4cedc1e962814d625e9fb111b724fa43494fad5323eaf673f39"
+    },
+    {
+      "path": "mcp.json",
+      "sha256": "e4426e1bb808fbe225061a8da2a38541ed23476779231378df795e2bebd01146"
+    },
+    {
+      "path": "package.json",
+      "sha256": "6e9e24790aa8748f43396fda7726da3feec3dab2870fd0fb2b8f5cddd5e505dc"
+    },
+    {
+      "path": "packages/carl-core/pyproject.toml",
+      "sha256": "bf50849c8fc024a6eb3a1ba8879c72925edca6bd00694ba1d6eb0ed28f7ec8a0"
+    },
+    {
+      "path": "packages/carl-core/src/carl_core/tier.py",
+      "sha256": "59fee3f142c77f425055e5066bc7e890dbc29c501b2827ac539603d8cb9a9dc2"
+    },
+    {
+      "path": "packages/carl-core/tests/test_tier.py",
+      "sha256": "589f463755551d7c62304136feb7af106bf8f625a65c01967ec079712b825a74"
+    },
+    {
+      "path": "packages/emlt-codec-ts/package-lock.json",
+      "sha256": "32bbc8db680890c37c631d61509dad88d5b5389a48c98c271ebe9b3ef1dd5412"
+    },
+    {
+      "path": "packages/emlt-codec-ts/package.json",
+      "sha256": "30d2288546a8fede129af793de06d5790cee8a13e3b92f80f9c31f08543603b5"
+    },
+    {
+      "path": "packages/emlt-codec-ts/tsconfig.cjs.json",
+      "sha256": "b9864bb232566295c34d2575da8742f1f831823e00c55d423a6a002a5b1eeece"
+    },
+    {
+      "path": "packages/emlt-codec-ts/tsconfig.esm.json",
+      "sha256": "f3682a38f8fd3e86fffc328b4b0383488bed2cade33359b5432b78925760a63a"
+    },
+    {
+      "path": "packages/emlt-codec-ts/tsconfig.json",
+      "sha256": "b164e7900db77676d489413f5c9e0ecbab47ee0163435c24144b5ea7779693ce"
+    },
+    {
+      "path": "packages/emlt-codec-ts/tsconfig.types.json",
+      "sha256": "fa173fdf08dd316c366cedb80804703ae5b1e0f5ad536710f834636eb62a0c4f"
+    },
+    {
+      "path": "plugin.json",
+      "sha256": "1eff34599373e1eb5569a957da51c49ec95a0560ae44e8429cb7492ea8878faf"
+    },
+    {
+      "path": "pyproject.toml",
+      "sha256": "a236d75e32ab723d647e1da0331efbf2b68f866418f18ce6192ee2be0b041427"
+    },
+    {
+      "path": "scripts/audit_dependencies.py",
+      "sha256": "9d03f2b95314e02c34081f95cd2c3958ed6e19ac99310dcc55ebfe37a7101f65"
+    },
+    {
+      "path": "scripts/install-plugin",
+      "sha256": "f4a3244d2994ca93d9d066ec1344a881c6f5098aa6dfb8fdfce477a47ec651bb"
+    },
+    {
+      "path": "scripts/project_carl_plugin.py",
+      "sha256": "cb0e40eb5f86344eef996d80e7bee0b6dec4f423cffd44c2bf29b2e7f298aaa2"
+    },
+    {
+      "path": "scripts/witness_native_harness.py",
+      "sha256": "71efd9cf1dbdaf66c472c54639252f9473cc047c46235cf7e2849d742608d9f2"
+    },
+    {
+      "path": "skills/carl/SKILL.md",
+      "sha256": "9e7558b598e83cd5a6149dfb6e0980f3b6f5c83bd997ea6fc854bf1704c4988e"
+    },
+    {
+      "path": "skills/carl/references/workflows.md",
+      "sha256": "aad922f4934f61be241f974aa65596c61ad3211f1dd7850c18b0332a27b96396"
+    },
+    {
+      "path": "src/carl_studio/a2a/_cli.py",
+      "sha256": "f3d245d56267216f0beee3fb764c71e16a03681930e7b3f28cbb1429a5ebeb04"
+    },
+    {
+      "path": "src/carl_studio/a2a/bus.py",
+      "sha256": "67cde271fc8ead70341c32c78473aae30276afea9987e3312a118ebf5041d8cb"
+    },
+    {
+      "path": "src/carl_studio/a2a/spec.py",
+      "sha256": "be618c6d6df2fc8ee6489650c1621c59ed6927d29e22a126aa5b24f1109d18e4"
+    },
+    {
+      "path": "src/carl_studio/a2a/streaming.py",
+      "sha256": "7725ea1017d0ca7029f8dfa4465359eb87bb8e8c57f7ff97669055db2d1d626c"
+    },
+    {
+      "path": "src/carl_studio/a2a/task.py",
+      "sha256": "8b9a8becc9e21816c7d60fe9564e6843b5bcc0ef6994cf903d9b447a32cbfebb"
+    },
+    {
+      "path": "src/carl_studio/chat_agent.py",
+      "sha256": "e5c922e5eb4f6ef530f7b52266e4dccf575b888b3f76fdb2bd8c5435c1df5bd7"
+    },
+    {
+      "path": "src/carl_studio/cli/entry.py",
+      "sha256": "a820a2b6fc571c630fffd511f824919e4f3d0dfb79d89f4837039cfef0c7f352"
+    },
+    {
+      "path": "src/carl_studio/cli/lab.py",
+      "sha256": "149e1af8de877f14d951be05bda67b9b43ef1ecd29d913c35e140f803ae665b9"
+    },
+    {
+      "path": "src/carl_studio/cli/plugin.py",
+      "sha256": "a21243f40ab3bcb23daa0249da94ace0e2dcc37723d7aff1417e5f099a4708e3"
+    },
+    {
+      "path": "src/carl_studio/cli/wiring.py",
+      "sha256": "e7a0a4dfe7c29b541e952c4e428778031739570774d0236168924ea7298330d9"
+    },
+    {
+      "path": "src/carl_studio/handles/subprocess.py",
+      "sha256": "e70931d4adb053453ce761d0e5a2f2aae8d87a335d2360964351429eba06423d"
+    },
+    {
+      "path": "src/carl_studio/harness/__init__.py",
+      "sha256": "d3a44d8c61a7b00a7571ecbeaca55463223799c93e67d0cf02e9c532064e39d4"
+    },
+    {
+      "path": "src/carl_studio/harness/adapters.py",
+      "sha256": "b9a7f742cc9fe4a3f87e53f1c9326943dc7dbc04785240d726059b5be98af654"
+    },
+    {
+      "path": "src/carl_studio/harness/bridge.py",
+      "sha256": "018fa337de721b4752b895e5cf6a5f9f545b2eee47168b48056c75590be7810e"
+    },
+    {
+      "path": "src/carl_studio/harness/cli.py",
+      "sha256": "704fa842c47352cc978844a1c99e694edb91d996149be75709eb3a0868aef8db"
+    },
+    {
+      "path": "src/carl_studio/harness/runtime.py",
+      "sha256": "22c3081a487feb7360eb345ed4ec780cb3e414ec7170a16a4da06bbbc5bcf9e7"
+    },
+    {
+      "path": "src/carl_studio/harness/tool_schemas.py",
+      "sha256": "87a0fb73917e238464e6c75bc26c14a52ededdfc8293545b59eb3fb81cca4f1e"
+    },
+    {
+      "path": "src/carl_studio/harness/types.py",
+      "sha256": "735325c70e5e29a6f1c47e16a37b4fe85b30ec8ca0152dcd2e1a1bdb22e2d4ff"
+    },
+    {
+      "path": "src/carl_studio/mcp/__init__.py",
+      "sha256": "478088466e3cd39e4f8fd5ef4025f6abbaa8c009128c2e909443ba9295dd3a10"
+    },
+    {
+      "path": "src/carl_studio/mcp/__main__.py",
+      "sha256": "42df2ecb1dee184b8f9207f2a0144ad4a6f3b91b05136d98050ddcd07ca9614f"
+    },
+    {
+      "path": "src/carl_studio/mcp/connection.py",
+      "sha256": "a3ed8cbb98ee9b07e74b21ac2633b9a45a7dfee581af36a074834d178b280c31"
+    },
+    {
+      "path": "src/carl_studio/mcp/elicitation.py",
+      "sha256": "7b860961a9f6bf9f2f15ec2f9e3d02a4614a514d8582fcff94e2d84e063901dd"
+    },
+    {
+      "path": "src/carl_studio/mcp/harness_tools.py",
+      "sha256": "c8c81ba776acab36a81c83a2ed34dfe5b73b3b4abf35519797dca4adc5d31cde"
+    },
+    {
+      "path": "src/carl_studio/mcp/output_schemas.py",
+      "sha256": "263b6c107950568b01141193760c1be60e62bd7621e9b72708587c50c84eb71d"
+    },
+    {
+      "path": "src/carl_studio/mcp/protocol.py",
+      "sha256": "e58a92cdf4bda488dc75b478e7712ef66be9a23a175ef455734e532a7275f54f"
+    },
+    {
+      "path": "src/carl_studio/mcp/server.py",
+      "sha256": "c26872b8400484dee73295b353313268423bfb3b42f3b40868436a9a6716a9ae"
+    },
+    {
+      "path": "src/carl_studio/mcp/session.py",
+      "sha256": "1d9a58bf8654878efa23c03577cdb0a2132aaeb2379ec077c8c6e6be4f65f3fe"
+    },
+    {
+      "path": "src/carl_studio/mcp/tasks.py",
+      "sha256": "23b38616b2db945d691b41fb1d8d9098b102f1d89f06fef48565666be8112c31"
+    },
+    {
+      "path": "src/carl_studio/plugin.py",
+      "sha256": "4e335b72acb3cb13915778b3c8ab98e4abf04629a28dbf05efb75c174395d1d9"
+    },
+    {
+      "path": "src/carl_studio/skills/_cli.py",
+      "sha256": "13f718fd3ecea37ef55086ac453fc23056967a70088131eeee46a813e2756a36"
+    },
+    {
+      "path": "src/carl_studio/skills/runner.py",
+      "sha256": "39acfc889458bcbd85f12d68dfb5b0e393b46fd35a08d2ba1bd6df6df62b1e1f"
+    },
+    {
+      "path": "src/carl_studio/tool_dispatcher.py",
+      "sha256": "5ed0518879e0642b866a96fc45b00420580d48f178e71f73a8142b195d9d0ffc"
+    },
+    {
+      "path": "src/carl_studio/training/trainer.py",
+      "sha256": "52c3faa175d2cc9f0ea72ec4a6087d535aa3582fb1dfeca5753b00880584001d"
+    },
+    {
+      "path": "tests/test_agent.py",
+      "sha256": "f6f83be071df8b6ef62a70cae698d676c009ec29ea6ee6cb4787e94abe7c026a"
+    },
+    {
+      "path": "tests/test_carl_plugin.py",
+      "sha256": "c5b3d66fd6f1e457751e4504b88564b0996f41c8d7b56ebf42a23d2d48ae2c7a"
+    },
+    {
+      "path": "tests/test_chat_agent_robustness.py",
+      "sha256": "8a158e0721e0fc82c273e0c0519f8bef857c703982a673c467a8c3f17f919745"
+    },
+    {
+      "path": "tests/test_consent_enforcement.py",
+      "sha256": "a12e0161c52dafacaa657272d43832be00b7c40d122f6e5a2d57046573c154d7"
+    },
+    {
+      "path": "tests/test_harness_delegation.py",
+      "sha256": "513a8bfa57923822f820efb2bfad47820f90322219501634c6aef3eb3eab1b55"
+    },
+    {
+      "path": "tests/test_mcp_elicitation.py",
+      "sha256": "5f1e59546b3fdfd12aa97f532b09194255687abe70dd5aaf54e210576d6ff8d9"
+    },
+    {
+      "path": "tests/test_mcp_output_schemas.py",
+      "sha256": "082975f0244addf7cab63aa9dc9bdcb31c02097057044947cffa5de66d2ccb56"
+    },
+    {
+      "path": "tests/test_mcp_tasks.py",
+      "sha256": "419bed11ee0057cfd7b20f31f3d68fe5666af14ff9dbf3ce2689ab326d9f0011"
+    },
+    {
+      "path": "tests/test_mcp_v2_wire.py",
+      "sha256": "50f13eb255dfe16fa0e7eb92cdc683d48c56d2f8ae7d867c99d5c353864760bb"
+    },
+    {
+      "path": "tests/test_settings.py",
+      "sha256": "7612fe8c5c967d8f72384ef68a5e549592b90b75a2c46223f0eb9555fd908632"
+    },
+    {
+      "path": "tests/test_subprocess_toolkit.py",
+      "sha256": "9a227026d8577dc90aa411d1197b69a465b0c551f1f92716bb8580667034a2a1"
+    },
+    {
+      "path": "tests/test_uat.py",
+      "sha256": "f41e871dbbf49716312efcd5a38829d0a1baae470f27ba8f13bd17f26b1ca99f"
+    },
+    {
+      "path": "tests/test_uat_e2e.py",
+      "sha256": "3d021a7024e81c92b9dd24ee601a9f1b4950a8b244d1bfc23fc4fe2580bb10b5"
+    },
+    {
+      "path": "uv.lock",
+      "sha256": "c105fff653049f60acac830762eab19d481ae7cfce4b6ad300cffcf3c3ff6234"
+    }
+  ],
+  "verification": {
+    "python_full_suite": {
+      "command": ".venv/bin/pytest tests/ packages/carl-core/tests/ -q --tb=short",
+      "exit_code": 0,
+      "passed": 4318,
+      "skipped": 29,
+      "warnings": 17,
+      "elapsed_s": 93.74,
+      "log": "build/final-regressions.log"
+    },
+    "new_module_ruff": {
+      "exit_code": 0
+    },
+    "new_module_pyright": {
+      "errors": 0,
+      "warnings": 0
+    },
+    "existing_file_ruff": {
+      "current": 255,
+      "baseline": 277,
+      "new": []
+    },
+    "codec": {
+      "tests_passed": 108,
+      "failed": 0,
+      "build": [
+        "esm",
+        "cjs",
+        "types"
+      ]
+    },
+    "builds": [
+      "carl-studio wheel/sdist",
+      "carl-core wheel/sdist"
+    ],
+    "wheel_source_match": {
+      "studio_modules": 294,
+      "core_modules": 45
+    },
+    "native_outbound": "docs/carl-native-verification-2026-10-07.json",
+    "installed_inbound": "docs/carl-installed-verification-2026-10-07.json",
+    "independent_review": "docs/carl-review-closure-2026-10-07.json",
+    "dependency_audit": "docs/dependency-audit-2026-10-07.json"
+  },
+  "installed_hosts": [
+    "codex",
+    "claude",
+    "opencode"
+  ],
+  "external_effects": {
+    "operator_local_plugin_profiles": "approved, applied and verified",
+    "operator_cli_launchers": "repaired with exact-byte backup",
+    "existing_operator_db_migration": "not applied",
+    "paid_provider_calls": 0,
+    "publication": false,
+    "deployment": false,
+    "gpu_model_training": false
+  },
+  "residuals": [
+    "Retained upstream advisory matches are documented by graph and affected operation.",
+    "Modern HTTP delegation requires trusted caller binding.",
+    "Delegated A2A cancellation routes through its submitting MCP owner.",
+    "Launched orphan tasks retain capacity until execution custody is reconciled."
+  ]
+}

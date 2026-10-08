@@ -144,6 +144,7 @@ async def stream_task_updates(
     # Emit initial status snapshot.
     yield _sse_frame(EVENT_STATUS, task_to_jsonrpc_result(task))
     last_status = task.status
+    last_progress = task.progress
 
     iteration = 0
     while True:
@@ -181,10 +182,13 @@ async def stream_task_updates(
             seen_messages.add(msg.id)
             if msg.type == "artifact":
                 yield _sse_frame(EVENT_ARTIFACT, _artifact_payload(task_id, msg))
+            elif msg.type == "progress":
+                yield _sse_frame(EVENT_STATUS, {"id": task_id, "progress": msg.payload})
 
-        if task.status != last_status:
+        if task.status != last_status or task.progress != last_progress:
             yield _sse_frame(EVENT_STATUS, task_to_jsonrpc_result(task))
             last_status = task.status
+            last_progress = task.progress
 
 
 async def stream_message(

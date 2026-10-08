@@ -188,3 +188,13 @@ class SkillRunner:
             " ORDER BY skill_name"
         ).fetchall()
         return [r["skill_name"] for r in rows]
+
+
+def build_skill_runner() -> SkillRunner:
+    """Construct the shared builtin registry for CLI, MCP, and A2A."""
+    from carl_studio.skills.builtins import BUILTIN_SKILLS
+
+    runner = SkillRunner()
+    for skill in BUILTIN_SKILLS:
+        runner.register(skill)
+    return runner

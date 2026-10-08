@@ -1,0 +1,142 @@
+{
+  "status": "complete",
+  "run_id": "carl-ce-review-20261007-mcp-final",
+  "artifact_path": "/tmp/carl-ce-review-20261007-mcp/closure-final.json",
+  "reviewed_at": "2026-10-08T04:28:10.206277+00:00",
+  "source_sha256": {
+    "src/carl_studio/harness/runtime.py": "22c3081a487feb7360eb345ed4ec780cb3e414ec7170a16a4da06bbbc5bcf9e7",
+    "src/carl_studio/harness/types.py": "735325c70e5e29a6f1c47e16a37b4fe85b30ec8ca0152dcd2e1a1bdb22e2d4ff",
+    "src/carl_studio/harness/adapters.py": "b9a7f742cc9fe4a3f87e53f1c9326943dc7dbc04785240d726059b5be98af654",
+    "src/carl_studio/harness/bridge.py": "018fa337de721b4752b895e5cf6a5f9f545b2eee47168b48056c75590be7810e",
+    "src/carl_studio/handles/subprocess.py": "e70931d4adb053453ce761d0e5a2f2aae8d87a335d2360964351429eba06423d",
+    "src/carl_studio/mcp/tasks.py": "23b38616b2db945d691b41fb1d8d9098b102f1d89f06fef48565666be8112c31",
+    "src/carl_studio/mcp/harness_tools.py": "c8c81ba776acab36a81c83a2ed34dfe5b73b3b4abf35519797dca4adc5d31cde",
+    "src/carl_studio/plugin.py": "4e335b72acb3cb13915778b3c8ab98e4abf04629a28dbf05efb75c174395d1d9",
+    "src/carl_studio/a2a/task.py": "8b9a8becc9e21816c7d60fe9564e6843b5bcc0ef6994cf903d9b447a32cbfebb",
+    "src/carl_studio/a2a/bus.py": "67cde271fc8ead70341c32c78473aae30276afea9987e3312a118ebf5041d8cb",
+    "src/carl_studio/a2a/spec.py": "be618c6d6df2fc8ee6489650c1621c59ed6927d29e22a126aa5b24f1109d18e4",
+    "src/carl_studio/a2a/streaming.py": "7725ea1017d0ca7029f8dfa4465359eb87bb8e8c57f7ff97669055db2d1d626c"
+  },
+  "closures": [
+    {
+      "#": 1,
+      "status": "closed",
+      "source": "src/carl_studio/a2a/bus.py:266",
+      "evidence": "Delegated cancellation raises carl.agent.control_owner with the submitting-MCP pointer; owning test confirms no false cancellation acknowledgement."
+    },
+    {
+      "#": 2,
+      "status": "closed",
+      "source": "src/carl_studio/handles/subprocess.py:200",
+      "evidence": "Nonblocking partial stdin writes poll readiness and checkpoints; deadline/reaping negative tests pass. Native writer lock and interruption frames are bounded to one second."
+    },
+    {
+      "#": 3,
+      "status": "closed",
+      "source": "src/carl_studio/harness/runtime.py:418",
+      "evidence": "Actual ASGI modern request with an unissued session header now returns isError=True. Stdio-bound legacy/modern ownership lifecycle tests pass."
+    },
+    {
+      "#": 4,
+      "status": "closed",
+      "source": "src/carl_studio/mcp/harness_tools.py:108",
+      "evidence": "Actual legacy and modern malformed-instruction requests fail without PRIVATE_CANARY_ in captured ERROR logs; model errors hide inputs and request construction suppresses raw chaining."
+    },
+    {
+      "#": 5,
+      "status": "closed",
+      "source": "src/carl_studio/plugin.py:179",
+      "evidence": "Recorded projection identities and parent-chain preflight reject altered/symlinked destinations before update; atomic copies preserve the outside victim in the regression test."
+    },
+    {
+      "#": 6,
+      "status": "closed",
+      "source": "src/carl_studio/harness/runtime.py:233",
+      "evidence": "Codex commandExecution escalation is refused before creating caller approval; negative guard test passes."
+    },
+    {
+      "#": 7,
+      "status": "closed",
+      "source": "src/carl_studio/a2a/streaming.py:188",
+      "evidence": "Actual stream_task_updates generator over the real LocalBus/MCP projection emits progress .05 then .75; tasks/get metadata also carries progress."
+    },
+    {
+      "#": 8,
+      "status": "closed",
+      "source": "src/carl_studio/harness/runtime.py:81",
+      "evidence": "Concurrent A/B/same-A replay sends only A/B, preserves both records, and replay sends nothing. Actual offline Codex protocol fixture rejects steer without recording it, records accepted steer, and cancels successfully."
+    },
+    {
+      "#": 9,
+      "status": "closed",
+      "source": "src/carl_studio/mcp/tasks.py:309",
+      "evidence": "PRAGMA capability refresh and BEGIN IMMEDIATE make old-schema migration idempotent across open stores; the stale store can subsequently admit delegation."
+    }
+  ],
+  "open_review_findings": [],
+  "checks": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_carl_plugin.py tests/test_mcp_v2_wire.py tests/test_harness_delegation.py tests/test_subprocess_toolkit.py -q --tb=short -o cache_dir=/tmp/carl-ce-review-20261007-mcp/final-recheck-pytest-cache",
+      "result": "47 passed in 5.48s",
+      "exit_code": 0
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python /tmp/carl-ce-review-20261007-mcp/recheck_checks.py",
+      "result": "Modern forged identity rejected; validation canary absent in both eras; SSE .05 -> .75",
+      "exit_code": 0
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python /tmp/carl-ce-review-20261007-mcp/recheck_continuation.py",
+      "result": "Concurrent records/replay, native reject/accept acknowledgement, and native fixture cancellation pass",
+      "exit_code": 0
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_mcp.py::test_mcp_server_importable tests/test_mcp_output_schemas.py tests/test_mcp_v2_wire.py tests/test_harness_delegation.py tests/test_carl_plugin.py -q --tb=short -o cache_dir=/tmp/carl-ce-review-20261007-mcp/import-cleanup-pytest-cache",
+      "result": "47 passed in 2.86s",
+      "exit_code": 0
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest tests/test_mcp.py::test_mcp_server_importable -q --tb=short -o cache_dir=/tmp/carl-ce-review-20261007-mcp/final-import-pytest-cache",
+      "result": "1 passed in 1.24s after final SkillRegistry removal",
+      "exit_code": 0
+    },
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m ruff check --select F401,SIM118 src/carl_studio/mcp/output_schemas.py src/carl_studio/mcp/server.py src/carl_studio/mcp/session.py src/carl_studio/mcp/tasks.py src/carl_studio/a2a/_cli.py --output-format concise",
+      "result": "All checks passed",
+      "exit_code": 0
+    }
+  ],
+  "evidence_class": "Executed offline contracts and current source inspection; native protocol child is a fixture.",
+  "essential_limits": [
+    {
+      "source": "src/carl_studio/a2a/bus.py:266",
+      "limit": "A2A projection exposes progress/results; delegated cancellation remains on the submitting MCP owner and A2A refuses it explicitly."
+    },
+    {
+      "source": "src/carl_studio/harness/runtime.py:418",
+      "limit": "Modern HTTP delegation requires a trusted caller binding; unissued session headers are refused. Bound stdio is supported in both protocol eras."
+    },
+    {
+      "source": "src/carl_studio/mcp/tasks.py:348",
+      "limit": "Automatic orphan reconciliation covers dead-owner unstarted reservations. Launched orphan rows need operator reconciliation after confirming execution identity; this recheck did not execute a crash-recovery witness."
+    }
+  ],
+  "provider_calls": 0,
+  "real_profile_mutations": 0,
+  "repo_edits": 0,
+  "canonical_source_digest": "cb55fa98ab56ed61a2280d9a1317f30ba31dbfcdd32454c907b192a3e950237b",
+  "final_cleanup_source_sha256": {
+    "src/carl_studio/mcp/output_schemas.py": "263b6c107950568b01141193760c1be60e62bd7621e9b72708587c50c84eb71d",
+    "src/carl_studio/mcp/server.py": "c26872b8400484dee73295b353313268423bfb3b42f3b40868436a9a6716a9ae",
+    "src/carl_studio/mcp/session.py": "1d9a58bf8654878efa23c03577cdb0a2132aaeb2379ec077c8c6e6be4f65f3fe",
+    "src/carl_studio/a2a/_cli.py": "f3d245d56267216f0beee3fb764c71e16a03681930e7b3f28cbb1429a5ebeb04",
+    "src/carl_studio/chat_agent.py": "e5c922e5eb4f6ef530f7b52266e4dccf575b888b3f76fdb2bd8c5435c1df5bd7"
+  },
+  "cleanup_inspection": {
+    "unused_aliases": "Removed aliases have no remaining runtime references; skills initialize through the canonical lazy builder.",
+    "sqlite_row_membership": "row.keys() is retained with a narrow SIM118 exemption because sqlite3.Row membership checks values.",
+    "claude_cache_refresh": "plugin.py native install now explicitly runs claude plugin update carl@carl-local --scope user.",
+    "baseline_lint": "The 11 chat_agent F401 findings exactly match baseline; broad lint cleanliness is not claimed.",
+    "operator_profiles": "Not inspected or mutated by this reviewer."
+  }
+}

@@ -1,0 +1,125 @@
+{
+  "agent_id": "harness_protocol_research",
+  "date": "2026-10-07",
+  "scope": "Final source-bound actual installed native host witnesses with synthetic localhost providers",
+  "source_hashes": {
+    "adapters.py": "b9a7f742cc9fe4a3f87e53f1c9326943dc7dbc04785240d726059b5be98af654",
+    "runtime.py": "22c3081a487feb7360eb345ed4ec780cb3e414ec7170a16a4da06bbbc5bcf9e7",
+    "types.py": "735325c70e5e29a6f1c47e16a37b4fe85b30ec8ca0152dcd2e1a1bdb22e2d4ff"
+  },
+  "witness_script_sha256": "71efd9cf1dbdaf66c472c54639252f9473cc047c46235cf7e2849d742608d9f2",
+  "findings": [
+    {
+      "confidence": "high",
+      "evidence_class": "executed actual native binary with synthetic provider",
+      "cases": [
+        {
+          "host": "claude",
+          "mode": "cancel",
+          "status": "cancelled",
+          "exit_code": 0,
+          "receipt": "/tmp/carl-final-native/claude-cancel-285cb1/receipt.json",
+          "elapsed_s": 2.38,
+          "permission_replies": 0,
+          "metrics_result_flags": [
+            false
+          ],
+          "result_match": null,
+          "cancel_errors": [],
+          "native_interrupt_failed": false,
+          "command": "CARL_PROBE_DIR=/tmp/carl-final-native PYTHONDONTWRITEBYTECODE=1 .venv/bin/python scripts/witness_native_harness.py claude cancel"
+        },
+        {
+          "host": "claude",
+          "mode": "metrics",
+          "status": "completed",
+          "exit_code": 0,
+          "receipt": "/tmp/carl-final-native/claude-metrics-f82e71/receipt.json",
+          "elapsed_s": 2.91,
+          "permission_replies": 1,
+          "metrics_result_flags": [
+            false,
+            true
+          ],
+          "result_match": true,
+          "cancel_errors": [],
+          "native_interrupt_failed": false,
+          "command": "CARL_PROBE_DIR=/tmp/carl-final-native PYTHONDONTWRITEBYTECODE=1 .venv/bin/python scripts/witness_native_harness.py claude metrics"
+        },
+        {
+          "host": "codex",
+          "mode": "cancel",
+          "status": "cancelled",
+          "exit_code": 0,
+          "receipt": "/tmp/carl-final-native/codex-cancel-67eab8/receipt.json",
+          "elapsed_s": 2.14,
+          "permission_replies": 0,
+          "metrics_result_flags": [
+            false
+          ],
+          "result_match": null,
+          "cancel_errors": [],
+          "native_interrupt_failed": false,
+          "command": "CARL_PROBE_DIR=/tmp/carl-final-native PYTHONDONTWRITEBYTECODE=1 .venv/bin/python scripts/witness_native_harness.py codex cancel"
+        },
+        {
+          "host": "codex",
+          "mode": "metrics",
+          "status": "completed",
+          "exit_code": 0,
+          "receipt": "/tmp/carl-final-native/codex-metrics-dc3b63/receipt.json",
+          "elapsed_s": 2.01,
+          "permission_replies": 1,
+          "metrics_result_flags": [
+            false,
+            true
+          ],
+          "result_match": true,
+          "cancel_errors": [],
+          "native_interrupt_failed": false,
+          "command": "CARL_PROBE_DIR=/tmp/carl-final-native PYTHONDONTWRITEBYTECODE=1 .venv/bin/python scripts/witness_native_harness.py codex metrics"
+        },
+        {
+          "host": "opencode",
+          "mode": "cancel",
+          "status": "cancelled",
+          "exit_code": 0,
+          "receipt": "/tmp/carl-final-native/opencode-cancel-4bf178/receipt.json",
+          "elapsed_s": 4.14,
+          "permission_replies": 0,
+          "metrics_result_flags": [
+            false
+          ],
+          "result_match": null,
+          "cancel_errors": [],
+          "native_interrupt_failed": false,
+          "command": "CARL_PROBE_DIR=/tmp/carl-final-native PYTHONDONTWRITEBYTECODE=1 .venv/bin/python scripts/witness_native_harness.py opencode cancel"
+        },
+        {
+          "host": "opencode",
+          "mode": "metrics",
+          "status": "completed",
+          "exit_code": 0,
+          "receipt": "/tmp/carl-final-native/opencode-metrics-9ae752/receipt.json",
+          "elapsed_s": 4.12,
+          "permission_replies": 1,
+          "metrics_result_flags": [
+            false,
+            true
+          ],
+          "result_match": true,
+          "cancel_errors": [],
+          "native_interrupt_failed": false,
+          "command": "CARL_PROBE_DIR=/tmp/carl-final-native PYTHONDONTWRITEBYTECODE=1 .venv/bin/python scripts/witness_native_harness.py opencode metrics"
+        }
+      ]
+    }
+  ],
+  "gaps": [],
+  "recommendations": [],
+  "counterfactuals": [
+    "All metrics cases require returned metrics in the second provider request; final fake text alone cannot pass.",
+    "Earlier frozen sources exposed real Codex startup and permission failures and OpenCode cancellation races."
+  ],
+  "summary": "All six final native cases passed with unchanged frozen source hashes."
+}

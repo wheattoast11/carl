@@ -49,11 +49,11 @@ from carl_studio.mcp.tasks import (
 # ``server.py`` imports are heavier (they execute @mcp.tool decorators);
 # keep them at the end so the lighter primitives above are available
 # even when FastMCP isn't importable.
-from carl_studio.mcp.server import (
-    bind_connection,
-    get_bound_connection,
-    mcp,
-)
+def __getattr__(name: str):
+    if name in {"mcp", "bind_connection", "get_bound_connection"}:
+        from carl_studio.mcp import server
+        return getattr(server, name)
+    raise AttributeError(name)
 
 __all__ = [
     # Core MCP surface

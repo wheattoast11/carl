@@ -1,0 +1,208 @@
+{
+  "agent_id": "harness_protocol_research",
+  "date": "2026-10-07",
+  "scope": "Fresh installed CARL native inventory, cached bytes, isolated full SDK carrier startup and harmless tool execution",
+  "findings": [
+    {
+      "confidence": "high",
+      "source_digest": "cb55fa98ab56ed61a2280d9a1317f30ba31dbfcdd32454c907b192a3e950237b",
+      "installed_inventory": [
+        {
+          "host": "codex",
+          "inventory": {
+            "pluginId": "carl@carl-local",
+            "name": "carl",
+            "marketplaceName": "carl-local",
+            "version": "0.20.1",
+            "installed": true,
+            "enabled": true,
+            "source": {
+              "source": "local",
+              "path": "/var/home/zero/.carl/plugins/carl/marketplace/plugins/carl"
+            },
+            "marketplaceSource": {
+              "sourceType": "local",
+              "source": "/var/home/zero/.carl/plugins/carl/marketplace"
+            },
+            "installPolicy": "AVAILABLE",
+            "authPolicy": "ON_INSTALL"
+          },
+          "command": [
+            "codex",
+            "plugin",
+            "list",
+            "--marketplace",
+            "carl-local",
+            "--json"
+          ]
+        },
+        {
+          "host": "claude",
+          "inventory": {
+            "id": "carl@carl-local",
+            "version": "0.20.1+source.cb55fa98ab56",
+            "scope": "user",
+            "enabled": true,
+            "installPath": "/home/zero/.claude/plugins/cache/carl-local/carl/0.20.1-source.cb55fa98ab56",
+            "readFromFolder": "/home/zero/.carl/plugins/carl/marketplace/plugins/carl",
+            "folderVersion": "0.20.1+source.cb55fa98ab56",
+            "installedAt": "2026-10-08T04:16:23.919Z",
+            "lastUpdated": "2026-10-08T04:25:52.113Z",
+            "mcpServers": {
+              "carl": {
+                "command": "/var/home/zero/carl/.venv/bin/python",
+                "args": [
+                  "-m",
+                  "carl_studio.mcp"
+                ],
+                "env": {
+                  "CARL_PLUGIN_SOURCE": "/var/home/zero/carl"
+                }
+              }
+            },
+            "projectEnabled": false
+          },
+          "command": [
+            "claude",
+            "--bare",
+            "plugin",
+            "list",
+            "--json"
+          ]
+        }
+      ],
+      "cached_bindings": [
+        {
+          "host": "codex",
+          "cache": "/home/zero/.codex/plugins/cache/carl-local/carl/0.20.1",
+          "cached_manifest_version": "0.20.1+source.cb55fa98ab56",
+          "cached_skill_matches_checkout": true,
+          "skill_sha256": "9e7558b598e83cd5a6149dfb6e0980f3b6f5c83bd997ea6fc854bf1704c4988e",
+          "mcp_sha256": "a599e266ab7ba0af9361fdc20a0bc0136be12b40d82e2fc4d172ec3647176451"
+        },
+        {
+          "host": "claude",
+          "cache": "/home/zero/.claude/plugins/cache/carl-local/carl/0.20.1-source.cb55fa98ab56",
+          "cached_manifest_version": "0.20.1+source.cb55fa98ab56",
+          "cached_skill_matches_checkout": true,
+          "skill_sha256": "9e7558b598e83cd5a6149dfb6e0980f3b6f5c83bd997ea6fc854bf1704c4988e",
+          "mcp_sha256": "a599e266ab7ba0af9361fdc20a0bc0136be12b40d82e2fc4d172ec3647176451"
+        }
+      ],
+      "codex_fresh": {
+        "source": "installed Codex cached MCP carrier and installed skill, isolated fresh native app-server",
+        "cache": "/home/zero/.codex/plugins/cache/carl-local/carl/0.20.1",
+        "manifest_version": "0.20.1+source.cb55fa98ab56",
+        "installed_mcp_sha256": "a599e266ab7ba0af9361fdc20a0bc0136be12b40d82e2fc4d172ec3647176451",
+        "startup_statuses": [
+          "starting",
+          "ready"
+        ],
+        "tool_names": [
+          "authenticate",
+          "carl.presence.self",
+          "delegate_agent",
+          "dispatch_a2a_task",
+          "generate_bundle",
+          "get_agent_card",
+          "get_coherence_metrics",
+          "get_logs",
+          "get_project_state",
+          "get_run_status",
+          "get_tier_status",
+          "list_agent_harnesses",
+          "list_backends",
+          "list_skills",
+          "observe_now",
+          "read_agent_input",
+          "read_agent_result",
+          "run_skill",
+          "sample_host",
+          "start_training",
+          "stop_training",
+          "submit_async_training",
+          "sync_data",
+          "tasks_cancel",
+          "tasks_get",
+          "tasks_reply",
+          "validate_config"
+        ],
+        "skills": [
+          {
+            "name": "carl",
+            "path": "/var/home/zero/.agents/skills/carl/SKILL.md",
+            "enabled": true
+          }
+        ],
+        "provider_requests": 0,
+        "status_error": null,
+        "skills_error": null
+      },
+      "opencode_fresh": {
+        "source": "installed OpenCode CARL entry, isolated fresh native MCP list",
+        "exit_code": 0,
+        "carl_named": true,
+        "connected": true,
+        "command": [
+          "/var/home/zero/carl/.venv/bin/python",
+          "-m",
+          "carl_studio.mcp"
+        ],
+        "installer_source_digest": "cb55fa98ab56ed61a2280d9a1317f30ba31dbfcdd32454c907b192a3e950237b"
+      },
+      "normal_sdk": {
+        "source": "actual installed Codex cache carrier through official MCP SDK stdio",
+        "cached_manifest_version": "0.20.1+source.cb55fa98ab56",
+        "carrier_sha256": "a599e266ab7ba0af9361fdc20a0bc0136be12b40d82e2fc4d172ec3647176451",
+        "server_name": "carl-studio",
+        "protocol_version": "2025-11-25",
+        "tool_names": [
+          "authenticate",
+          "carl.presence.self",
+          "delegate_agent",
+          "dispatch_a2a_task",
+          "generate_bundle",
+          "get_agent_card",
+          "get_coherence_metrics",
+          "get_logs",
+          "get_project_state",
+          "get_run_status",
+          "get_tier_status",
+          "list_agent_harnesses",
+          "list_backends",
+          "list_skills",
+          "observe_now",
+          "read_agent_input",
+          "read_agent_result",
+          "run_skill",
+          "sample_host",
+          "start_training",
+          "stop_training",
+          "submit_async_training",
+          "sync_data",
+          "tasks_cancel",
+          "tasks_get",
+          "tasks_reply",
+          "validate_config"
+        ],
+        "inbound_delegate_available": true,
+        "metrics_success": true,
+        "metrics_dimension": 3072,
+        "child_scope": false,
+        "model_or_provider_calls": 0
+      },
+      "harness_source_hashes": {
+        "adapters.py": "b9a7f742cc9fe4a3f87e53f1c9326943dc7dbc04785240d726059b5be98af654",
+        "runtime.py": "22c3081a487feb7360eb345ed4ec780cb3e414ec7170a16a4da06bbbc5bcf9e7",
+        "types.py": "735325c70e5e29a6f1c47e16a37b4fe85b30ec8ca0152dcd2e1a1bdb22e2d4ff"
+      }
+    }
+  ],
+  "gaps": [],
+  "recommendations": [],
+  "counterfactuals": [
+    "Generated source declarations were joined to actual installed cache bytes and fresh native discovery.",
+    "No model turn was submitted; fresh Codex provider request count was zero."
+  ],
+  "summary": "Installed CARL inventory and cached skills match checkout; fresh Codex loads27tools includingdelegate_agent and enabledcarlskill; freshOpenCode reportsCARLconnected; normalofficialSDKstdio executesmetrics."
+}

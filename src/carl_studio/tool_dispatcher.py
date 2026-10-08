@@ -356,7 +356,9 @@ class ToolDispatcher:
                         code="carl.hook_failed",
                     )
                 )
-                permission = ToolPermission.ALLOW
+                from carl_studio.harness.types import DELEGATION_TOOLS
+                permission = (ToolPermission.DENY if tool_name in DELEGATION_TOOLS
+                              else ToolPermission.ALLOW)
 
         if permission == ToolPermission.DENY:
             result = f"Blocked by permission policy: {tool_name}"

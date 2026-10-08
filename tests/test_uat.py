@@ -341,11 +341,12 @@ class TestTierJourney:
 
         assert detect_effective_tier(Tier.PRO) == Tier.PRO
 
-    def test_enterprise_gates_mcp(self):
-        """MCP features require PAID."""
+    def test_local_mcp_free_autonomy_stays_paid(self):
+        """Local protocols are FREE; scheduled autonomy requires PAID."""
         from carl_studio.tier import Tier, tier_allows
 
-        assert not tier_allows(Tier.FREE, "mcp")
+        assert tier_allows(Tier.FREE, "mcp")
+        assert not tier_allows(Tier.FREE, "train.scheduled")
         assert tier_allows(Tier.PAID, "mcp")
 
 

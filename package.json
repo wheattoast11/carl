@@ -1,6 +1,6 @@
 {
   "name": "carl-studio",
-  "version": "0.18.3",
+  "version": "0.20.1",
   "private": true,
   "terminals": {
     "concept": "carl",
@@ -9,6 +9,6 @@
     "scope": "studio",
     "primitive_signature": [true, true, true, true, true, false, false],
     "causal": { "progenitor": "tej", "emergent": "genesis" },
-    "version": "0.18.3"
+    "version": "0.20.1"
   }
 }

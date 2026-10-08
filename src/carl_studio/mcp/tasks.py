@@ -29,7 +29,10 @@ Design decisions
 from __future__ import annotations
 
 import json
+import logging
+import os
 import sqlite3
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -44,6 +47,8 @@ import anyio
 from carl_core.errors import CARLError
 from carl_core.hashing import content_hash
 
+logger = logging.getLogger(__name__)
+
 _MCP_SCHEMA = """
 PRAGMA journal_mode=WAL;
 
@@ -56,7 +61,8 @@ CREATE TABLE IF NOT EXISTS mcp_tasks (
     completed_at TEXT,
     result TEXT,
     error TEXT,
-    progress REAL NOT NULL DEFAULT 0.0
+    progress REAL NOT NULL DEFAULT 0.0,
+    metadata TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_mcp_tasks_status ON mcp_tasks (status);
 CREATE INDEX IF NOT EXISTS idx_mcp_tasks_tool_name ON mcp_tasks (tool_name);
@@ -122,6 +128,7 @@ class MCPTask:
     result: Any = None
     error: dict[str, Any] | None = None
     progress: float = 0.0
+    metadata: dict[str, Any] = field(default_factory=dict)
     # ``_meta`` keeps the original ``params`` around at construction time so
     # the decorator can re-invoke the body. Never persisted.
     _params: dict[str, Any] | None = field(default=None, repr=False, compare=False)
@@ -133,7 +140,7 @@ class MCPTask:
             completed = self.completed_at.isoformat()
         else:
             completed = None
-        return {
+        result = {
             "task_id": self.task_id,
             "tool_name": self.tool_name,
             "params_hash": self.params_hash,
@@ -144,6 +151,9 @@ class MCPTask:
             "error": self.error,
             "progress": self.progress,
         }
+        if self.metadata:
+            result["metadata"] = self.metadata
+        return result
 
     @property
     def is_terminal(self) -> bool:
@@ -191,6 +201,7 @@ def _task_from_row(row: sqlite3.Row) -> MCPTask:
         result=result,
         error=error,
         progress=float(row["progress"] or 0.0),
+        metadata=json.loads(row["metadata"]) if "metadata" in row.keys() else {},  # noqa: SIM118 (sqlite3.Row checks values)
     )
 
 
@@ -207,6 +218,7 @@ class MCPTaskStore:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn: sqlite3.Connection | None = None
         self._a2a_conn: sqlite3.Connection | None = None
+        self._lock = threading.RLock()
         self._ensure_schema()
 
     # ------------------------------------------------------------------
@@ -222,14 +234,12 @@ class MCPTaskStore:
                 timeout=10.0,
             )
             self._conn.row_factory = sqlite3.Row
-        try:
-            yield self._conn
-        except Exception:
+        with self._lock:
             try:
-                self._conn.rollback()
+                yield self._conn
             except Exception:
-                pass
-            raise
+                self._conn.rollback()
+                raise
 
     @contextmanager
     def _a2a_connect(self) -> Generator[sqlite3.Connection | None, None, None]:
@@ -270,6 +280,9 @@ class MCPTaskStore:
     def _ensure_schema(self) -> None:
         with self._connect() as conn:
             conn.executescript(_MCP_SCHEMA)
+            self._has_metadata = any(
+                row[1] == "metadata" for row in conn.execute("PRAGMA table_info(mcp_tasks)")
+            )
         with self._a2a_connect() as conn:
             if conn is None:
                 return
@@ -284,6 +297,113 @@ class MCPTaskStore:
                 except Exception:
                     pass
                 setattr(self, attr, None)
+
+    @property
+    def path(self) -> Path:
+        """The owning task database's location."""
+        return self._path
+
+    def migrate_delegation(self) -> bool:
+        """Add delegation metadata after explicit operator approval."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            self._has_metadata = any(
+                row[1] == "metadata" for row in conn.execute("PRAGMA table_info(mcp_tasks)")
+            )
+            if self._has_metadata:
+                conn.commit()
+                return False
+            conn.execute("ALTER TABLE mcp_tasks ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
+            conn.commit()
+            self._has_metadata = True
+        return True
+
+    def create_delegation(self, params: dict[str, Any], metadata: dict[str, Any]) -> MCPTask:
+        """Atomically reserve a shared delegate slot and deduplicate a request."""
+        with self._connect() as connection:
+            self._has_metadata = any(
+                row[1] == "metadata" for row in connection.execute("PRAGMA table_info(mcp_tasks)")
+            )
+        if not self._has_metadata:
+            raise CARLError("Run carl plugin migrate --apply", code="carl.tasks.migration_required")
+        digest = content_hash(params)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            rows = conn.execute(
+                "SELECT * FROM mcp_tasks WHERE tool_name = 'delegate_agent' AND status IN ('pending','running')"
+            ).fetchall()
+            for row in rows:
+                if row["status"] in _TERMINAL_STATES:
+                    continue
+                info = json.loads(row["metadata"])
+                pid = info.get("owner_pid")
+                alive = True
+                if isinstance(pid, int):
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        alive = False
+                    except PermissionError:
+                        alive = True
+                if (
+                    not alive
+                    and not info.get("spawn_started")
+                    and not info.get("native_pid")
+                    and info.get("deadline", float("inf")) < time.time()
+                ):
+                    conn.execute(
+                        "UPDATE mcp_tasks SET status='failed',completed_at=?,error=? "
+                        "WHERE task_id=? AND status IN ('pending','running')",
+                        (
+                            _utcnow_iso(),
+                            json.dumps(
+                                {
+                                    "code": "carl.agent.interrupted",
+                                    "message": "Owner exited before execution started",
+                                }
+                            ),
+                            row["task_id"],
+                        ),
+                    )
+            row = conn.execute(
+                "SELECT * FROM mcp_tasks WHERE tool_name='delegate_agent' "
+                "AND json_extract(metadata,'$.owner')=? AND json_extract(metadata,'$.request_id')=? LIMIT 1",
+                (metadata["owner"], metadata["request_id"]),
+            ).fetchone()
+            if row is not None:
+                previous = _task_from_row(row)
+                if previous.params_hash != digest:
+                    raise CARLError("Request ID reused", code="carl.agent.request_conflict")
+                conn.commit()
+                return previous
+            active = conn.execute(
+                "SELECT COUNT(*) FROM mcp_tasks WHERE tool_name='delegate_agent' "
+                "AND status IN ('pending','running')"
+            ).fetchone()[0]
+            if active >= 2:
+                raise CARLError("Two delegates are already active", code="carl.agent.capacity")
+            task_id, now = str(uuid.uuid4()), _utcnow_iso()
+            conn.execute(
+                "INSERT INTO mcp_tasks (task_id,tool_name,params_hash,submitted_at,metadata) "
+                "VALUES (?,'delegate_agent',?,?,?)",
+                (task_id, digest, now, json.dumps(metadata)),
+            )
+            conn.commit()
+        return self.get(task_id)  # type: ignore[return-value]
+
+    def update_metadata(self, task_id: str, changes: dict[str, Any]) -> None:
+        """Merge metadata while preserving terminal disposition."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM mcp_tasks WHERE task_id = ?", (task_id,)).fetchone()
+            if row is not None and row["status"] not in _TERMINAL_STATES:
+                metadata = json.loads(row["metadata"])
+                metadata.update(changes)
+                conn.execute(
+                    "UPDATE mcp_tasks SET metadata=? WHERE task_id=?",
+                    (json.dumps(metadata), task_id),
+                )
+            conn.commit()
 
     # ------------------------------------------------------------------
     # CRUD
@@ -347,9 +467,7 @@ class MCPTaskStore:
         if limit < 1:
             raise ValueError(f"limit must be >= 1, got {limit}")
         if status is not None and status not in _VALID_STATES:
-            raise ValueError(
-                f"invalid status {status!r}; expected one of {sorted(_VALID_STATES)}"
-            )
+            raise ValueError(f"invalid status {status!r}; expected one of {sorted(_VALID_STATES)}")
         with self._connect() as conn:
             if status is None:
                 rows = conn.execute(
@@ -376,6 +494,9 @@ class MCPTaskStore:
         completed_at: str | None = None,
         progress: float | None = None,
     ) -> None:
+        primary = self.get(task_id)
+        if primary is None or primary.status != status:
+            return
         with self._a2a_connect() as conn:
             if conn is None:
                 return
@@ -403,7 +524,7 @@ class MCPTaskStore:
     def mark_running(self, task_id: str) -> None:
         with self._connect() as conn:
             conn.execute(
-                "UPDATE mcp_tasks SET status = 'running' WHERE task_id = ?",
+                "UPDATE mcp_tasks SET status = 'running' WHERE task_id = ? AND status='pending'",
                 (task_id,),
             )
             conn.commit()
@@ -414,7 +535,7 @@ class MCPTaskStore:
         clamped = max(0.0, min(1.0, float(progress)))
         with self._connect() as conn:
             conn.execute(
-                "UPDATE mcp_tasks SET progress = ? WHERE task_id = ?",
+                "UPDATE mcp_tasks SET progress = ? WHERE task_id = ? AND status IN ('pending','running')",
                 (clamped, task_id),
             )
             conn.commit()
@@ -430,7 +551,7 @@ class MCPTaskStore:
                        result = ?,
                        completed_at = ?,
                        progress = 1.0
-                   WHERE task_id = ?""",
+                   WHERE task_id = ? AND status IN ('pending','running')""",
                 (result_json, completed_iso, task_id),
             )
             conn.commit()
@@ -455,7 +576,7 @@ class MCPTaskStore:
                    SET status = 'failed',
                        error = ?,
                        completed_at = ?
-                   WHERE task_id = ?""",
+                   WHERE task_id = ? AND status IN ('pending','running')""",
                 (err_json, completed_iso, task_id),
             )
             conn.commit()
@@ -582,9 +703,7 @@ def async_task(
             task = resolved_store.create(tool_name, params)
 
             async def _bg() -> None:
-                await _run_in_background(
-                    resolved_store, task.task_id, body, args, kwargs
-                )
+                await _run_in_background(resolved_store, task.task_id, body, args, kwargs)
 
             # Spawn detached: caller returns immediately with the handle.
             async with anyio.create_task_group() as tg:
@@ -653,6 +772,10 @@ def build_tasks_get_tool(
         task = store.get(task_id)
         if task is None:
             return {"error": "task_not_found", "task_id": task_id}
+        if task.tool_name == "delegate_agent":
+            from carl_studio.harness.runtime import get_runtime
+
+            return get_runtime().get(task_id)
         return task.to_dict()
 
     _tasks_get.__name__ = "tasks_get"
@@ -679,6 +802,10 @@ def build_tasks_cancel_tool(
         existing = store.get(task_id)
         if existing is None:
             return {"cancelled": False, "reason": "task_not_found", "task_id": task_id}
+        if existing.tool_name == "delegate_agent":
+            from carl_studio.harness.runtime import get_runtime
+
+            return await get_runtime().cancel(task_id)
         if existing.is_terminal:
             return {
                 "cancelled": False,
@@ -701,23 +828,30 @@ def register_task_tools(mcp_instance: Any) -> None:
     underscored identifiers). We register the canonical underscored names;
     the MCP 2025-11 spec permits either form.
     """
-    get_tool = build_tasks_get_tool()
-    cancel_tool = build_tasks_cancel_tool()
+    from mcp.server.mcpserver import Context
 
-    mcp_instance.tool(
-        name="tasks_get",
-        description=(
-            "Poll an async MCP task by id. Returns status / result / error. "
-            "Pair with tools that wrap their body in @async_task."
-        ),
-    )(get_tool)
-    mcp_instance.tool(
-        name="tasks_cancel",
-        description=(
-            "Cancel a pending or running async MCP task by id. "
-            "No-op on already-terminal tasks."
-        ),
-    )(cancel_tool)
+    legacy_get = build_tasks_get_tool()
+    legacy_cancel = build_tasks_cancel_tool()
+
+    async def tasks_get(task_id: str, ctx: Any) -> dict[str, Any]:
+        task = get_default_store().get(task_id)
+        if task is not None and task.tool_name == "delegate_agent":
+            from carl_studio.harness.runtime import get_runtime
+
+            return get_runtime(ctx).get(task_id)
+        return await legacy_get(task_id)
+
+    async def tasks_cancel(task_id: str, ctx: Any) -> dict[str, Any]:
+        task = get_default_store().get(task_id)
+        if task is not None and task.tool_name == "delegate_agent":
+            from carl_studio.harness.runtime import get_runtime
+
+            return await get_runtime(ctx).cancel(task_id)
+        return await legacy_cancel(task_id)
+
+    for function in (tasks_get, tasks_cancel):
+        function.__annotations__["ctx"] = Context
+        mcp_instance.tool()(function)
 
 
 # ---------------------------------------------------------------------------
