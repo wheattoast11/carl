@@ -66,11 +66,19 @@ def carrier_binding(config: TrainingConfig) -> dict[str, Any]:
     """Bind reusable embeddings independently of the ranking-head recipe."""
     if config.encoder is None or config.encoder.execution is None:
         raise ValueError("Prepared encoder execution required")
+    producer = config.encoder.execution.model_copy(
+        update={
+            "trainable_modules": (),
+            "dependencies": {
+                key: value
+                for key, value in config.encoder.execution.dependencies.items()
+                if not key.startswith("carl.encoder.fit.")
+            },
+        }
+    )
     return {
         "model": source_identity(Path(config.base_model))[0],
-        "execution": config.encoder.execution.model_copy(
-            update={"trainable_modules": ()}
-        ).model_dump(mode="json"),
+        "execution": producer.model_dump(mode="json"),
         "processed_tokens": config.encoder.processed_tokens,
         "encoding_batch_size": config.encoder.encode_batch_size,
     }
@@ -257,6 +265,10 @@ def prepare(
             operation = "qualify" if settings.mode == "adapter" else "metadata"
             request = {"model": config.base_model} if operation == "qualify" else None
             metadata = invoke(session, Path(settings.interpreter), operation, request)
+            if settings.mode == "adapter":
+                metadata["dependencies"].update(
+                    invoke(session, Path(settings.interpreter), "fit_metadata")
+                )
         execution = ExecutionBinding(**metadata, processor_sha256=processor)
         if (
             execution.dependencies.get("transformers") != "5.19.0"
@@ -429,6 +441,10 @@ def validate(prepared: TrainingPreparation, config: TrainingConfig | None = None
         raise ValidationError("Encoder execution unbound", code="carl.encoder.stale")
     with Session() as session:
         current = invoke(session, Path(bound.encoder.interpreter), "metadata")
+        if bound.encoder.mode == "adapter":
+            current["dependencies"].update(
+                invoke(session, Path(bound.encoder.interpreter), "fit_metadata")
+            )
     for key in ("interpreter", "interpreter_sha256", "dependencies"):
         if current[key] != getattr(bound.encoder.execution, key):
             raise ValidationError("Encoder environment changed", code="carl.encoder.stale")

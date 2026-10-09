@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib
+import importlib.metadata
 import importlib.util
 import json
 import math
@@ -12,6 +14,21 @@ import resource
 import time
 from pathlib import Path
 from typing import Any
+
+
+def peft_implementation_digest() -> str:
+    """Bind installed PEFT source bytes without importing the training stack."""
+    distribution = importlib.metadata.distribution("peft")
+    sources = {
+        str(entry): hashlib.sha256(
+            Path(str(distribution.locate_file(entry))).read_bytes()
+        ).hexdigest()
+        for entry in distribution.files or ()
+        if str(entry).startswith("peft/") and str(entry).endswith(".py")
+    }
+    if not sources:
+        raise ValueError("Installed PEFT source is unavailable")
+    return hashlib.sha256(json.dumps(sources, sort_keys=True).encode()).hexdigest()
 
 
 def fit(
@@ -102,6 +119,11 @@ def fit(
         if model is None:
             raise ValueError("Adapter training requires an encoder")
         peft: Any = importlib.import_module("peft")
+        expected_peft = (
+            settings["execution"].get("dependencies", {}).get("carl.encoder.fit.peft_sha256")
+        )
+        if expected_peft is not None and peft_implementation_digest() != expected_peft:
+            raise ValueError("Installed PEFT implementation changed")
         LoraConfig = peft.LoraConfig
         get_peft_model = peft.get_peft_model
 
@@ -626,3 +648,11 @@ def fit(
         restore_boundary()
         save("stopped", current_parameters)
         raise
+
+
+if __name__ == "__main__":
+    import sys
+
+    if sys.argv[1:] != ["metadata"]:
+        raise SystemExit("Use the prepared encoder worker for fitting")
+    print(json.dumps({"carl.encoder.fit.peft_sha256": peft_implementation_digest()}))

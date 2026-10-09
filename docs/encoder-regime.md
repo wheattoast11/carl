@@ -51,7 +51,11 @@ Torch thread limit; controlling Torch alone does not bound native BLAS pools.
 The cached path supports text and structured inputs. Same-recipe batches preserve
 part order and check each actual token count before inference. Cached head fitting
 does not load the encoder. Adapter fitting retains its differentiable forward path
-and refuses frozen carriers. Media training continues through its existing worker.
+and refuses frozen training carriers. Its separate `baseline_cache` can reuse the
+unadapted reference after a fresh numerical correspondence check. Candidate
+evaluation uses current adapter weights and batches text by recipe. The selected
+validation measurement is retained with its checkpoint. Media uses singleton
+processing. Preparation also hashes the installed PEFT implementation.
 
 ## Select with validation
 

@@ -13,6 +13,21 @@ from carl_encoders.artifacts import SCHEMA, atomic_json, inputs, write_carrier
 from carl_encoders.fit_worker import fit
 
 
+def test_installed_peft_source_changes_are_bound(tmp_path, monkeypatch):
+    from carl_encoders.fit_worker import peft_implementation_digest
+
+    source = tmp_path / "lora.py"
+    source.write_text("rank = 8\n")
+    distribution = SimpleNamespace(files=["peft/lora.py"], locate_file=lambda entry: source)
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: distribution)
+    before = peft_implementation_digest()
+    source.write_text("rank = 16\n")
+    assert peft_implementation_digest() != before
+    distribution.files = []
+    with pytest.raises(ValueError, match="source is unavailable"):
+        peft_implementation_digest()
+
+
 def test_adapter_cache_baseline_and_differentiable_batches(tmp_path, monkeypatch):
     torch = importlib.import_module("torch")
 

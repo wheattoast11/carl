@@ -52,6 +52,8 @@ def invoke(
         raise RuntimeError("Install carl-studio[encoders] to use the encoder worker") from exc
 
     worker = Path(encoder_worker.__file__).resolve()
+    if operation == "fit_metadata":
+        worker, operation = worker.with_name("fit_worker.py"), "metadata"
     temporary: Path | None = None
     argv = [str(interpreter), "-P", str(worker), operation]
     if request is not None:
