@@ -190,6 +190,29 @@ class DataVault(Vault[DataRef, bytes]):
             self._entries[ref.ref_id].extra["path"] = p
         return ref
 
+    def restore_file(self, ref: DataRef) -> DataRef:
+        """Restore a hash-bound file descriptor with its original ID and expiry."""
+        from urllib.parse import unquote, urlparse
+
+        parsed = urlparse(ref.uri)
+        if ref.created_at.tzinfo is None:
+            raise self._err("invalid_descriptor", "Data source time requires a timezone", {})
+        if ref.is_expired():
+            raise self._err("expired", "Data source expired", {"ref_id": str(ref.ref_id)})
+        if ref.kind != "file" or parsed.scheme != "file" or parsed.netloc or not ref.sha256:
+            raise self._err("backend_unavailable", "Unbound file descriptor", {})
+        path = Path(unquote(parsed.path))
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(4 * 1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != ref.sha256 or path.stat().st_size != ref.size_bytes:
+            raise self._err("stale", "Data source bytes changed", {"ref_id": str(ref.ref_id)})
+        self.put_ref_only(ref)
+        with self._lock:
+            self._entries[ref.ref_id].extra["path"] = path
+        return ref
+
     def open_stream(
         self,
         iterator: Iterator[bytes],

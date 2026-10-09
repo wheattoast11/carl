@@ -61,6 +61,34 @@ def register_harness_tools(server: Any) -> None:
     """Register on the existing MCP instance, without another dispatcher."""
 
     @server.tool()
+    async def encode_data(data: dict[str, Any], ctx: Context) -> dict[str, Any]:
+        from carl_studio.harness.runtime import get_runtime
+        from carl_studio.mcp.server import _run_tool
+        from carl_studio.training.preparation import run_in_worker
+        async def body() -> dict[str, Any]:
+            return await run_in_worker(lambda: get_runtime(ctx).session.semantic.encode_data(data))
+        return await _run_tool("encode_data", body)
+
+    @server.tool()
+    async def interpret(record: dict[str, Any], ctx: Context) -> dict[str, Any]:
+        from carl_studio.harness.runtime import get_runtime
+        from carl_studio.mcp.server import _run_tool
+        async def body() -> dict[str, Any]:
+            return get_runtime(ctx).session.semantic.interpret(record)
+        return await _run_tool("interpret", body)
+
+    @server.tool()
+    async def interpretation_feedback(interpretation_id: str, feedback_ref: str, confirmed: bool,
+                                      ctx: Context, artifact_ref: str | None = None,
+                                      correction: dict[str, Any] | None = None) -> dict[str, Any]:
+        from carl_studio.harness.runtime import get_runtime
+        from carl_studio.mcp.server import _run_tool
+        async def body() -> dict[str, Any]:
+            return get_runtime(ctx).session.semantic.interpretation_feedback(
+                interpretation_id, feedback_ref, confirmed, artifact_ref, correction)
+        return await _run_tool("interpretation_feedback", body)
+
+    @server.tool()
     async def list_agent_harnesses() -> dict[str, Any]:
         from carl_studio.harness.adapters import list_harnesses
 

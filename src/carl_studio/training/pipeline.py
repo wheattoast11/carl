@@ -527,7 +527,7 @@ async def submit_training(
     from carl_studio.training.trainer import CARLTrainer
 
     if prepared_plan_id is None:
-        if config.goal is not None:
+        if config.goal is not None or config.method == TrainingMethod.ENCODER:
             from carl_core.errors import ValidationError
 
             raise ValidationError(
@@ -567,6 +567,9 @@ async def submit_training(
 
     owner = manager or default_manager()
     prepared = load_preparation(prepared_plan_id, owner)
+    if config.method == TrainingMethod.ENCODER:
+        from carl_studio.training.encoder import submit
+        return await submit(config, prepared, owner)
     await run_in_worker(partial(validate_preparation, prepared, config))
     existing = owner.load_training_result(prepared.plan_id)
     if existing is not None and not (

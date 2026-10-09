@@ -58,4 +58,5 @@ class TrainingRun(BaseModel):
     checkpoint: str | None = None
     artifacts: list[Artifact] = Field(default_factory=list)
     acceptance: TrainingAcceptance | None = None
+    representation_acceptance: dict[str, object] | None = None
     resource_usage: dict[str, float] = Field(default_factory=dict)

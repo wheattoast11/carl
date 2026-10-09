@@ -177,7 +177,7 @@ class JSONProcess:
 
 def host_environment(host: Host, root: Path, profile: Path) -> dict[str, str]:
     """Pass only the selected host's environment and owned child context."""
-    common = {"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR"}
+    common = {"PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR", "CARL_ENCODER_MODEL", "CARL_ENCODER_PYTHON"}
     prefixes = {
         Host.CODEX: ("OPENAI_",),
         Host.CLAUDE: ("ANTHROPIC_",),
@@ -213,6 +213,7 @@ def host_environment(host: Host, root: Path, profile: Path) -> dict[str, str]:
                     "CARL_CHILD_SCOPE": "1",
                     "CARL_DELEGATION_DEPTH": "1",
                     "CARL_WORKSPACE_ROOT": str(root),
+                    **{key: os.environ[key] for key in ("CARL_ENCODER_MODEL", "CARL_ENCODER_PYTHON") if key in os.environ},
                 },
             }
         }
@@ -534,6 +535,7 @@ class OpenCodeAdapter:
                             "CARL_CHILD_SCOPE": "1",
                             "CARL_DELEGATION_DEPTH": "1",
                             "CARL_WORKSPACE_ROOT": str(request.workdir),
+                            **{key: os.environ[key] for key in ("CARL_ENCODER_MODEL", "CARL_ENCODER_PYTHON") if key in os.environ},
                         },
                     }
                 },
@@ -717,6 +719,7 @@ def launch_arguments(host: Host, executable: str, request: DelegationRequest) ->
                         "CARL_CHILD_SCOPE": "1",
                         "CARL_DELEGATION_DEPTH": "1",
                         "CARL_WORKSPACE_ROOT": str(request.workdir),
+                        **{key: os.environ[key] for key in ("CARL_ENCODER_MODEL", "CARL_ENCODER_PYTHON") if key in os.environ},
                     },
                 }
             }

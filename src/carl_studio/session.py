@@ -35,7 +35,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -178,6 +178,9 @@ class Session:
     resource_vault: ResourceVault = field(default_factory=_fresh_resource_vault)
     data_vault: DataVault = field(default_factory=_fresh_data_vault)
     headless_browser: bool = True
+    workspace: str | None = None
+    _semantic: Any = field(default=None, init=False, repr=False)
+    restore_issues: list[dict[str, str]] = field(default_factory=lambda: list[dict[str, str]](), init=False)
     # Downstream toolkits — lazy-constructed in __post_init__ so they share the
     # session's chain + vaults rather than each creating their own.
     data_toolkit: DataToolkit = field(init=False)
@@ -201,6 +204,14 @@ class Session:
         )
         self.cu_dispatcher = CUDispatcher(browser=self.browser_toolkit)
 
+    @property
+    def semantic(self) -> Any:
+        """Construct the shared lightweight semantic service on first use."""
+        if self._semantic is None:
+            from carl_studio.semantic.service import SemanticService
+            self._semantic = SemanticService(self)
+        return self._semantic
+
     # -- context manager ----------------------------------------------------
 
     def __enter__(self) -> Session:
@@ -211,7 +222,7 @@ class Session:
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: Any,
-    ) -> bool:
+    ) -> Literal[False]:
         """Tear down long-lived resources. Does not suppress exceptions."""
         self.teardown()
         return False
@@ -256,7 +267,7 @@ class Session:
             subprocess_toolkit=self.subprocess_toolkit,
             cu_dispatcher=self.cu_dispatcher,
         )
-        return bundle.register_all(dispatcher)
+        return bundle.register_all(dispatcher) + self.semantic.register(dispatcher)
 
     def anthropic_tools(self) -> list[dict[str, Any]]:
         """Flat list of tool schemas for the Anthropic ``tools=`` API param."""
@@ -271,7 +282,7 @@ class Session:
             subprocess_toolkit=self.subprocess_toolkit,
             cu_dispatcher=self.cu_dispatcher,
         )
-        return bundle.anthropic_tools()
+        return bundle.anthropic_tools() + self.semantic.tool_schemas()
 
     # -- snapshot / restore -------------------------------------------------
 
@@ -284,6 +295,12 @@ class Session:
         inline-bytes refs need explicit re-injection via put (they're the
         "values held only in this process memory" case).
         """
+        if self._semantic is not None and self.semantic.interpretations:
+            self.chain.context["semantic_refinements"] = self.semantic.event_refinements
+            self.chain.context["semantic_interpretations"] = [
+                record.model_dump(mode="json") for record in self.semantic.interpretations.values()]
+        if self.workspace and self._semantic is not None and (self.semantic.interpretations or self.semantic.binding is not None):
+            self.chain.context["semantic_workspace"] = self.workspace
         return TwinCheckpoint.build(
             user=self.user,
             chain=self.chain,
@@ -310,4 +327,18 @@ class Session:
                 context={"stored_hash": checkpoint.content_hash},
             )
         chain = InteractionChain.from_dict(checkpoint.chain)
-        return cls(user=checkpoint.user, chain=chain)
+        from carl_core.errors import CARLError
+
+        session = cls(user=checkpoint.user, chain=chain,
+                      workspace=chain.context.get("semantic_workspace"))
+        session.semantic.event_refinements = dict(chain.context.get("semantic_refinements", {}))
+        from carl_studio.semantic.types import Interpretation
+        for raw in chain.context.get("semantic_interpretations", []):
+            record = Interpretation.model_validate(raw)
+            session.semantic.interpretations[record.id] = record
+        for descriptor in checkpoint.refs.get("data", []):
+            try:
+                session.semantic.restore_artifact(descriptor)
+            except (ValueError, OSError, CARLError) as exc:
+                session.restore_issues.append({"ref_id": str(descriptor.get("ref_id", "")), "reason": getattr(exc, "code", type(exc).__name__)})
+        return session

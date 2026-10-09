@@ -161,7 +161,9 @@ def message_send_to_task(params: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "skill": str(metadata.get("skill", "") or ""),
-        "inputs": {"text": "".join(text_parts)},
+        "inputs": {"text": "".join(text_parts), **({"parts": parts} if any(
+            isinstance(part, dict) and part.get("kind") != "text" for part in parts
+        ) else {})},
         "sender": str(role_any) if role_any is not None else "user",
     }
 

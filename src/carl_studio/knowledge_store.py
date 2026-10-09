@@ -241,6 +241,16 @@ class KnowledgeStore:
         scored.sort(key=lambda pair: pair[0], reverse=True)
         return scored[:limit]
 
+    def semantic_recall(self, query: str, semantic: Any, *, limit: int = 5) -> list[dict[str, Any]]:
+        """Keep lexical and semantic scores separate through the shared service."""
+        terms = set(query.lower().split())
+        sources = [
+            (str(chunk.get("source", index)), str(chunk.get("text", "")),
+             float(len(terms & set(chunk.get("words", [])))))
+            for index, chunk in enumerate(self.chunks)
+        ]
+        return semantic.recall(query, sources, limit=limit)
+
     # ------------------------------------------------------------------
     # Round-trip for session persistence
     # ------------------------------------------------------------------

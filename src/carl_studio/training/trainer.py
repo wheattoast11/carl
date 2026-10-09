@@ -691,6 +691,9 @@ class CARLTrainer:
             },
         )
 
+        if self.config.method == TrainingMethod.ENCODER:
+            from carl_studio.training.encoder import train
+            return await train(self)
         self.run.phase = RunPhase.LOADING_MODEL
         self._load_model_and_tokenizer()
 

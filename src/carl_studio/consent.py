@@ -18,6 +18,7 @@ boundary with the relevant consent flag. Gates currently wired:
 
 from __future__ import annotations
 
+import json
 import sys
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -166,7 +167,48 @@ class ConsentManager:
             contract_witnessing=ConsentFlag(enabled=False, changed_at=ts),
         )
         self.save(state)
+        raw_epoch = self._get_db().get_config("local_capture_epoch") or "0"
+        try:
+            epoch = int(raw_epoch)
+        except (ValueError, TypeError):
+            epoch = 0
+        self._get_db().set_config("local_capture_epoch", str(epoch + 1))
         return state
+
+    def capture_grant(self, *, session_id: str | None = None, workspace: str | None = None,
+                      enabled: bool) -> None:
+        """Set a local capture grant without authorizing training or egress."""
+        from pathlib import Path
+
+        from carl_core.hashing import content_hash
+
+        if (session_id is None) == (workspace is None):
+            raise ValueError("Choose exactly one capture scope")
+        scope = {"session": session_id} if session_id else {"workspace": str(Path(workspace or "").resolve())}
+        epoch = int(self._get_db().get_config("local_capture_epoch") or "0")
+        self._get_db().set_config("capture:" + content_hash(scope), json.dumps({"enabled": enabled, "epoch": epoch}))
+
+    def capture_allowed(self, *, session_id: str, workspace: str | None = None) -> bool:
+        """Resolve explicit local session and workspace capture grants."""
+        from pathlib import Path
+
+        from carl_core.hashing import content_hash
+
+        scopes = [{"session": session_id}]
+        if workspace:
+            scopes.append({"workspace": str(Path(workspace).resolve())})
+        try:
+            epoch = int(self._get_db().get_config("local_capture_epoch") or "0")
+            for scope in scopes:
+                raw = self._get_db().get_config("capture:" + content_hash(scope))
+                if raw is None:
+                    continue
+                grant = json.loads(raw)
+                if isinstance(grant, dict) and grant.get("epoch") == epoch:
+                    return grant.get("enabled") is True
+            return False
+        except (ValueError, TypeError):
+            return False
 
     def present_first_run(self) -> ConsentState:
         """Interactive first-run consent prompt.

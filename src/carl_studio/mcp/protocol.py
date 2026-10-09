@@ -16,6 +16,9 @@ CHILD_TOOLS = frozenset(
     {
         "validate_config",
         "prepare_training",
+        "encode_data",
+        "interpret",
+        "interpretation_feedback",
         "get_coherence_metrics",
         "list_backends",
         "list_skills",

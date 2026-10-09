@@ -146,7 +146,7 @@ async def _run_tool(
             tool_name,
             success=False,
             duration_ms=duration_ms,
-            error=repr(exc),
+            error=type(exc).__name__ if tool_name in {"encode_data", "interpret", "interpretation_feedback"} else repr(exc),
         )
         raise
     duration_ms = (time.monotonic() - start) * 1000.0

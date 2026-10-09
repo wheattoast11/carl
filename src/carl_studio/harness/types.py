@@ -82,6 +82,12 @@ DELEGATION_TOOLS = frozenset(
 
 def trace_projection(name: str, arguments: dict[str, Any], result: Any) -> tuple[Any, Any]:
     """Keep delegation payloads out of traces, including denied calls."""
+    if name in {"encode_data", "interpret", "interpretation_feedback"}:
+        from carl_core.hashing import content_hash
+        references = {key: arguments[key] for key in
+                      ("interpretation_id", "feedback_ref", "artifact_ref", "confirmed") if key in arguments}
+        references["input_sha256"] = content_hash(arguments)
+        return references, {"content_retained": False, "output_sha256": content_hash(result)}
     if name not in DELEGATION_TOOLS:
         return arguments, result
     safe = {key: arguments[key] for key in ("host", "task_id", "request_id") if key in arguments}

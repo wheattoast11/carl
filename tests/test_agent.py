@@ -54,7 +54,7 @@ class TestToolSchemas:
             assert tool["input_schema"]["type"] == "object"
 
     def test_tool_count(self) -> None:
-        assert len(TOOLS) == 14
+        assert len(TOOLS) == 17
 
     def test_tool_names(self) -> None:
         names = {t["name"] for t in TOOLS}
@@ -63,6 +63,7 @@ class TestToolSchemas:
             "create_file", "read_file", "set_frame", "list_files",
             "dispatch_cli", "list_agent_harnesses", "delegate_agent", "tasks_get",
             "tasks_cancel", "tasks_reply", "read_agent_result",
+            "encode_data", "interpret", "interpretation_feedback",
         }
         assert names == expected
 

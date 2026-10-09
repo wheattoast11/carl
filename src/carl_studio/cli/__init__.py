@@ -27,6 +27,7 @@ for _module in (
     "platform",
     "db",
     "wiring",
+    "semantic",
 ):
     import_module(f"{__name__}.{_module}")
 

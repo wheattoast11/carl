@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from carl_studio.semantic.learning import EncoderSettings
 from carl_studio.types.preparation import TrainingGoal
 
 
@@ -48,6 +49,7 @@ def normalize_compute_target(value: str) -> str:
 class TrainingMethod(str, Enum):
     """Training algorithm."""
 
+    ENCODER = "encoder"
     SFT = "sft"
     GRPO = "grpo"
     DPO = "dpo"  # Not yet implemented
@@ -214,6 +216,8 @@ class TrainingConfig(BaseModel):
     output_repo: str = Field(
         description="HuggingFace repo to push results (e.g. 'your-org/your-model-phase1')"
     )
+
+    encoder: EncoderSettings | None = None
 
     # Method
     method: TrainingMethod = Field(description="Training algorithm")
@@ -415,4 +419,13 @@ class TrainingConfig(BaseModel):
     def validate_cascade_method(self) -> "TrainingConfig":
         if self.cascade_stages and self.method != TrainingMethod.GRPO:
             raise ValueError("cascade_stages only valid with GRPO training method")
+        return self
+
+
+    @model_validator(mode="after")
+    def validate_encoder_method(self) -> TrainingConfig:
+        if self.method == TrainingMethod.ENCODER and self.encoder is None:
+            raise ValueError("Encoder training requires nested encoder settings")
+        if self.encoder is not None and self.method != TrainingMethod.ENCODER:
+            raise ValueError("Encoder settings require method: encoder")
         return self

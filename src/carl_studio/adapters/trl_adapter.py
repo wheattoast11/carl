@@ -165,6 +165,7 @@ class TRLAdapter(TrainingConnection):
 
     training_capabilities: ClassVar[dict[str, Any]] = {
         "methods": ["sft", "grpo"],
+        "encoder_local_prepared": ["frozen_heads", "adapter"],
         "task_rewards": True,
         "artifacts": True,
         "coherence": "full_logits",
