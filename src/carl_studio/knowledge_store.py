@@ -245,11 +245,19 @@ class KnowledgeStore:
         """Keep lexical and semantic scores separate through the shared service."""
         terms = set(query.lower().split())
         sources = [
-            (str(chunk.get("source", index)), str(chunk.get("text", "")),
+            (f"knowledge:{index}", str(chunk.get("text", "")),
              float(len(terms & set(chunk.get("words", [])))))
             for index, chunk in enumerate(self.chunks)
         ]
-        return semantic.recall(query, sources, limit=limit)
+        matches = semantic.recall(query, sources, limit=limit)
+        chunks = {f"knowledge:{index}": chunk for index, chunk in enumerate(self.chunks)}
+        results: list[dict[str, Any]] = []
+        for match in matches:
+            chunk_ref = match["source_ref"]
+            if chunk_ref not in chunks:
+                raise ValueError("Semantic recall returned an unknown knowledge chunk")
+            results.append({**match, "chunk_ref": chunk_ref, "source_ref": str(chunks[chunk_ref].get("source", chunk_ref))})
+        return results
 
     # ------------------------------------------------------------------
     # Round-trip for session persistence

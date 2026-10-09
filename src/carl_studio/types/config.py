@@ -10,9 +10,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
+from carl_core.encoder_settings import EncoderSettings
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from carl_studio.semantic.learning import EncoderSettings
 from carl_studio.types.preparation import TrainingGoal
 
 

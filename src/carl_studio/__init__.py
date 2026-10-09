@@ -10,7 +10,7 @@ See also: carl.py (300-line seed crystal at the repo root)
 
 from __future__ import annotations
 
-__version__ = "0.21.1"
+__version__ = "0.22.0"
 
 from typing import TYPE_CHECKING
 

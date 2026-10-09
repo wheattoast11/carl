@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img"><title>One product. Explicit ownership boundaries.</title><desc>Authored illustration, not a measured model result.</desc><rect width="1280" height="760" fill="#FAF6EE"/>
+<text x="64" y="72" font-family="system-ui,sans-serif" font-size="30" fill="#45424B">CARL</text>
+<text x="870" y="74" font-family="system-ui,sans-serif" font-size="20" fill="#45424B">Intuition Labs LLC · terminals</text>
+<text x="64" y="158" font-family="system-ui,sans-serif" font-size="38" fill="#45424B">One product. Explicit ownership boundaries.</text>
+<text x="64" y="210" font-family="system-ui,sans-serif" font-size="22" fill="#6B6570">Coherence-Aware Reinforcement Learning</text>
+<rect x="64" y="260" width="270" height="340" rx="12" fill="#FAF6EE" stroke="#45424B" stroke-width="2"/>
+<text x="82" y="303" font-family="system-ui,sans-serif" font-size="23" fill="#45424B">Public packages</text>
+<text x="82" y="366" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">carl-core</text>
+<text x="82" y="418" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">carl-encoders</text>
+<text x="82" y="470" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">carl-studio</text>
+<text x="82" y="522" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">MIT source notices</text>
+<rect x="358" y="260" width="270" height="340" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<text x="376" y="303" font-family="system-ui,sans-serif" font-size="23" fill="#635186">Model artifacts</text>
+<text x="376" y="366" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">Weights + heads</text>
+<text x="376" y="418" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">Processor + evidence</text>
+<text x="376" y="470" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">Artifact-specific terms</text>
+<text x="376" y="522" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">GGUF qualification</text>
+<rect x="652" y="260" width="270" height="340" rx="12" fill="#FAF6EE" stroke="#45424B" stroke-width="2"/>
+<text x="670" y="303" font-family="system-ui,sans-serif" font-size="23" fill="#45424B">Private runtime</text>
+<text x="670" y="366" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">Separate installation</text>
+<text x="670" y="418" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">Private algorithms</text>
+<text x="670" y="470" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">Authorized resolver</text>
+<text x="670" y="522" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">No source in public wheel</text>
+<rect x="946" y="260" width="270" height="340" rx="12" fill="#FAF6EE" stroke="#45424B" stroke-width="2"/>
+<text x="964" y="303" font-family="system-ui,sans-serif" font-size="23" fill="#45424B">Operator harness</text>
+<text x="964" y="366" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">Rights evidence</text>
+<text x="964" y="418" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">Destination-bound grant</text>
+<text x="964" y="470" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">Release and rollback</text>
+<text x="964" y="522" font-family="system-ui,sans-serif" font-size="18" fill="#45424B">Outside public CARL</text>
+<text x="64" y="655" font-family="system-ui,sans-serif" font-size="21" fill="#45424B">Capture permission, training permission and publication permission stay separate.</text>
+<text x="64" y="721" font-family="system-ui,sans-serif" font-size="17" fill="#6B6570">Ownership inventory · code, weights, data and marks retain separate rights</text>
+</svg>

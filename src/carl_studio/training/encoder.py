@@ -28,10 +28,21 @@ from carl_studio.types.run import RunPhase, TrainingRun
 
 
 def implementation_sources() -> list[Path]:
+    from carl_core import encoder, encoder_settings
+    from carl_encoders import worker
+
     semantic = Path(__file__).parent.parent / "semantic"
+    package = Path(worker.__file__).parent
     from carl_studio.training.preparation import implementation_sources
 
-    return [Path(__file__).resolve(), *sorted(semantic.glob("*.py")), *implementation_sources()]
+    return [
+        Path(__file__).resolve(),
+        *sorted(semantic.glob("*.py")),
+        *sorted(package.glob("*.py")),
+        Path(encoder.__file__).resolve(),
+        Path(encoder_settings.__file__).resolve(),
+        *implementation_sources(),
+    ]
 
 
 def groups(config: TrainingConfig) -> dict[str, list[EncoderExample]]:

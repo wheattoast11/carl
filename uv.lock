@@ -93,6 +93,7 @@ exclude-newer = "2026-10-08T00:35:32Z"
 [manifest]
 members = [
     "carl-core",
+    "carl-encoders",
     "carl-studio",
 ]
 
@@ -872,7 +873,7 @@ wheels = [
 
 [[package]]
 name = "carl-core"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "packages/carl-core" }
 dependencies = [
     { name = "numpy", version = "2.3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.13' or (extra == 'extra-11-carl-studio-all' and extra == 'extra-11-carl-studio-wallet') or (extra == 'extra-11-carl-studio-constitutional' and extra == 'extra-11-carl-studio-wallet') or (extra == 'extra-11-carl-studio-runpod' and extra == 'extra-11-carl-studio-wallet') or (extra == 'extra-11-carl-studio-secrets' and extra == 'extra-11-carl-studio-wallet') or (extra == 'extra-11-carl-studio-wallet' and extra == 'extra-11-carl-studio-x402')" },
@@ -888,8 +889,23 @@ requires-dist = [
 ]
 
 [[package]]
+name = "carl-encoders"
+version = "0.1.0"
+source = { editable = "packages/carl-encoders" }
+dependencies = [
+    { name = "carl-core" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "carl-core", editable = "packages/carl-core" },
+    { name = "pydantic", specifier = ">=2.13.5,<3" },
+]
+
+[[package]]
 name = "carl-studio"
-version = "0.21.1"
+version = "0.22.0"
 source = { editable = "." }
 dependencies = [
     { name = "anyio" },
@@ -911,6 +927,7 @@ all = [
     { name = "arxiv" },
     { name = "bitsandbytes" },
     { name = "build" },
+    { name = "carl-encoders" },
     { name = "cuda-tile", marker = "python_full_version < '3.14' and sys_platform == 'linux'" },
     { name = "cyclonedx-bom" },
     { name = "datasets" },
@@ -951,6 +968,7 @@ constitutional = [
 ]
 dev = [
     { name = "build" },
+    { name = "carl-encoders" },
     { name = "cyclonedx-bom" },
     { name = "hypothesis" },
     { name = "pyright" },
@@ -959,6 +977,9 @@ dev = [
     { name = "respx" },
     { name = "ruff" },
     { name = "uv" },
+]
+encoders = [
+    { name = "carl-encoders" },
 ]
 hf = [
     { name = "huggingface-hub" },
@@ -1038,8 +1059,10 @@ requires-dist = [
     { name = "bitsandbytes", marker = "extra == 'training'", specifier = ">=0.50.2,<1" },
     { name = "build", marker = "extra == 'dev'", specifier = "==1.6.1" },
     { name = "carl-core", editable = "packages/carl-core" },
+    { name = "carl-encoders", marker = "extra == 'dev'", editable = "packages/carl-encoders" },
+    { name = "carl-encoders", marker = "extra == 'encoders'", editable = "packages/carl-encoders" },
+    { name = "carl-studio", extras = ["encoders", "training", "observe", "hf", "runpod", "tinker", "tui", "mcp", "research", "a2a", "x402", "payments", "metrics", "constitutional", "slime", "secrets", "cli", "dev"], marker = "extra == 'all'" },
     { name = "carl-studio", extras = ["training", "hf", "observe"], marker = "extra == 'quickstart'" },
-    { name = "carl-studio", extras = ["training", "observe", "hf", "runpod", "tinker", "tui", "mcp", "research", "a2a", "x402", "payments", "metrics", "constitutional", "slime", "secrets", "cli", "dev"], marker = "extra == 'all'" },
     { name = "coinbase-agentkit", marker = "python_full_version < '3.14' and extra == 'wallet'", specifier = "==0.7.4" },
     { name = "cryptography", marker = "python_full_version >= '3.14' and extra == 'wallet'", specifier = ">=50.0.2,<51" },
     { name = "cryptography", marker = "python_full_version < '3.14' and extra == 'wallet'", specifier = ">=45.0.7,<46" },
@@ -1086,7 +1109,7 @@ requires-dist = [
     { name = "uv", marker = "extra == 'dev'", specifier = "==0.12.23" },
     { name = "x402", marker = "extra == 'x402'", specifier = ">=2.25.0,<3" },
 ]
-provides-extras = ["quickstart", "training", "observe", "hf", "runpod", "tinker", "tui", "mcp", "research", "a2a", "wallet", "x402", "payments", "metrics", "constitutional", "slime", "secrets", "cli", "dev", "all"]
+provides-extras = ["encoders", "quickstart", "training", "observe", "hf", "runpod", "tinker", "tui", "mcp", "research", "a2a", "wallet", "x402", "payments", "metrics", "constitutional", "slime", "secrets", "cli", "dev", "all"]
 
 [[package]]
 name = "cdp-sdk"

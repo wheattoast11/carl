@@ -46,7 +46,12 @@ def invoke(
     *,
     timeout: float = 120,
 ) -> dict[str, Any]:
-    worker = Path(__file__).with_name("worker.py")
+    try:
+        from carl_encoders import worker as encoder_worker
+    except ImportError as exc:
+        raise RuntimeError("Install carl-studio[encoders] to use the encoder worker") from exc
+
+    worker = Path(encoder_worker.__file__).resolve()
     temporary: Path | None = None
     argv = [str(interpreter), "-P", str(worker), operation]
     if request is not None:

@@ -430,3 +430,32 @@ async def test_a2a_uses_shared_session_and_dispatcher_denial(tmp_path):
     assert "denied" not in session.semantic.interpretations
     await denied.close()
     bus.close()
+
+
+def test_same_file_semantic_chunks_keep_occurrence_and_provenance(monkeypatch):
+    from types import SimpleNamespace
+
+    from carl_studio.chat_agent import CARLAgent
+
+    chunks = [
+        {"source": "notes.txt", "text": "chosen first chunk", "words": {"chosen"}},
+        {"source": "notes.txt", "text": "wrong second chunk", "words": {"wrong"}},
+    ]
+    store = KnowledgeStore(chunks=chunks)
+
+    def recall(query, sources, *, limit):
+        assert [row[0] for row in sources] == ["knowledge:0", "knowledge:1"]
+        return [{"source_ref": sources[0][0], "semantic_score": 0.9, "lexical_score": 1.0}]
+
+    semantic = SimpleNamespace(configured=True, recall=recall)
+    agent = CARLAgent.__new__(CARLAgent)
+    agent._knowledge_store = store
+    monkeypatch.setattr(agent, "_runtime_session", lambda: SimpleNamespace(semantic=semantic))
+    matches = store.semantic_recall("chosen", semantic)
+    assert matches[0]["source_ref"] == "notes.txt"
+    assert matches[0]["chunk_ref"] == "knowledge:0"
+    answer = agent._tool_query("chosen")
+    assert "chosen first chunk" in answer
+    assert "wrong second chunk" not in answer
+    semantic.configured = False
+    assert "chosen first chunk" in agent._tool_query("chosen")

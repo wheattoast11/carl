@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/carl-hero.gif" alt="CARL: from chaos to crystal" width="720"/>
+  <img src="assets/brand/carl-overview.svg" alt="CARL: improve models and keep the evidence" width="720"/>
 </p>
 
 <h1 align="center">CARL</h1>
@@ -9,34 +9,36 @@
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/carl-studio/"><img src="https://img.shields.io/pypi/v/carl-studio?color=06b6d4&style=flat-square" alt="PyPI"/></a>
-  <a href="https://pypi.org/project/carl-studio/"><img src="https://img.shields.io/pypi/pyversions/carl-studio?style=flat-square" alt="Python"/></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"/></a>
-  <a href="https://doi.org/10.5281/zenodo.18906944"><img src="https://img.shields.io/badge/paper-Zenodo-blue?style=flat-square" alt="Paper"/></a>
+  <a href="https://pypi.org/project/carl-studio/">Python package</a> · <a href="LICENSE">MIT source</a> · <a href="https://doi.org/10.5281/zenodo.18906944">Paper</a>
 </p>
 
 ---
 
-## Why
+## Improve models. Keep the evidence.
 
-A model becomes an agent when it stops pattern-matching and starts *knowing*. That transition isn't gradual — it's a **phase transition**, like water becoming ice. One moment the model is guessing. The next, it's coherent.
+CARL prepares bounded training experiments, compares candidates against their
+starting models, and keeps task results, policy checks, coherence and cost
+separately visible. Coherence is a measurement; held-out task evaluation
+establishes whether the model improved for your goal.
 
-Standard training can't see this happening. You watch a loss curve and hope.
+The encoder interface adds source-linked retrieval and explicit interpretation
+feedback. A correction can become a local learning example when capture is
+enabled. Capture permission and training permission are separate.
 
-**CARL measures the moment of crystallization** — and rewards it.
+Install the encoder integration with `pip install 'carl-studio[encoders]'`.
+The worker uses its separately bound interpreter and dependency environment.
 
-```
-                         Phi (order parameter)
-                              │
-          guessing            │         knowing
-     ░░░░░░░░░░░░░░░░░░░░░░░░│████████████████████████
-                              │
-                        crystallization
-```
+The `carl-encoders` package contains reusable representation contracts and
+isolated training workers. CARL owns sessions, memory, authorization and
+activation. Model releases carry their own weights, processor bindings,
+license notices and evaluation evidence. GGUF is a derived artifact that
+requires conversion and runtime qualification.
 
-The order parameter **Phi** measures how coherent a model's probability field is at every token. When Phi crystallizes, the model has found its internal anchor — a fixed point it can navigate from to *any* concept space without losing itself.
+[Explore the illustrated workflows](assets/brand/index.html) ·
+[Brand and terminology](DESIGN.md) ·
+[Software and model boundaries](docs/public-private-boundaries.md)
 
-This is alignment you can measure, not just evaluate.
+By **Intuition Labs LLC**, for **terminals**.
 
 ---
 

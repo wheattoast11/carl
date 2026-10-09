@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling==1.32.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "carl-encoders"
+version = "0.1.0"
+description = "Shared encoder contracts and local representation learning for CARL"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = ["carl-core>=0.3.1", "pydantic>=2.13.5,<3"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/carl_encoders"]

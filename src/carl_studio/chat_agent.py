@@ -1875,8 +1875,8 @@ class CARLAgent:
         semantic = self._runtime_session().semantic
         if semantic.configured:
             matches = self._knowledge_store.semantic_recall(question, semantic, limit=5)
-            chunks = {str(chunk.get("source", index)): chunk for index, chunk in enumerate(self._knowledge_store.chunks)}
-            results = [(match["semantic_score"] if match["semantic_score"] is not None else match["lexical_score"], chunks[match["source_ref"]]) for match in matches]
+            chunks = {f"knowledge:{index}": chunk for index, chunk in enumerate(self._knowledge_store.chunks)}
+            results = [(match["semantic_score"] if match["semantic_score"] is not None else match["lexical_score"], chunks[match["chunk_ref"]]) for match in matches]
         else:
             results = self._knowledge_store.recall(question, limit=5)
         if not results:
