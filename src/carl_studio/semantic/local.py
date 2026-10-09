@@ -60,7 +60,19 @@ def invoke(
         with os.fdopen(fd, "w") as stream:
             json.dump(request, stream)
         argv += ["--request", name]
-    resource = session.subprocess_toolkit.spawn(argv, ttl_s=int(timeout) + 10)
+    data = request or {}
+    worker_settings: dict[str, Any] = data.get("settings") or {}
+    execution_settings: dict[str, Any] = worker_settings.get("execution") or {}
+    selected = data.get("device", execution_settings.get("device", "cpu"))
+    environment = None
+    if selected == "cpu":
+        environment = {
+            **os.environ,
+            "CUDA_VISIBLE_DEVICES": "",
+            "HIP_VISIBLE_DEVICES": "",
+            "ROCR_VISIBLE_DEVICES": "",
+        }
+    resource = session.subprocess_toolkit.spawn(argv, ttl_s=int(timeout) + 10, env=environment)
     try:
         result = session.subprocess_toolkit.wait(resource["ref_id"], timeout_s=timeout)
         if result["exit_code"] != 0:

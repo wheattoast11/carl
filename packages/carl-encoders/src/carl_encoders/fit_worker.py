@@ -300,7 +300,7 @@ def fit(
             "scheduler": scheduler.state_dict(),
             "python_rng": random.getstate(),
             "torch_rng": torch.get_rng_state(),
-            "cuda_rng": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
+            "cuda_rng": torch.cuda.get_rng_state_all() if device.type == "cuda" else [],
             "step": global_step,
             "data_position": data_position,
             "processor": settings["execution"]["processor_sha256"],
@@ -357,7 +357,7 @@ def fit(
         scheduler.load_state_dict(saved["scheduler"])
         random.setstate(saved["python_rng"])
         torch.set_rng_state(saved["torch_rng"])
-        if torch.cuda.is_available():
+        if device.type == "cuda":
             torch.cuda.set_rng_state_all(saved["cuda_rng"])
         global_step, data_position = saved["step"], saved["data_position"]
         order, order_position = saved.get("sampler_order", []), saved.get("sampler_position", 0)
@@ -500,6 +500,7 @@ def fit(
             "baseline": baseline,
             "candidate": candidate,
             "validation": validation,
+            "validation_baseline": validation_baseline,
             "updated_parameters": updated,
             "targets": targets,
             "elapsed_seconds": time.monotonic() - started,

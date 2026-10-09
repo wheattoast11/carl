@@ -205,6 +205,62 @@ def test_cached_measurement_observes_cancellation(tmp_path: Path):
     assert result["steps"] == 0
 
 
+def test_cpu_checkpoint_does_not_initialize_available_gpu(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import torch
+    from carl_encoders.fit_worker import fit
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "is_initialized", lambda: False)
+    monkeypatch.setattr(
+        torch.cuda, "get_rng_state_all", lambda: pytest.fail("CPU fit accessed GPU RNG")
+    )
+    req = request(tmp_path)
+    Path(req["output"]).mkdir()
+    (Path(req["output"]) / "cancel").touch()
+    result = fit(req, None, None, None, cached_vectors=cached(req))
+    assert result["status"] == "stopped"
+    saved = torch.load(Path(req["output"]) / "encoder_state.pt", weights_only=True)
+    assert saved["cuda_rng"] == []
+
+
+def test_cpu_worker_hides_gpu_devices_only_in_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import sys
+    from types import SimpleNamespace
+
+    from carl_studio.semantic.local import invoke
+
+    environments = []
+
+    class Processes:
+        def spawn(self, argv, **kwargs):
+            environments.append(kwargs["env"])
+            return {"ref_id": "worker"}
+
+        def wait(self, *args, **kwargs):
+            return {"exit_code": 0, "stdout_ref": {"ref_id": "stdout"}}
+
+        def terminate(self, *args):
+            pass
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+    session = SimpleNamespace(
+        subprocess_toolkit=Processes(),
+        data_toolkit=SimpleNamespace(read_text=lambda *args, **kwargs: {"text": "{}"}),
+    )
+    invoke(session, Path(sys.executable), "fit", {"settings": {"execution": {"device": "cpu"}}})
+    assert all(
+        environments[0][key] == ""
+        for key in ("CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES")
+    )
+    assert os.environ["CUDA_VISIBLE_DEVICES"] == "0"
+    invoke(session, Path(sys.executable), "encode", {"device": "cuda"})
+    assert environments[1] is None
+
+
 def test_cached_measurement_observes_deadline(tmp_path: Path):
     from carl_encoders.fit_worker import fit
 
