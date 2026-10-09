@@ -44,6 +44,10 @@ artifacts. Carriers use the existing semantic artifact directory and vault
 references. Event occurrences remain distinct while identical content shares
 computation. A successor population uses a new manifest.
 
+The isolated worker bounds OpenMP, OpenBLAS and MKL pools to four threads before
+numerical imports. Its execution identity includes this policy alongside the
+Torch thread limit; controlling Torch alone does not bound native BLAS pools.
+
 The cached path supports text and structured inputs. Same-recipe batches preserve
 part order and check each actual token count before inference. Cached head fitting
 does not load the encoder. Adapter fitting retains its differentiable forward path
