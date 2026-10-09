@@ -40,6 +40,18 @@ def fit(
     output = Path(request["output"])
     output.mkdir(parents=True, exist_ok=True)
     device = model.device if model is not None else torch.device("cpu")
+
+    def limit() -> None:
+        allocated = (
+            torch.cuda.max_memory_allocated(device)
+            if device.type == "cuda"
+            else resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+        )
+        if (output / "cancel").exists():
+            raise InterruptedError("Encoder execution was cancelled")
+        if time.monotonic() > deadline or allocated > ceiling:
+            raise TimeoutError("Encoder pilot resource ceiling exceeded")
+
     if device.type == "cpu":
         torch.set_num_threads(min(4, torch.get_num_threads()))
     mode = settings["mode"]
@@ -48,9 +60,11 @@ def fit(
     elif cached_vectors is None or mode != "frozen_heads":
         raise ValueError("Frozen-head fitting requires bound carriers or an encoder")
     baseline_vectors = None
+    baseline_probe: dict[str, float] = {}
     if settings.get("baseline_cache"):
         if mode != "adapter" or model is None:
             raise ValueError("Baseline cache requires an adapter encoder")
+        limit()
         baseline_vectors, _ = artifacts.load_carriers(
             Path(settings["baseline_cache"]),
             request["cache_binding"],
@@ -59,13 +73,30 @@ def fit(
         sample = next(iter(artifacts.inputs(request).values()))
         sample = {**sample, "max_tokens": min(sample["max_tokens"], settings["processed_tokens"])}
         model.eval()
+        limit()
         with torch.no_grad():
             fresh = raw_forward(model, features_for(model, sample))[0].float().cpu()
         expected = torch.tensor(
             baseline_vectors[artifacts.sample_key(sample, settings["processed_tokens"])]
         )
-        if not torch.allclose(fresh, expected, rtol=1e-5, atol=1e-6):
+        baseline_probe["max_raw_error"] = float((fresh - expected).abs().max())
+        baseline_probe["max_normalized_error"] = max(
+            float(
+                (
+                    functional.normalize(fresh[:d], dim=-1)
+                    - functional.normalize(expected[:d], dim=-1)
+                )
+                .abs()
+                .max()
+            )
+            for d in (128, 256, 512, 768)
+        )
+        if (
+            not torch.allclose(fresh, expected, rtol=1e-5, atol=5e-5)
+            or baseline_probe["max_normalized_error"] > 1e-6
+        ):
             raise ValueError("Baseline cache numerical correspondence failed")
+        limit()
     targets: list[str] = []
     if mode == "adapter":
         if model is None:
@@ -201,17 +232,6 @@ def fit(
         row = rows[order[order_position]]
         order_position += 1
         return row
-
-    def limit() -> None:
-        allocated = (
-            torch.cuda.max_memory_allocated(device)
-            if device.type == "cuda"
-            else resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
-        )
-        if (output / "cancel").exists():
-            raise InterruptedError("Encoder execution was cancelled")
-        if time.monotonic() > deadline or allocated > ceiling:
-            raise TimeoutError("Encoder pilot resource ceiling exceeded")
 
     def vector(sample: dict[str, Any], *, gradients: bool) -> Any:
         limit()
@@ -440,7 +460,8 @@ def fit(
         best_score, stale_checks = saved.get("best_score"), saved.get("stale_checks", 0)
         history = saved.get("history", [])
         best_validation = saved.get("selected_validation")
-        counters.update(saved.get("counters", {}))
+        for name, count in saved.get("counters", {}).items():
+            counters[name] = counters.get(name, 0) + count
 
     try:
         rows = request["groups"]["train"]
@@ -592,6 +613,7 @@ def fit(
             "timings": timings,
             "counters": counters,
             "model_loads": int(model is not None),
+            "baseline_cache_probe": baseline_probe,
         }
         artifacts.atomic_json(output / "measurements.json", result)
         save("complete", current_parameters)
