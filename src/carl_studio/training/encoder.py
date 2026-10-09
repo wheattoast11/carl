@@ -466,44 +466,138 @@ async def train(trainer: Any) -> TrainingRun:
         "elapsed_seconds": result.get("elapsed_seconds", 0),
         "peak_memory_bytes": result.get("peak_memory_bytes", 0),
     }
-    Path(config.output_dir, "measurements.json").write_text(json.dumps(result))
+    measurements = Path(config.output_dir, "measurements.json")
+    if not measurements.exists():
+        import os
+        import tempfile
+
+        descriptor, temporary_name = tempfile.mkstemp(dir=config.output_dir, suffix=".json")
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(descriptor, "w") as stream:
+                json.dump(result, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, measurements)
+        finally:
+            temporary.unlink(missing_ok=True)
     return trainer.run
 
 
+def completion_custody(run: TrainingRun) -> dict[str, str]:
+    """Bind completed optimizer artifacts before independent evaluation starts."""
+    from carl_studio.training.preparation import file_hash
+
+    if run.checkpoint is None:
+        raise ValueError("Completed encoder checkpoint unavailable")
+    root = Path(run.checkpoint)
+    state = json.loads((root / "trainer_state.json").read_text())
+    if state.get("status") != "complete":
+        raise ValueError("Evaluation recovery requires completed optimizer custody")
+    return {
+        str((root / name).resolve()): file_hash(root / name)
+        for name in ("encoder_state.pt", "trainer_state.json", "measurements.json")
+    }
+
+
+def finish_evaluation(
+    run: TrainingRun, prepared: TrainingPreparation, owner: Any
+) -> TrainingRun:
+    """Recover evaluation and activation without repeating optimizer effects."""
+    import fcntl
+
+    with (owner.base_dir / prepared.plan_id / "evaluation.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        recorded = owner.load_training_result(prepared.plan_id)
+        if recorded is not None:
+            run = recorded
+        if run.optimizer_phase != "complete" or not run.completion_custody:
+            raise ValueError("Completed optimizer custody is required")
+        validate(prepared)
+        if completion_custody(run) != run.completion_custody:
+            raise ValueError("Completed encoder artifact bytes changed")
+        if run.evaluation_phase == "complete" and run.activation_phase in {
+            "complete", "not_requested"
+        }:
+            return run
+        config = TrainingConfig.model_validate(prepared.config)
+        try:
+            if run.evaluation_phase != "complete":
+                run.evaluation_phase = "pending"
+                owner.save_training_result(prepared.plan_id, run)
+                run.representation_acceptance = evaluate(config, prepared)
+                run.evaluation_phase = "complete"
+                owner.save_training_result(prepared.plan_id, run)
+            if (
+                config.encoder is not None
+                and config.encoder.activate_workspace
+                and run.representation_acceptance is not None
+                and run.representation_acceptance.get("status") == "accepted"
+            ):
+                run.activation_phase = "pending"
+                owner.save_training_result(prepared.plan_id, run)
+                activate(prepared, run)
+                run.activation_phase = "complete"
+            else:
+                run.activation_phase = "not_requested"
+            run.phase = RunPhase.COMPLETE
+            run.error_message = None
+            return run
+        except Exception:
+            if run.evaluation_phase != "complete":
+                run.evaluation_phase = "failed"
+            else:
+                run.activation_phase = "failed"
+            run.phase = RunPhase.FAILED
+            run.error_message = "Prepared encoder evaluation or activation failed"
+            raise ValidationError(run.error_message, code="carl.encoder.evaluation") from None
+        finally:
+            owner.save_training_result(prepared.plan_id, run)
+
+
 async def submit(config: TrainingConfig, prepared: TrainingPreparation, owner: Any) -> TrainingRun:
-    """Reuse ExperimentManager admission, recorded replay, and trainer cancellation."""
+    """Reuse recorded optimizer effects while recovering independent evaluation."""
     from carl_studio.training.preparation import run_in_worker
     from carl_studio.training.trainer import CARLTrainer
 
     await run_in_worker(partial(validate, prepared, config))
     recorded = owner.load_training_result(prepared.plan_id)
     if recorded is not None and not config.resume_from_checkpoint:
+        if recorded.optimizer_phase == "complete" and recorded.completion_custody:
+            return await run_in_worker(partial(finish_evaluation, recorded, prepared, owner))
         return recorded
     owner.claim_training(prepared.plan_id, resume=bool(config.resume_from_checkpoint))
     bound = TrainingConfig.model_validate(prepared.config)
     trainer = CARLTrainer(bound, skip_credits=True)
+    trainer.run.optimizer_phase = "pending"
     owner.start(prepared.plan_id, trainer.run.id)
     started = time.monotonic()
     try:
         result = await trainer.train()
         if result.phase == RunPhase.COMPLETE:
-            await run_in_worker(partial(validate, prepared))
-            result.representation_acceptance = evaluate(bound, prepared)
-            if (
-                result.representation_acceptance["status"] == "accepted"
-                and bound.encoder
-                and bound.encoder.activate_workspace
-            ):
-                activate(prepared, result)
-
+            result.completion_custody = completion_custody(result)
+            result.optimizer_phase = "complete"
+            result.evaluation_phase = "pending"
+            result.activation_phase = "pending"
+            owner.save_training_result(prepared.plan_id, result)
+            return await run_in_worker(partial(finish_evaluation, result, prepared, owner))
+        result.optimizer_phase = "stopped" if result.phase == RunPhase.PAUSED else "failed"
         return result
-    except Exception:  # noqa: BLE001 - sanitize errors from caller-bound evaluators
+    except Exception:
+        if trainer.run.optimizer_phase != "complete":
+            trainer.run.optimizer_phase = "failed"
         trainer.run.phase = RunPhase.FAILED
         trainer.run.error_message = "Prepared encoder training or evaluation failed"
         raise ValidationError(trainer.run.error_message, code="carl.encoder.execution") from None
     finally:
         trainer.run.resource_usage["elapsed_seconds"] = time.monotonic() - started
-        owner.save_training_result(prepared.plan_id, trainer.run)
+        # Recovery reloads its recorded object; preserve its evaluation evidence.
+        final = owner.load_training_result(prepared.plan_id)
+        if final is not None and trainer.run.optimizer_phase == "complete":
+            final.resource_usage.update(trainer.run.resource_usage)
+            owner.save_training_result(prepared.plan_id, final)
+        else:
+            owner.save_training_result(prepared.plan_id, trainer.run)
 
 
 def evaluate(config: TrainingConfig, prepared: TrainingPreparation) -> dict[str, object]:
@@ -519,11 +613,14 @@ def evaluate(config: TrainingConfig, prepared: TrainingPreparation) -> dict[str,
         }
     evidence = json.loads(Path(config.output_dir, "measurements.json").read_text())
     updated = evidence["updated_parameters"]
-    required = (
-        ("ranker.", "relation.", "encoder.")
-        if settings.mode == "adapter"
-        else ("ranker.", "relation.")
-    )
+    required = ["ranker."]
+    if getattr(settings, "head_layout", "shared") == "per_rung":
+        rungs = sorted({int(name.rsplit(":", 1)[1]) for name in settings.required_slices})
+        required = [f"ranker.{dimension}." for dimension in rungs]
+    if getattr(settings, "relation_weight", 1.0) > 0:
+        required.append("relation.")
+    if settings.mode == "adapter":
+        required.append("encoder.")
     if any(not any(name.startswith(prefix) for name in updated) for prefix in required):
         return {
             "status": "rejected",

@@ -5,7 +5,7 @@ Training run state models.
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -59,4 +59,8 @@ class TrainingRun(BaseModel):
     artifacts: list[Artifact] = Field(default_factory=list)
     acceptance: TrainingAcceptance | None = None
     representation_acceptance: dict[str, object] | None = None
+    optimizer_phase: Literal["pending", "complete", "stopped", "failed"] | None = None
+    evaluation_phase: Literal["pending", "complete", "failed"] | None = None
+    activation_phase: Literal["pending", "complete", "failed", "not_requested"] | None = None
+    completion_custody: dict[str, str] = Field(default_factory=dict)
     resource_usage: dict[str, float] = Field(default_factory=dict)
