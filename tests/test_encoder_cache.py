@@ -18,6 +18,7 @@ def test_gpu_cache_enforces_both_memory_spaces(tmp_path, monkeypatch, exceeded):
     import resource
 
     req = request(tmp_path)
+    req["model"] = "fixture"
     req["cache_binding"] = {"execution": {"device": "cuda:0", "dtype": "float32"}}
     loaded = False
 
