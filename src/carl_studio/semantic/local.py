@@ -8,7 +8,7 @@ import mimetypes
 import os
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import unquote, urlparse
 
 from carl_core.hashing import content_hash
@@ -182,7 +182,15 @@ def bind_local(
                 },
             )
             if response.get("head_weights") is not None:
-                session.semantic.head_weights = tuple(response["head_weights"])
+                heads = response["head_weights"]
+                session.semantic.head_weights = (
+                    {
+                        int(d): tuple(weights)
+                        for d, weights in cast(dict[str, list[float]], heads).items()
+                    }
+                    if isinstance(heads, dict)
+                    else tuple(heads)
+                )
             return Carrier(values=tuple(response["values"]))
         finally:
             for path in temporary_sources:

@@ -32,3 +32,11 @@ class EncoderSettings(Contract):
     action_evaluator: str | None = None
     required_slices: tuple[str, ...] = ("text:128", "text:256", "text:512", "text:768")
     required_policies: tuple[str, ...] = ()
+    embedding_cache: str | None = None
+    head_layout: Literal["shared", "per_rung"] = "shared"
+    relation_weight: float = Field(default=1, ge=0, allow_inf_nan=False)
+    balanced_sampling: bool = True
+    validation_every_steps: int = Field(default=16, ge=1)
+    early_stop_patience: int = Field(default=3, ge=1)
+    checkpoint_every_steps: int = Field(default=16, ge=1)
+    encode_batch_size: int = Field(default=4, ge=1, le=4)

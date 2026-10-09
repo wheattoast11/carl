@@ -25,6 +25,7 @@ class EncoderExample(Contract):
     negatives: tuple[SemanticInput, ...] = Field(min_length=1)
     relation: Literal["supports", "contradicts", "corresponds", "corrects"]
     action_label: str = Field(min_length=1)
+    task_family: str = Field(default="general", min_length=1)
     source_artifacts: dict[str, DataRef] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -127,8 +128,10 @@ def representation_acceptance(
         return {"status": "inconclusive", "reasons": ["missing policy measurements"]}
     if candidate.dimensions != 768 or not candidate.finite:
         reasons.append("numerical admission failed")
-    if candidate.variance <= 1e-12 or candidate.positive_negative_margin <= 0:
-        reasons.append("collapsed or nondiscriminating representations")
+    if candidate.variance <= 1e-12:
+        reasons.append("collapsed representations")
+    if candidate.positive_negative_margin <= 0:
+        reasons.append("insufficient positive-negative discrimination")
     if not candidate.updated_parameters:
         reasons.append("unchanged candidate")
     if (

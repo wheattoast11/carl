@@ -62,6 +62,64 @@ def groups(config: TrainingConfig) -> dict[str, list[EncoderExample]]:
     return result
 
 
+def carrier_binding(config: TrainingConfig) -> dict[str, Any]:
+    """Bind reusable embeddings independently of the ranking-head recipe."""
+    if config.encoder is None or config.encoder.execution is None:
+        raise ValueError("Prepared encoder execution required")
+    return {
+        "model": source_identity(Path(config.base_model))[0],
+        "execution": config.encoder.execution.model_dump(mode="json"),
+        "processed_tokens": config.encoder.processed_tokens,
+        "encoding_batch_size": config.encoder.encode_batch_size,
+    }
+
+
+def cache_embeddings(
+    config: TrainingConfig, prepared: TrainingPreparation, manifest: Path
+) -> dict[str, Any]:
+    """Materialize reusable carriers through the prepared worker and artifact owners."""
+    from carl_studio.settings import carl_home
+
+    validate(prepared, config)
+    bound = TrainingConfig.model_validate(prepared.config)
+    settings = bound.encoder
+    if settings is None or settings.mode != "frozen_heads":
+        raise ValueError("Carrier materialization requires frozen encoder settings")
+    rows = {
+        name: [row.model_dump(mode="json") for row in items]
+        for name, items in groups(bound).items()
+    }
+    if any(
+        part["modality"] not in {"text", "structured"}
+        for items in rows.values()
+        for row in items
+        for sample in (row["query"], row["positive"], *row["negatives"])
+        for part in sample["parts"]
+    ):
+        raise ValueError("Cached carrier preparation currently requires text or structured inputs")
+    with Session() as session:
+        result = invoke(
+            session,
+            Path(settings.interpreter),
+            "cache",
+            {
+                "model": bound.base_model,
+                "groups": rows,
+                "settings": settings.model_dump(mode="json"),
+                "cache_binding": carrier_binding(bound),
+                "manifest": str(manifest.resolve()),
+                "artifact_dir": str(carl_home() / "artifacts" / "semantic"),
+            },
+            timeout=settings.runtime_s,
+        )
+        validate(prepared)
+        reference = session.data_vault.open_file(manifest, content_type="application/json")
+        reference = reference.model_copy(update={"sha256": result["sha256"]})
+        session.data_vault.restore_file(reference)
+        result["artifact"] = reference.describe()
+    return result
+
+
 def prepare(
     config: TrainingConfig,
     root: Path,
@@ -213,6 +271,31 @@ def prepare(
         config.encoder = settings.model_copy(update={"execution": execution})
     except (ValueError, OSError, RuntimeError, CARLError):
         issue("encoder_environment", "Isolated interpreter or model qualification failed")
+    if config.encoder and config.encoder.embedding_cache:
+        from carl_encoders.artifacts import inputs, load_carriers
+
+        try:
+            if config.encoder.mode != "frozen_heads":
+                raise ValueError("Adapter learning requires differentiable fresh features")
+            manifest = Path(config.encoder.embedding_cache).resolve()
+            config.encoder = config.encoder.model_copy(update={"embedding_cache": str(manifest)})
+            request = {
+                "settings": config.encoder.model_dump(mode="json"),
+                "groups": {
+                    name: [row.model_dump(mode="json") for row in rows]
+                    for name, rows in groups(config).items()
+                },
+            }
+            _, document = load_carriers(manifest, carrier_binding(config), set(inputs(request)))
+            sources.append(
+                SourceBinding(kind="artifact", path=str(manifest), sha256=file_hash(manifest))
+            )
+            for entry in document["entries"].values():
+                sources.append(
+                    SourceBinding(kind="artifact", path=entry["path"], sha256=entry["sha256"])
+                )
+        except (ValueError, OSError, KeyError, TypeError):
+            issue("encoder_cache", "Bound raw carrier artifacts are unavailable or changed")
     if settings.action_evaluator:
         from carl_studio.training.preparation import callable_sources
 
@@ -425,6 +508,9 @@ async def train(trainer: Any) -> TrainingRun:
         "groups": wire_groups,
         "output": str(config.output_dir),
         "learning_rate": config.learning_rate,
+        "optimizer": config.model_dump(
+            include={"weight_decay", "warmup_ratio", "lr_scheduler_type", "max_grad_norm"}
+        ),
         "binding": content_hash(
             {
                 "model": source_identity(Path(config.base_model)),
@@ -434,10 +520,15 @@ async def train(trainer: Any) -> TrainingRun:
                 },
                 "settings": config.encoder.model_dump(mode="json"),
                 "learning_rate": config.learning_rate,
+                "optimizer": config.model_dump(
+                    include={"weight_decay", "warmup_ratio", "lr_scheduler_type", "max_grad_norm"}
+                ),
             }
         ),
         "resume": config.resume_from_checkpoint,
     }
+    if config.encoder.embedding_cache:
+        request["cache_binding"] = carrier_binding(config)
     trainer.run.checkpoint = str(config.output_dir)
     trainer.run.phase = RunPhase.TRAINING
     with Session(chain=trainer.chain) if trainer.chain is not None else Session() as session:
@@ -461,11 +552,19 @@ async def train(trainer: Any) -> TrainingRun:
         )
     trainer.run.checkpoint = result["checkpoint"]
     trainer.run.current_step = result["steps"]
+    trainer.run.total_steps = config.encoder.optimizer_steps
     trainer.run.phase = RunPhase.COMPLETE if result["status"] == "complete" else RunPhase.PAUSED
     trainer.run.resource_usage = {
         "elapsed_seconds": result.get("elapsed_seconds", 0),
         "peak_memory_bytes": result.get("peak_memory_bytes", 0),
     }
+    for name in ("counters", "timings"):
+        trainer.run.resource_usage.update(
+            {key: float(value) for key, value in result.get(name, {}).items()}
+        )
+    trainer.run.resource_usage["model_loads"] = float(result.get("model_loads", 1))
+    if result.get("history"):
+        trainer.run.loss = result["history"][-1]["loss"]
     measurements = Path(config.output_dir, "measurements.json")
     if not measurements.exists():
         import os
@@ -500,9 +599,7 @@ def completion_custody(run: TrainingRun) -> dict[str, str]:
     }
 
 
-def finish_evaluation(
-    run: TrainingRun, prepared: TrainingPreparation, owner: Any
-) -> TrainingRun:
+def finish_evaluation(run: TrainingRun, prepared: TrainingPreparation, owner: Any) -> TrainingRun:
     """Recover evaluation and activation without repeating optimizer effects."""
     import fcntl
 
@@ -517,7 +614,8 @@ def finish_evaluation(
         if completion_custody(run) != run.completion_custody:
             raise ValueError("Completed encoder artifact bytes changed")
         if run.evaluation_phase == "complete" and run.activation_phase in {
-            "complete", "not_requested"
+            "complete",
+            "not_requested",
         }:
             return run
         config = TrainingConfig.model_validate(prepared.config)
@@ -526,6 +624,9 @@ def finish_evaluation(
                 run.evaluation_phase = "pending"
                 owner.save_training_result(prepared.plan_id, run)
                 run.representation_acceptance = evaluate(config, prepared)
+                validate(prepared)
+                if completion_custody(run) != run.completion_custody:
+                    raise ValueError("Completed encoder artifacts changed during evaluation")
                 run.evaluation_phase = "complete"
                 owner.save_training_result(prepared.plan_id, run)
             if (
@@ -543,7 +644,7 @@ def finish_evaluation(
             run.phase = RunPhase.COMPLETE
             run.error_message = None
             return run
-        except Exception:
+        except Exception:  # noqa: BLE001 - persist custody and sanitize evaluator errors
             if run.evaluation_phase != "complete":
                 run.evaluation_phase = "failed"
             else:
@@ -583,17 +684,18 @@ async def submit(config: TrainingConfig, prepared: TrainingPreparation, owner: A
             return await run_in_worker(partial(finish_evaluation, result, prepared, owner))
         result.optimizer_phase = "stopped" if result.phase == RunPhase.PAUSED else "failed"
         return result
-    except Exception:
-        if trainer.run.optimizer_phase != "complete":
-            trainer.run.optimizer_phase = "failed"
-        trainer.run.phase = RunPhase.FAILED
-        trainer.run.error_message = "Prepared encoder training or evaluation failed"
-        raise ValidationError(trainer.run.error_message, code="carl.encoder.execution") from None
+    except Exception:  # noqa: BLE001 - persist execution custody before propagating failure
+        failed = trainer.run
+        if failed.optimizer_phase != "complete":
+            failed.optimizer_phase = "failed"
+        failed.phase = RunPhase.FAILED
+        failed.error_message = "Prepared encoder training or evaluation failed"
+        raise ValidationError(failed.error_message, code="carl.encoder.execution") from None
     finally:
         trainer.run.resource_usage["elapsed_seconds"] = time.monotonic() - started
         # Recovery reloads its recorded object; preserve its evaluation evidence.
         final = owner.load_training_result(prepared.plan_id)
-        if final is not None and trainer.run.optimizer_phase == "complete":
+        if final is not None and final.optimizer_phase == "complete":
             final.resource_usage.update(trainer.run.resource_usage)
             owner.save_training_result(prepared.plan_id, final)
         else:

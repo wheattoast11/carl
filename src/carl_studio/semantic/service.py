@@ -31,7 +31,7 @@ class SemanticService:
         self.binding: EncoderBinding | None = None
         self.execution: ExecutionBinding | None = None
         self.encoder: Callable[[SemanticInput], Carrier] | None = None
-        self.head_weights: tuple[float, ...] | None = None
+        self.head_weights: tuple[float, ...] | dict[int, tuple[float, ...]] | None = None
         self.validate_binding: Callable[[], None] | None = None
         self.generation: str | None = None
         self._cache: dict[str, tuple[Carrier, dict[str, Any]]] = {}
@@ -278,12 +278,17 @@ class SemanticService:
         """Keep learned candidate ranking separate from cosine similarity."""
         if self.head_weights is None:
             return query.score(candidate, dimension)
+        weights = (
+            self.head_weights[dimension]
+            if isinstance(self.head_weights, dict)
+            else self.head_weights[:dimension]
+        )
         return sum(
             a * b * weight
             for a, b, weight in zip(
                 query.scoring(dimension),
                 candidate.scoring(dimension),
-                self.head_weights[:dimension],
+                weights,
             )
         )
 
