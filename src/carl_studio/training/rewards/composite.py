@@ -335,6 +335,23 @@ class PhaseAdaptiveCARLReward(CARLReward):
 # ---------------------------------------------------------------------------
 
 
+def coherence_goal_penalty(trace: Any, goal: Any | None) -> float:
+    if goal is None:
+        return 0.0
+    phi = float(trace.phi_mean)
+    discontinuity = float(trace.discontinuity_score)
+    if not math.isfinite(phi) or not math.isfinite(discontinuity):
+        raise ValueError("Nonfinite goal coherence measurement")
+    floor = float(goal.coherence_phi_floor)
+    lower = float(goal.discontinuity_min)
+    upper = float(goal.discontinuity_max)
+    if not 0 <= floor <= 1 or not 0 <= lower <= upper <= 1:
+        raise ValueError("Invalid goal coherence bounds")
+    phi_shortfall = max(0.0, floor - phi) / max(floor, 1e-12)
+    distance = max(0.0, lower - discontinuity, discontinuity - upper)
+    return min(1.0, phi_shortfall) + min(1.0, distance / max(upper - lower, 1e-12))
+
+
 def make_carl_reward(
     model: Any,
     tokenizer: Any,
@@ -342,6 +359,7 @@ def make_carl_reward(
     active_after_step: int = 0,
     max_length: int = 512,
     reward_class: str = "static",
+    goal: Any | None = None,
 ) -> Any:
     """Factory returning a TRL-compatible CARL reward function.
 
@@ -470,6 +488,10 @@ def make_carl_reward(
                 batch_traces.append(trace)
 
                 score, components = carl.score_from_trace(trace)
+                penalty = coherence_goal_penalty(trace, goal)
+                score -= penalty
+                if goal is not None:
+                    components["goal_coherence_penalty"] = penalty
                 # WS-T3: final hard clamp before the optimizer sees the value.
                 # score_from_trace already clamps, but we re-apply here so any
                 # future refactor downstream of `score` still lands safe.

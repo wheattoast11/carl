@@ -33,6 +33,126 @@ from carl_studio.training.rewards.multiscale import clamp_counts, reset_clamp_co
 logger = logging.getLogger(__name__)
 
 
+class ParameterUpdateCallback(TrainerCallback):
+    """Retain initial and final trainable LoRA tensor digests."""
+
+    def __init__(self, run: Any) -> None:
+        self.run = run
+        self._before: dict[str, dict[str, Any]] | None = None
+        self._start_step = 0
+
+    @staticmethod
+    def _snapshot(model: Any) -> dict[str, dict[str, Any]]:
+        import torch
+        from carl_core.hashing import content_hash_bytes
+
+        values: dict[str, dict[str, Any]] = {}
+        for name, parameter in model.named_parameters():
+            if not parameter.requires_grad:
+                continue
+            if not any(part.startswith("lora_") for part in name.split(".")) and (
+                ".modules_to_save." not in name
+            ):
+                continue
+            if not bool(torch.isfinite(parameter).all()):
+                raise ValueError("Nonfinite trainable parameter")
+            if parameter.numel() == 0:
+                raise ValueError("Empty trainable parameter")
+            raw = (
+                parameter.detach()
+                .contiguous()
+                .reshape(-1)
+                .view(torch.uint8)
+                .cpu()
+                .numpy()
+                .tobytes()
+            )
+            values[name] = {
+                "dtype": str(parameter.dtype),
+                "shape": list(parameter.shape),
+                "elements": int(parameter.numel()),
+                "sha256": content_hash_bytes(raw),
+            }
+        if not values:
+            raise ValueError("Training has no trainable parameters")
+        return values
+
+    def on_train_begin(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
+        if state.is_world_process_zero:
+            self._before = self._snapshot(kwargs["model"])
+            self._start_step = int(state.global_step)
+
+    def on_train_end(self, args: Any, state: Any, control: Any, **kwargs: Any) -> None:
+        if not state.is_world_process_zero:
+            return
+        if self._before is None:
+            raise ValueError("Initial parameter-update witness unavailable")
+        after = self._snapshot(kwargs["model"])
+        if set(after) != set(self._before) or any(
+            (after[name]["dtype"], after[name]["shape"]) != (before["dtype"], before["shape"])
+            for name, before in self._before.items()
+        ):
+            raise ValueError("Trainable parameter identities changed during training")
+        changed = sorted(
+            name for name in after if after[name]["sha256"] != self._before[name]["sha256"]
+        )
+        modules = sorted({name.rpartition(".")[0] or name for name in changed})
+        import os
+        import tempfile
+        from pathlib import Path
+
+        from carl_core.hashing import canonical_json, content_hash, content_hash_bytes
+
+        from carl_studio.experiment.types import Artifact
+
+        evidence = {
+            "schema": "carl.parameter-updates/v1",
+            "comparison": "retained_trainable_lora_parameters",
+            "run_id": self.run.id,
+            "start_step": self._start_step,
+            "end_step": int(state.global_step),
+            "before": self._before,
+            "after": after,
+            "before_sha256": content_hash(self._before),
+            "after_sha256": content_hash(after),
+            "changed_parameters": changed,
+            "changed_modules": modules,
+        }
+        payload = (canonical_json(evidence) + "\n").encode()
+        checksum = content_hash_bytes(payload)
+        directory = Path(args.output_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"parameter-updates-{checksum}.json"
+        if path.exists() and path.read_bytes() != payload:
+            raise ValueError("Parameter-update artifact bytes changed")
+        descriptor, name = tempfile.mkstemp(prefix=".parameter-updates-", dir=directory)
+        temporary = Path(name)
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.replace(path)
+        finally:
+            temporary.unlink(missing_ok=True)
+        self.run.resource_usage.update(
+            {
+                "trainable_parameter_tensors": float(len(after)),
+                "updated_parameter_tensors": float(len(changed)),
+                "updated_parameter_modules": float(len(modules)),
+            }
+        )
+        self.run.artifacts.append(
+            Artifact(
+                name="parameter_updates",
+                path=str(path.resolve()),
+                artifact_type="report",
+                produced_at=self.run.id,
+                checksum=checksum,
+            )
+        )
+
+
 def _safe_mean(values: Iterable[float], default: float = 0.0) -> float:
     """Mean that never divides by zero.
 

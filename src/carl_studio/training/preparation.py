@@ -91,6 +91,8 @@ def implementation_sources() -> tuple[Path, ...]:
             library / "preparation.py",
             library / "pipeline.py",
             library / "trainer.py",
+            library / "callbacks.py",
+            library / "rewards" / "composite.py",
             library / "acceptance.py",
             library.parent / "eval" / "runner.py",
         )
