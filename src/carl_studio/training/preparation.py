@@ -8,10 +8,13 @@ import importlib
 import importlib.util
 import json
 import math
+import os
 import re
 import sys
+import tempfile
 import types
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import RLock
 from typing import Any, Literal, cast
@@ -157,6 +160,41 @@ def file_hash(path: Path) -> str:
         for chunk in iter(lambda: source.read(4 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def checkpoint_hash(path: Path, cache_dir: Path) -> str:
+    """Reuse byte digests only while file identity and change timestamps match."""
+    resolved = path.resolve()
+    stat = resolved.stat()
+    identity = [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns]
+    entry = cache_dir / (content_hash(str(resolved)) + ".json")
+    try:
+        cached = json.loads(entry.read_text())
+        value = cached.get("sha256", "")
+        if cached.get("identity") == identity and re.fullmatch(r"[0-9a-f]{64}", value):
+            return value
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    value = file_hash(resolved)
+    after = resolved.stat()
+    if identity != [
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ]:
+        raise ValidationError("Checkpoint changed during binding", code="carl.preparation.stale")
+    cache_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd, name = tempfile.mkstemp(dir=cache_dir, prefix=".hash-")
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump({"identity": identity, "sha256": value}, stream)
+        os.replace(temporary, entry)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return value
 
 
 def default_manager() -> ExperimentManager:
@@ -403,6 +441,7 @@ def prepare_training(
     config: TrainingConfig,
     *,
     project_root: Path | None = None,
+    config_path: Path | None = None,
     manager: ExperimentManager | None = None,
     persist: bool = True,
 ) -> TrainingPreparation:
@@ -421,6 +460,11 @@ def prepare_training(
     config = config.model_copy(deep=True, update={"goal": goal, "push_to_hub": False})
     issues: list[ReadinessIssue] = []
     sources: list[SourceBinding] = []
+    if config_path is not None:
+        config_path = config_path.resolve()
+        sources.append(
+            SourceBinding(kind="config", path=str(config_path), sha256=file_hash(config_path))
+        )
     populations: dict[str, list[UnifiedSample]] = {}
 
     def issue(code: str, message: str, action: str) -> None:
@@ -539,8 +583,18 @@ def prepare_training(
             )
         else:
             config.sft_adapter = str(adapter.resolve())
-    for path in model_sources(config, root):
-        sources.append(SourceBinding(kind="model", path=str(path), sha256=file_hash(path)))
+    cache_dir = (manager or default_manager()).base_dir / "source-hashes"
+
+    def bind_model_source(path: Path) -> SourceBinding:
+        digest = (
+            checkpoint_hash(path, cache_dir)
+            if persist and path.suffix in {".safetensors", ".bin"}
+            else file_hash(path)
+        )
+        return SourceBinding(kind="model", path=str(path), sha256=digest)
+
+    with ThreadPoolExecutor(max_workers=4, thread_name_prefix="carl-source") as workers:
+        sources.extend(workers.map(bind_model_source, model_sources(config, root)))
     normalized_adapters: list[str] = []
     for value in config.starting_adapters:
         adapter = Path(value)
@@ -588,7 +642,11 @@ def prepare_training(
         ("eval_data", config.eval_dataset_repo or ""),
     ):
         path = Path(name)
-        path = path if path.is_absolute() else root / path
+        if not path.is_absolute():
+            candidates = ([config_path.resolve().parent / path] if config_path else []) + [
+                root / path
+            ]
+            path = next((candidate for candidate in candidates if candidate.is_file()), root / path)
         if not name or not path.is_file():
             issue(
                 kind,
@@ -779,7 +837,16 @@ def validate_preparation(
             value = getattr(candidate, field)
             if value:
                 path = Path(value)
-                resolved = path if path.is_absolute() else Path(preparation.project_root) / path
+                resolved = path if path.is_absolute() else root / path
+                if field in {"dataset_repo", "eval_dataset_repo"} and not path.is_absolute():
+                    configs = [
+                        Path(source.path).parent / path
+                        for source in preparation.sources
+                        if source.kind == "config"
+                    ]
+                    resolved = next(
+                        (item for item in [*configs, root / path] if item.is_file()), resolved
+                    )
                 if resolved.exists():
                     setattr(candidate, field, str(resolved.resolve()))
         candidate.starting_adapters = [

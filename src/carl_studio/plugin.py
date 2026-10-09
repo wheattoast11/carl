@@ -60,11 +60,26 @@ def _atomic_write(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def project(root: Path, output: Path, *, python: str = sys.executable) -> dict[str, Any]:
+def project(
+    root: Path,
+    output: Path,
+    *,
+    python: str = sys.executable,
+    owned_files: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Generate a small native marketplace from the portable source."""
     for path in [output, *output.rglob("*")]:
         if path.is_symlink():
             raise CARLError("Projection target is a symlink", code="carl.plugin.ownership")
+    previous_path = output / "projection.json"
+    previous: dict[str, Any] = (
+        json.loads(previous_path.read_text()) if previous_path.is_file() else {}
+    )
+    previous_files: dict[str, str] = previous.get("owned_files", owned_files or {})
+    for name, expected in previous_files.items():
+        target = output / name
+        if not target.resolve().is_relative_to(output.resolve()) or _identity(target) != expected:
+            raise CARLError("Edited projection entry", code="carl.plugin.ownership")
     digest = source_digest(root)
     manifest = json.loads((root / "plugin.json").read_text())
     snapshot = output / "plugins/carl"
@@ -104,7 +119,24 @@ def project(root: Path, output: Path, *, python: str = sys.executable) -> dict[s
     }
     _write_json(output / ".claude-plugin/marketplace.json", marketplace)
     _write_json(output / ".agents/plugins/marketplace.json", marketplace)
+    desired = {
+        "plugins/carl/plugin.json",
+        "plugins/carl/mcp.json",
+        "plugins/carl/.mcp.json",
+        "plugins/carl/.claude-plugin/plugin.json",
+        "plugins/carl/.codex-plugin/plugin.json",
+        ".claude-plugin/marketplace.json",
+        ".agents/plugins/marketplace.json",
+    }
+    desired.update(
+        "plugins/carl/skills/carl/" + str(path.relative_to(root / "skills/carl"))
+        for path in (root / "skills/carl").rglob("*")
+        if path.is_file()
+    )
+    for name in previous_files.keys() - desired:
+        (output / name).unlink()
     record = {
+        "owned_files": {name: _identity(output / name) for name in sorted(desired)},
         "schema_version": 1,
         "source": str(root),
         "source_digest": digest,
@@ -201,7 +233,28 @@ class PluginInstaller:
                         raise CARLError(
                             "Foreign or edited carl entry", code="carl.plugin.ownership"
                         )
-        projection = project(self.root, self.state / "marketplace", python=self.python)
+        desired_targets = {
+            str(destination / path.relative_to(skill))
+            for destination in destinations
+            for path in skill.rglob("*")
+            if path.is_file()
+        }
+        retired = set(record["files"]) - desired_targets
+        for name in retired:
+            target = Path(name)
+            self._owned_target(target)
+            if _identity(target) != record["files"][name]:
+                raise CARLError("Edited retired carl entry", code="carl.plugin.ownership")
+        marketplace = self.state / "marketplace"
+        legacy_files = {
+            str(Path(name).relative_to(marketplace)): expected
+            for name, expected in record.get("projection_files", {}).items()
+            if Path(name) != marketplace / "projection.json"
+        }
+        projection = project(self.root, marketplace, python=self.python, owned_files=legacy_files)
+        for name in retired:
+            Path(name).unlink()
+            del record["files"][name]
         for destination in destinations:
             for path in skill.rglob("*"):
                 if path.is_file():

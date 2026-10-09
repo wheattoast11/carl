@@ -140,3 +140,43 @@ def test_projected_reference_symlink_refuses_update(tmp_path: Path) -> None:
     with pytest.raises(CARLError):
         installer.install(["codex"], native=False)
     assert victim.read_text() == "unchanged"
+
+
+@pytest.mark.parametrize("edited", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_update_removes_retired_references_and_preserves_edits(tmp_path, edited, legacy):
+    import shutil
+
+    root = tmp_path / "source"
+    root.mkdir()
+    for name in ("plugin.json", "mcp.json", "pyproject.toml", "uv.lock"):
+        shutil.copyfile(ROOT / name, root / name)
+    shutil.copytree(ROOT / "skills", root / "skills")
+    home = tmp_path / "home"
+    installer = PluginInstaller(root, home=home)
+    installer.install(["codex"], native=False)
+    alias = home / ".agents/skills/carl/references/workflows.md"
+    snapshot = installer.state / "marketplace/plugins/carl/skills/carl/references/workflows.md"
+    if legacy:
+        import hashlib
+
+        projection = installer.state / "marketplace/projection.json"
+        data = json.loads(projection.read_text())
+        del data["owned_files"]
+        projection.write_text(json.dumps(data))
+        record = json.loads(installer.marker.read_text())
+        record["projection_files"][str(projection)] = hashlib.sha256(
+            projection.read_bytes()
+        ).hexdigest()
+        installer.marker.write_text(json.dumps(record))
+    (root / "skills/carl/references/workflows.md").unlink()
+    if edited:
+        alias.write_text("operator edit")
+        with pytest.raises(CARLError, match="Edited retired"):
+            installer.install(["codex"], native=False)
+        assert alias.read_text() == "operator edit"
+        assert snapshot.is_file()
+    else:
+        assert installer.install(["codex"], native=False)["healthy"]
+        assert not alias.exists()
+        assert not snapshot.exists()

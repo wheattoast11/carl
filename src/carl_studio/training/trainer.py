@@ -1242,7 +1242,7 @@ class CARLTrainer:
     # ------------------------------------------------------------------
 
     def _build_rewards(self, model: Any, tokenizer: Any) -> list[Any]:
-        """Build 6 reward functions: 5 task + 1 CARL, all cascade-wrapped.
+        """Build cascade rewards plus an unmasked terminal privacy reward.
 
         Two-stage cascade (matches CascadeRewardManager API):
           Stage A: task rewards only (before carl_start)
@@ -1255,6 +1255,7 @@ class CARLTrainer:
           R4: neuralese_v2_reward       (w=0.5, stages A/B)
           R5: conciseness_reward        (w=0.5, stages A/B)
           R6: carl_composite_reward     (w=1.5, stage B only)
+          R7: terminal privacy penalty  (unweighted, outside cascade masks)
         """
         from carl_studio.training.cascade import CascadeRewardManager
         from carl_studio.training.rewards.composite import make_carl_reward
@@ -1305,11 +1306,14 @@ class CARLTrainer:
                 )
             ] + [(carl_fn, {"B"}, 1.5)]
 
+        from carl_studio.training.rewards.privacy import privacy_rewards, suppress_private_rewards
+
         wrapped: list[Any] = []
         for fn, stages, weight in reward_specs:
             cascade_fn = cascade.wrap_reward(fn, active_in_stages=stages)
             weighted_fn = _apply_weight(cascade_fn, weight)
-            wrapped.append(weighted_fn)
+            wrapped.append(suppress_private_rewards(weighted_fn))
+        wrapped.append(privacy_rewards)
 
         return wrapped
 

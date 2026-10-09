@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.21.1] - 2026-10-08
+
+- Authenticate private HF Jobs script fetches and keep submission tokens out of CARL logs and error messages.
+- Remove all environment/secret key collisions before job submission.
+- Accept legacy project `backend` fields as `adapter` while preserving explicit current fields.
+- Resolve preparation datasets beside the config before the project root and bind that config for replay.
+- Hash checkpoint files with bounded concurrency and cache SHA-256 digests by file identity and change timestamps. Execution still validates full source bytes.
+- Apply terminal privacy penalties outside cascade masks and reward weights; reject public trajectories exposing private draft identifiers.
+- Remove retired installer-owned skill references during plugin updates and preserve edited files.
+
+
 ## [0.21.0] - 2026-10-08
 
 - CARL now installs as the `carl` plugin and skill for Codex, Claude Code, OpenCode, and portable MCP clients.

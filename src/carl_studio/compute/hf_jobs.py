@@ -22,6 +22,7 @@ import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+from urllib.parse import quote, urlencode
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +202,8 @@ class HFJobsBackend:
         from huggingface_hub import HfApi
 
         token = self._get_token()
+        if not token:
+            raise PermissionError("HF token required for HF Jobs backend")
         api = HfApi(token=token)
 
         # Resolve flavor and timeout
@@ -235,25 +238,24 @@ class HFJobsBackend:
                 commit_message=f"carl-studio: upload training script {script_hash}",
             )
         except Exception as exc:
-            raise RuntimeError(
-                f"Failed to upload script to {upload_repo}: {exc}"
-            ) from exc
+            raise RuntimeError(f"Failed to upload script to {upload_repo}: {exc}") from exc
 
         # Build the hosted URL for the script
         script_url = (
-            f"https://huggingface.co/datasets/{upload_repo}/"
-            f"resolve/{_SCRIPT_BRANCH}/{script_filename}"
+            f"https://huggingface.co/datasets/{upload_repo}/raw/"
+            f"{_SCRIPT_BRANCH}/{script_filename}?{urlencode({'token': token})}"
         )
-        logger.info("HF Jobs: script URL = %s", script_url)
-
-        # Build secrets dict
-        secrets = self._build_secrets(kwargs.get("secrets"))
+        logger.info("HF Jobs: script uploaded to %s/%s", upload_repo, script_filename)
 
         # Build env dict
-        env: dict[str, str] = {"PYTHONUNBUFFERED": "1"}
+        env: dict[str, str] = {"PYTHONUNBUFFERED": "1", "HF_TOKEN": token}
         extra_env = kwargs.get("env")
         if isinstance(extra_env, dict):
             env.update({str(k): str(v) for k, v in extra_env.items()})
+
+        # Build secrets dict
+        secrets = self._build_secrets(kwargs.get("secrets"))
+        secrets = {key: value for key, value in secrets.items() if key not in env}
 
         # Build labels
         labels: dict[str, str] = {
@@ -276,10 +278,11 @@ class HFJobsBackend:
                 namespace=self._namespace,
                 token=token,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - SDK failures can contain token-bearing URLs
             raise RuntimeError(
-                f"Failed to submit HF Job (flavor={flavor}): {exc}"
-            ) from exc
+                f"Failed to submit HF Job (flavor={flavor}): "
+                + str(exc).replace(token, "[REDACTED]").replace(quote(token, safe=""), "[REDACTED]")
+            ) from None
 
         job_id = job.id
         self._active_jobs[job_id] = script_hash

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 
@@ -42,6 +42,7 @@ class CARLProject(BaseModel):
     # Training framework (which adapter to route through)
     adapter: str = Field(
         default="trl",
+        validation_alias=AliasChoices("adapter", "backend"),
         description=(
             "Training framework adapter: trl, unsloth, axolotl, tinker, atropos, slime. "
             "This is the name registered in carl_studio.adapters — NOT a compute substrate."
@@ -95,8 +96,8 @@ def load_project(path: Path | str = "carl.yaml") -> CARLProject:
     if not p.exists():
         raise FileNotFoundError(f"Project file not found: {p}")
     with open(p) as f:
-        raw = yaml.safe_load(f) or {}
-    return CARLProject(**raw)
+        raw: dict[str, Any] = yaml.safe_load(f) or {}
+    return CARLProject.model_validate(raw)
 
 
 def save_project(project: CARLProject, path: Path | str = "carl.yaml") -> None:

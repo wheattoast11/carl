@@ -775,3 +775,62 @@ def test_coherence_failure_after_twentieth_sample_is_not_hidden(monkeypatch):
     runner = EvalRunner(EvalConfig(checkpoint="fixture"))
     assert runner._compute_coherence(Model(), tokenize, ["answer"] * 21) is None
     assert len(calls) == 21
+
+
+@pytest.mark.parametrize("location", ["config", "root"])
+def test_dataset_resolution_from_nested_config(inputs, tmp_path, location, monkeypatch):
+    config, owner = inputs
+    folder = tmp_path / "configs"
+    folder.mkdir()
+    config_path = folder / "nested.yaml"
+    config_path.write_text("{}")
+    if location == "config":
+        for name in ("train", "eval"):
+            (folder / f"{name}.jsonl").write_bytes((tmp_path / f"{name}.jsonl").read_bytes())
+    config.dataset_repo = "train.jsonl"
+    config.eval_dataset_repo = "eval.jsonl"
+    for cwd in (tmp_path, folder):
+        monkeypatch.chdir(cwd)
+        prepared = prepare_training(
+            config, project_root=tmp_path, config_path=config_path, manager=owner
+        )
+        assert prepared.ready
+        expected = folder if location == "config" else tmp_path
+        assert prepared.config["dataset_repo"] == str(expected / "train.jsonl")
+        validate_preparation(prepared, config)
+
+
+def test_checkpoint_hash_cache_reuses_bytes_and_detects_same_size_change(tmp_path, monkeypatch):
+    from carl_studio.training import preparation
+
+    shard = tmp_path / "model.safetensors"
+    shard.write_bytes(b"first")
+    cache = tmp_path / "cache"
+    original = preparation.file_hash
+    calls = []
+
+    def counted(path):
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(preparation, "file_hash", counted)
+    first = preparation.checkpoint_hash(shard, cache)
+    assert preparation.checkpoint_hash(shard, cache) == first
+    assert len(calls) == 1
+    before = shard.stat()
+    shard.write_bytes(b"other")
+    import os
+
+    os.utime(shard, ns=(before.st_atime_ns, before.st_mtime_ns))
+    assert preparation.checkpoint_hash(shard, cache) != first
+    assert len(calls) == 2
+
+
+def test_model_index_cannot_hide_shard_mutation(inputs, tmp_path):
+    config, owner = inputs
+    model = Path(config.base_model)
+    (model / "model.safetensors.index.json").write_text('{"weight_map":{}}')
+    prepared = prepare_training(config, project_root=tmp_path, manager=owner)
+    (model / "model.safetensors").write_bytes(b"changed-fixture")
+    with pytest.raises(ValidationError, match="source changed"):
+        validate_preparation(prepared)

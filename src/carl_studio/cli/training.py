@@ -700,7 +700,9 @@ def train(
         )
 
         prepared = prepare_training(
-            training_config, project_root=project_root_for_config(config_path)
+            training_config,
+            project_root=project_root_for_config(config_path),
+            config_path=config_path,
         )
         if json_output:
             result = prepared.model_dump(mode="json")
@@ -737,7 +739,10 @@ def train(
                 load_preparation(prepared_plan_id)
                 if prepared_plan_id is not None
                 else prepare_training(
-                    training_config, project_root=project_root_for_config(config_path), persist=False
+                    training_config,
+                    project_root=project_root_for_config(config_path),
+                    config_path=config_path,
+                    persist=False,
                 )
             )
             if prepared_plan_id is not None:

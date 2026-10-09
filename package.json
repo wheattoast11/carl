@@ -1,6 +1,6 @@
 {
   "name": "carl-studio",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "private": true,
   "terminals": {
     "concept": "carl",
@@ -20,6 +20,6 @@
       "progenitor": "tej",
       "emergent": "genesis"
     },
-    "version": "0.21.0"
+    "version": "0.21.1"
   }
 }

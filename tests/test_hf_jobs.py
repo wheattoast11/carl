@@ -9,6 +9,8 @@ All HuggingFace Hub API calls are mocked. Tests verify:
   - Teardown cleanup
 """
 
+from __future__ import annotations
+
 import hashlib
 from dataclasses import dataclass
 from enum import Enum
@@ -199,8 +201,8 @@ async def test_execute_rejects_empty_script(backend, mock_api):
 
 
 @pytest.mark.asyncio
-async def test_execute_includes_hf_token_in_secrets(backend, mock_api):
-    """execute() always includes HF_TOKEN in secrets."""
+async def test_execute_passes_hf_token_without_secret_collision(backend, mock_api):
+    """execute() passes the token once and retains unrelated secrets."""
     mock_hf = MagicMock()
     mock_hf.whoami.return_value = {"name": "testuser"}
     mock_hf.upload_file.return_value = None
@@ -210,7 +212,8 @@ async def test_execute_includes_hf_token_in_secrets(backend, mock_api):
         await backend.execute(script="print('test')", secrets={"WANDB_KEY": "WANDB_KEY"})
 
     secrets = mock_hf.run_uv_job.call_args.kwargs["secrets"]
-    assert secrets["HF_TOKEN"] == "HF_TOKEN"
+    assert "HF_TOKEN" not in secrets
+    assert mock_hf.run_uv_job.call_args.kwargs["env"]["HF_TOKEN"] == "hf_test_token"
     assert secrets["WANDB_KEY"] == "WANDB_KEY"
 
 
@@ -320,9 +323,7 @@ async def test_status_normalizes_stages(backend, mock_api, raw_stage, expected):
 async def test_status_detailed_includes_message(backend, mock_api):
     """status_detailed() returns message from the job."""
     mock_hf = MagicMock()
-    mock_hf.inspect_job.return_value = _make_job_info(
-        stage="ERROR", message="OOM at step 68"
-    )
+    mock_hf.inspect_job.return_value = _make_job_info(stage="ERROR", message="OOM at step 68")
 
     with patch("huggingface_hub.HfApi", return_value=mock_hf):
         result = await backend.status_detailed("job-test")
@@ -559,7 +560,6 @@ class TestBuildSecrets:
 
 
 class TestResolveScript:
-
     def test_inline_content_returned_as_is(self):
         script = "# /// script\nprint('hello')\n"
         assert HFJobsBackend._resolve_script_content(script) == script
@@ -603,9 +603,18 @@ def test_flavor_map_covers_all_compute_targets():
             continue
         # The value should either be in the flavor map or handled by trainer
         assert target.value in _FLAVOR_MAP or target.value in (
-            "l4x1", "l4x4", "a10g-large", "a10g-largex2", "a10g-largex4",
-            "a100-large", "a100-largex2", "a100-largex4", "a100-largex8",
-            "l40sx1", "l40sx4", "l40sx8",
+            "l4x1",
+            "l4x4",
+            "a10g-large",
+            "a10g-largex2",
+            "a10g-largex4",
+            "a100-large",
+            "a100-largex2",
+            "a100-largex4",
+            "a100-largex8",
+            "l40sx1",
+            "l40sx4",
+            "l40sx8",
         ), f"ComputeTarget.{target.name} ({target.value}) has no flavor mapping"
 
 
@@ -653,3 +662,42 @@ def test_factory_returns_hf_jobs_backend():
     backend = get_backend("hf_jobs")
     assert isinstance(backend, HFJobsBackend)
     assert backend.name == "hf_jobs"
+
+
+@pytest.mark.asyncio
+async def test_private_script_url_and_collision_redaction(backend, caplog):
+    from urllib.parse import parse_qs, urlparse
+
+    token = "hf_fixture&+token"
+    mock_hf = MagicMock()
+    mock_hf.run_uv_job.return_value = _make_job_info()
+    with (
+        patch.object(HFJobsBackend, "_get_token", return_value=token),
+        patch("huggingface_hub.HfApi", return_value=mock_hf),
+        caplog.at_level("INFO"),
+    ):
+        await backend.execute(
+            "print('test')",
+            env={"CUSTOM": "value"},
+            secrets={"CUSTOM": "secret-name", "OTHER": "other-secret"},
+        )
+    submitted = mock_hf.run_uv_job.call_args.kwargs
+    url = urlparse(submitted["script"])
+    assert "/raw/main/train_" in url.path
+    assert parse_qs(url.query) == {"token": [token]}
+    assert not set(submitted["env"]) & set(submitted["secrets"])
+    assert submitted["secrets"] == {"OTHER": "other-secret"}
+    assert token not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_submission_error_redacts_authenticated_url(backend, mock_api):
+    mock_hf = MagicMock()
+    mock_hf.run_uv_job.side_effect = RuntimeError("failed ?token=hf_test_token")
+    with (
+        patch("huggingface_hub.HfApi", return_value=mock_hf),
+        pytest.raises(RuntimeError) as error,
+    ):
+        await backend.execute("print('test')")
+    assert "hf_test_token" not in str(error.value)
+    assert error.value.__suppress_context__
