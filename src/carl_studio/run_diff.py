@@ -36,6 +36,11 @@ class RunSummary(BaseModel):
     crystallization_count: int | None = None
     step_count: int = 0
     status: str | None = None
+    goal_metric: str | None = None
+    goal_value: float | None = None
+    acceptance_status: str | None = None
+    policy_passed: bool | None = None
+    elapsed_seconds: float | None = None
 
 
 class RunDiffReport(BaseModel):
@@ -54,6 +59,7 @@ class RunDiffReport(BaseModel):
     sample_size_delta: int | None = None
     contraction_holds_change: str | None = None
     divergence_step: int | None = None
+    goal_value_delta: float | None = None
     step_rows: list[dict[str, Any]] = Field(default_factory=list)  # type: ignore[arg-type]
 
 
@@ -147,6 +153,9 @@ def summarize_run(run: dict[str, Any], metrics: list[dict[str, Any]]) -> RunSumm
     status = run.get("status")
     status_str = str(status) if status is not None else None
 
+    acceptance = _coerce_result(result.get("acceptance"))
+    candidate = _coerce_result(acceptance.get("candidate"))
+    usage = _coerce_result(result.get("resource_usage"))
     return RunSummary(
         run_id=run_id,
         phi_mean=_as_float(result.get("phi_mean")),
@@ -156,6 +165,11 @@ def summarize_run(run: dict[str, Any], metrics: list[dict[str, Any]]) -> RunSumm
         crystallization_count=_crystallization_count(result),
         step_count=len(metrics) if metrics else 0,
         status=status_str,
+        goal_metric=str(candidate["primary_metric"]) if candidate.get("primary_metric") else None,
+        goal_value=_as_float(candidate.get("primary_value")),
+        acceptance_status=str(acceptance["status"]) if acceptance.get("status") else None,
+        policy_passed=_as_bool(acceptance.get("policy_passed")),
+        elapsed_seconds=_as_float(usage.get("elapsed_seconds")),
     )
 
 
@@ -240,6 +254,9 @@ def compute_diff(
         sample_size_delta=_delta_int(a.sample_size, b.sample_size),
         contraction_holds_change=_contraction_change(a.contraction_holds, b.contraction_holds),
         divergence_step=_first_divergence(metrics_a, metrics_b, divergence_threshold),
+        goal_value_delta=_delta_float(a.goal_value, b.goal_value)
+        if a.goal_metric is not None and a.goal_metric == b.goal_metric
+        else None,
     )
 
     if steps:
@@ -298,6 +315,22 @@ def render_diff(report: RunDiffReport, console: Any | None = None) -> None:
     console.blank()
 
     table = console.make_table("Metric", "A", "B", "Delta", title="Aggregate")
+    if a.goal_metric or b.goal_metric:
+        table.add_row(
+            a.goal_metric
+            if a.goal_metric == b.goal_metric
+            else "goal metric (different definitions)",
+            _fmt_float(a.goal_value),
+            _fmt_float(b.goal_value),
+            _fmt_delta_float(report.goal_value_delta),
+        )
+        table.add_row(
+            "candidate acceptance", a.acceptance_status or "-", b.acceptance_status or "-", "-"
+        )
+        table.add_row("policy checks", _fmt_bool(a.policy_passed), _fmt_bool(b.policy_passed), "-")
+        table.add_row(
+            "elapsed seconds", _fmt_float(a.elapsed_seconds), _fmt_float(b.elapsed_seconds), "-"
+        )
     table.add_row(
         "phi_mean",
         _fmt_float(a.phi_mean),

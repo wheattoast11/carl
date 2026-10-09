@@ -41,9 +41,7 @@ if TYPE_CHECKING:
 # Compute-substrate names that older carl.yaml files wrote into the `backend`
 # field. These are NOT training adapters and should NOT resolve as such — when
 # we see one in a legacy carl.yaml, fall through to the default adapter.
-_LEGACY_COMPUTE_BACKEND_NAMES = frozenset(
-    {"hf_jobs", "runpod", "prime", "ssh", "local"}
-)
+_LEGACY_COMPUTE_BACKEND_NAMES = frozenset({"hf_jobs", "runpod", "prime", "ssh", "local"})
 
 
 def _resolve_adapter_name(*, cli_override: str | None, raw: dict[str, Any]) -> str:
@@ -70,6 +68,7 @@ def _resolve_adapter_name(*, cli_override: str | None, raw: dict[str, Any]) -> s
     if legacy and legacy not in _LEGACY_COMPUTE_BACKEND_NAMES:
         return legacy
     return "trl"
+
 
 # ---------------------------------------------------------------------------
 # carl run
@@ -487,6 +486,16 @@ def train(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Show what --send-it would do without executing"
     ),
+    prepare: bool = typer.Option(
+        False, "--prepare", help="Prepare a goal without starting training"
+    ),
+    prepared_plan_id: str | None = typer.Option(
+        None, "--prepared-plan", help="Reviewed prepared experiment ID"
+    ),
+    goal: str | None = typer.Option(None, "--goal", help="The result this model should improve"),
+    json_output: bool = typer.Option(
+        False, "--json", help="Return the prepared experiment or run as JSON"
+    ),
     skip_credits: bool = typer.Option(
         False,
         "--skip-credits",
@@ -512,10 +521,7 @@ def train(
     trace_dir: Path | None = typer.Option(
         None,
         "--trace-dir",
-        help=(
-            "Directory to write coherence traces "
-            "(default: ~/.carl/runs/<run_id>/traces/)"
-        ),
+        help=("Directory to write coherence traces (default: ~/.carl/runs/<run_id>/traces/)"),
     ),
     report_to: str | None = typer.Option(
         None,
@@ -573,7 +579,8 @@ def train(
     # Exit 2 with an actionable message when called outside any `.carl/`.
     from carl_studio.project_context import require as _require_project
 
-    _require_project("train")
+    if not prepare and prepared_plan_id is None:
+        _require_project("train")
 
     import yaml
     from pathlib import Path
@@ -596,13 +603,9 @@ def train(
         c_fq = get_console()
         proposal = FeedbackEngine(LocalDB()).pending_proposal()
         if proposal is None:
-            c_fq.error(
-                "No pending training proposal -- enqueue one via `carl queue` first."
-            )
+            c_fq.error("No pending training proposal -- enqueue one via `carl queue` first.")
             raise typer.Exit(2)
-        c_fq.info(
-            f"Applying proposal for note {proposal.note_id}: {proposal.gap_summary}"
-        )
+        c_fq.info(f"Applying proposal for note {proposal.note_id}: {proposal.gap_summary}")
         for key, value in proposal.suggested_config.items():
             raw.setdefault(key, value)  # pyright: ignore[reportUnknownMemberType]
 
@@ -615,7 +618,7 @@ def train(
 
     # --managed: route to carl.camp's POST /api/train/slime/submit instead
     # of the local SlimeAdapter. Requires PAID tier and the slime backend.
-    if managed:
+    if managed and not (prepare or prepared_plan_id or goal or raw.get("goal")):
         _maybe_dispatch_managed_slime(
             backend_name=backend_name,
             raw=raw,
@@ -624,11 +627,8 @@ def train(
             idempotency_key=idempotency_key,
         )
 
-    _maybe_dispatch_backend(
-        backend_name=backend_name,
-        raw=raw,
-        dry_run=dry_run,
-    )
+    if not (prepare or prepared_plan_id or goal or raw.get("goal")):
+        _maybe_dispatch_backend(backend_name=backend_name, raw=raw, dry_run=dry_run)
 
     # CLI overrides
     if name:
@@ -676,26 +676,120 @@ def train(
 
     c = get_console()
     raw = _normalize_training_config(raw)
+    raw["adapter"] = backend_name
+    if send_it:
+        raw["pipeline"] = True
+    if resume_from_checkpoint is not None and prepare:
+        raw["resume_from_checkpoint"] = resume_from_checkpoint
+    if goal is not None:
+        from carl_studio.types.preparation import TrainingGoal
+
+        existing_goal = TrainingGoal.model_validate(raw.get("goal") or {})
+        raw["goal"] = existing_goal.model_copy(update={"description": goal}).model_dump(mode="json")
     try:
         training_config = TrainingConfig(**raw)
     except ValidationError as exc:
         _render_training_config_error(c, raw, exc)
         raise typer.Exit(1)
 
+    if prepare:
+        from carl_studio.training.preparation import (
+            prepare_training,
+            render_preparation,
+            project_root_for_config,
+        )
+
+        prepared = prepare_training(
+            training_config,
+            project_root=project_root_for_config(config_path),
+            config_path=config_path,
+        )
+        if json_output:
+            result = prepared.model_dump(mode="json")
+            result["ready"] = prepared.ready
+            typer.echo(json.dumps(result))
+        else:
+            c.info(render_preparation(prepared))
+        raise typer.Exit(0)
+
+    if send_it:
+        from carl_studio.tier import check_tier, tier_message
+
+        allowed, _, _ = check_tier("train.send_it")
+        if not allowed:
+            c.error_with_hint(
+                tier_message("train.send_it") or "--send-it requires CARL Paid.",
+                hint="Upgrade with: carl camp upgrade",
+                signup_url="https://carl.camp/pricing",
+                code="tier:train.send_it",
+            )
+            raise typer.Exit(1)
+
+    if prepared_plan_id is not None or training_config.goal is not None:
+        if dry_run:
+            from carl_studio.training.preparation import (
+                load_preparation,
+                prepare_training,
+                project_root_for_config,
+                render_preparation,
+                validate_preparation,
+            )
+
+            prepared = (
+                load_preparation(prepared_plan_id)
+                if prepared_plan_id is not None
+                else prepare_training(
+                    training_config,
+                    project_root=project_root_for_config(config_path),
+                    config_path=config_path,
+                    persist=False,
+                )
+            )
+            if prepared_plan_id is not None:
+                validate_preparation(prepared, training_config)
+            if json_output:
+                result = prepared.model_dump(mode="json")
+                result["ready"] = prepared.ready
+                typer.echo(json.dumps(result))
+            else:
+                c.info(render_preparation(prepared))
+            raise typer.Exit(0)
+
+        from carl_studio.training.pipeline import submit_training
+        import anyio
+        from functools import partial
+
+        try:
+            run = anyio.run(
+                partial(
+                    submit_training,
+                    training_config,
+                    prepared_plan_id=prepared_plan_id,
+                    skip_credits=skip_credits,
+                    resume_from_checkpoint=resume_from_checkpoint,
+                )
+            )
+        except Exception as exc:
+            from carl_core.errors import CARLError
+
+            c.error(exc.code if isinstance(exc, CARLError) else "Prepared training failed")
+            raise typer.Exit(1) from None
+        _persist_training_run(run.config, run, mode="goal-training")
+        if json_output:
+            typer.echo(run.model_dump_json())
+        else:
+            c.kv("Run", run.id)
+            c.kv("Checkpoint", run.checkpoint or "unavailable")
+            c.kv("Acceptance", run.acceptance.status if run.acceptance else "not evaluated")
+            if run.acceptance:
+                c.kv("Goal change", run.acceptance.goal_delta)
+                for reason in run.acceptance.reasons:
+                    c.info(reason)
+        accepted = run.acceptance is not None and run.acceptance.status == "accepted"
+        raise typer.Exit(0 if accepted else 1)
+
     # --send-it / --dry-run: full pipeline mode
     if send_it or dry_run:
-        if send_it:
-            from carl_studio.tier import check_tier, tier_message
-
-            allowed, _, _ = check_tier("train.send_it")
-            if not allowed:
-                c.error_with_hint(
-                    tier_message("train.send_it") or "--send-it requires CARL Paid.",
-                    hint="Upgrade with: carl camp upgrade",
-                    signup_url="https://carl.camp/pricing",
-                    code="tier:train.send_it",
-                )
-                raise typer.Exit(1)
         from carl_studio.training.pipeline import SendItPipeline
 
         c.banner(f"v{__version__}")

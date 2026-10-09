@@ -12,6 +12,113 @@ from mcp.types import CreateMessageResult, ElicitResult, TextContent
 
 
 @pytest.mark.parametrize("mode", ["legacy", "auto"])
+def test_training_result_extensions_survive_actual_wire(tmp_path, monkeypatch, mode):
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from carl_studio.harness.runtime import close_runtime
+    from carl_studio.mcp.server import mcp
+    from carl_studio.types.config import TrainingConfig
+    from carl_studio.types.run import RunPhase, TrainingRun
+
+    config = TrainingConfig(
+        run_name="wire",
+        base_model="fixture",
+        dataset_repo="fixture",
+        output_repo="fixture/output",
+        method="sft",
+    )
+    run = TrainingRun(
+        id="wire-run", config=config, phase=RunPhase.COMPLETE, checkpoint="fixture/checkpoint"
+    )
+    monkeypatch.setattr(
+        "carl_studio.training.pipeline.submit_training", AsyncMock(return_value=run)
+    )
+    monkeypatch.setattr(
+        "carl_studio.harness.runtime.get_runtime",
+        lambda *args: SimpleNamespace(context=SimpleNamespace(depth=0, allow_write=True)),
+    )
+
+    async def exercise():
+        try:
+            async with Client(mcp, mode=mode) as client:
+                result = await client.call_tool(
+                    "start_training", {"config_yaml": config.model_dump_json()}
+                )
+                assert not result.is_error
+                assert result.structured_content["checkpoint"] == "fixture/checkpoint"
+                assert result.structured_content["acceptance"] is None
+                malformed = await client.call_tool(
+                    "prepare_training", {"config_yaml": "CANARY_PRIVATE: [unterminated"}
+                )
+                assert malformed.is_error
+                assert "CANARY_PRIVATE" not in json.dumps(malformed.model_dump())
+        finally:
+            await close_runtime()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("mode", ["legacy", "auto"])
+def test_preparation_hashing_leaves_mcp_queries_responsive(tmp_path, monkeypatch, mode):
+    import json
+    import threading
+    from types import SimpleNamespace
+
+    from carl_studio.harness.runtime import close_runtime
+    from carl_studio.mcp.server import mcp
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def prepare(*args, **kwargs):
+        started.set()
+        release.wait(timeout=2)
+        return SimpleNamespace(
+            ready=False,
+            model_dump=lambda **kwargs: {"plan_id": "Eprep_" + "a" * 24, "goal": {}, "issues": []},
+        )
+
+    monkeypatch.setattr("carl_studio.training.preparation.prepare_training", prepare)
+
+    async def exercise():
+        try:
+            async with Client(mcp, mode=mode) as client:
+                preparation = asyncio.create_task(
+                    client.call_tool(
+                        "prepare_training",
+                        {
+                            "config_yaml": json.dumps(
+                                {
+                                    "run_name": "responsive",
+                                    "base_model": "fixture",
+                                    "dataset_repo": "fixture",
+                                    "output_repo": "fixture/output",
+                                    "method": "sft",
+                                }
+                            )
+                        },
+                    )
+                )
+                while not started.is_set():
+                    await asyncio.sleep(0.005)
+                metrics = await asyncio.wait_for(
+                    client.call_tool("get_coherence_metrics", {"logits_summary": "{}"}), timeout=1
+                )
+                assert not metrics.is_error
+                assert not preparation.done()
+                release.set()
+                result = await preparation
+                assert not result.is_error
+        finally:
+            release.set()
+            await close_runtime()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("mode", ["legacy", "auto"])
 def test_wire_schema_and_host_sampling(mode: str) -> None:
     from carl_studio.mcp.server import mcp
 

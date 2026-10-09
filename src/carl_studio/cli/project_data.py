@@ -266,7 +266,9 @@ def project_init(
         method = ui.select(
             "Training method",
             [
-                ui.Choice(value="grpo", label="GRPO", badge="recommended", hint="RL with reward shaping"),
+                ui.Choice(
+                    value="grpo", label="GRPO", badge="recommended", hint="RL with reward shaping"
+                ),
                 ui.Choice(value="sft", label="SFT", hint="supervised fine-tuning"),
                 ui.Choice(value="dpo", label="DPO", hint="direct preference optimization"),
             ],
@@ -277,7 +279,9 @@ def project_init(
         compute = ui.select(
             "Compute target",
             [
-                ui.Choice(value="local", label="local", badge="recommended", hint="your own hardware"),
+                ui.Choice(
+                    value="local", label="local", badge="recommended", hint="your own hardware"
+                ),
                 ui.Choice(value="l4x1", label="l4x1", hint="1× L4 GPU (cheap)"),
                 ui.Choice(value="l40sx1", label="l40sx1", hint="1× L40S GPU"),
                 ui.Choice(value="a100-largex8", label="a100-largex8", hint="8× A100 (big jobs)"),
@@ -338,7 +342,7 @@ def project_show(
         ("Model", proj.base_model or "(not set)"),
         ("Adapter", proj.adapter or "(none)"),
         ("Method", proj.method),
-        ("Compute", f"{proj.compute_target} via {proj.backend}"),
+        ("Compute", f"{proj.compute_target} via {proj.compute_backend}"),
         ("Dataset", proj.dataset_repo or "(not set)"),
         ("Output", proj.output_repo or "(not set)"),
         ("CARL", "enabled" if proj.carl_enabled else "disabled"),
@@ -617,4 +621,3 @@ def data_stats(
         table.add_row(role, f"{count:,}")
     c.print(table)
     c.blank()
-

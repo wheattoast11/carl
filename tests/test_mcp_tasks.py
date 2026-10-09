@@ -368,6 +368,38 @@ class TestTaskToolFactories(unittest.IsolatedAsyncioTestCase):
         assert payload["cancelled"] is False
         assert payload["reason"] == "already_terminal"
 
+    async def test_tasks_cancel_waits_for_owned_worker_cleanup(self) -> None:
+        started = asyncio.Event()
+        ended = asyncio.Event()
+
+        @async_task("owned", store=self.store)
+        async def body() -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await asyncio.sleep(0.03)
+                ended.set()
+
+        handle = await body()
+        await asyncio.wait_for(started.wait(), timeout=2)
+        cancel_tool = build_tasks_cancel_tool(lambda: self.store)
+        cancellation = asyncio.create_task(cancel_tool(handle["task_id"]))
+        await asyncio.sleep(0.005)
+        assert self.store.get(handle["task_id"]).status == "running"
+        payload = await cancellation
+        assert ended.is_set()
+        assert payload["cancelled"] is True
+        assert self.store.get(handle["task_id"]).status == "cancelled"
+
+    async def test_tasks_cancel_without_worker_custody_keeps_running_status(self) -> None:
+        task = self.store.create("orphan", {})
+        self.store.mark_running(task.task_id)
+        payload = await build_tasks_cancel_tool(lambda: self.store)(task.task_id)
+        assert payload["cancelled"] is False
+        assert payload["reason"] == "execution_not_owned"
+        assert self.store.get(task.task_id).status == "running"
+
     async def test_tasks_cancel_unknown(self) -> None:
         cancel_tool = build_tasks_cancel_tool(lambda: self.store)
         payload = await cancel_tool("nope")

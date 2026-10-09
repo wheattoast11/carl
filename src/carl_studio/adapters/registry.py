@@ -75,3 +75,18 @@ def _unregister(name: str) -> None:
 def _clear() -> None:
     """Test-only hook: wipe the registry."""
     _REGISTRY.clear()
+
+
+def get_capabilities(name: str) -> dict[str, object]:
+    """Declare goal hooks separately from availability and job submission."""
+    adapter = get_adapter(name)
+    declared = getattr(adapter, "training_capabilities", None)
+    if isinstance(declared, dict):
+        return dict(declared)
+    return {
+        "methods": [],
+        "task_rewards": False,
+        "artifacts": False,
+        "coherence": "unqualified",
+        "cancellation": "backend",
+    }

@@ -16,10 +16,9 @@ Design decisions
 * ``status`` is a plain string (``pending | running | completed | failed |
   cancelled``) rather than an enum, to keep the write-path ``str``-based
   and serialization-cheap.
-* Cancellation is cooperative: :meth:`MCPTaskStore.cancel` flips the row
-  to ``cancelled`` and the wrapped body polls a ``anyio.Event`` between
-  steps. If the body has already completed we still mark it cancelled but
-  return ``False`` to signal "no-op" to the caller.
+* The task tool cancels an owned worker and waits for cleanup before recording
+  ``cancelled``. Running tasks without live worker custody require reconciliation.
+  Store-only cancellation remains available for pending work.
 * ``params_hash`` uses :func:`carl_core.hashing.content_hash` over a
   canonical JSON representation so retries with the same params are
   trivially deduplicatable by the orchestrator (we don't enforce dedup
@@ -29,6 +28,7 @@ Design decisions
 from __future__ import annotations
 
 import json
+import asyncio
 import logging
 import os
 import sqlite3
@@ -626,6 +626,7 @@ class MCPTaskStore:
 
 
 _default_store: MCPTaskStore | None = None
+_live_tasks: dict[str, Any] = {}
 
 
 def get_default_store() -> MCPTaskStore:
@@ -651,8 +652,14 @@ async def _run_in_background(
 ) -> None:
     """Drive the wrapped body, writing result/error into the store."""
     store.mark_running(task_id)
+    current = store.get(task_id)
+    if current is None or current.status != "running":
+        return
     try:
         result = await body(*args, **kwargs)
+    except asyncio.CancelledError:
+        store.cancel(task_id)
+        raise
     except CARLError as exc:
         store.mark_failed(task_id, exc)
         return
@@ -703,7 +710,13 @@ def async_task(
             task = resolved_store.create(tool_name, params)
 
             async def _bg() -> None:
-                await _run_in_background(resolved_store, task.task_id, body, args, kwargs)
+                import asyncio
+
+                _live_tasks[task.task_id] = asyncio.current_task()
+                try:
+                    await _run_in_background(resolved_store, task.task_id, body, args, kwargs)
+                finally:
+                    _live_tasks.pop(task.task_id, None)
 
             # Spawn detached: caller returns immediately with the handle.
             async with anyio.create_task_group() as tg:
@@ -811,6 +824,31 @@ def build_tasks_cancel_tool(
                 "cancelled": False,
                 "reason": "already_terminal",
                 "task_id": task_id,
+                "status": existing.status,
+            }
+        worker = _live_tasks.get(task_id)
+        if worker is not None:
+            if not worker.cancelling():
+                worker.cancel()
+            try:
+                await worker
+            except asyncio.CancelledError:
+                pass
+            stopped = store.get(task_id)
+            if stopped is not None and stopped.status == "cancelled":
+                return {"cancelled": True, "task_id": task_id}
+            if stopped is not None and stopped.status == "failed":
+                return {
+                    "cancelled": False,
+                    "task_id": task_id,
+                    "reason": "execution_not_confirmed",
+                    "status": stopped.status,
+                }
+        elif existing.status == "running":
+            return {
+                "cancelled": False,
+                "task_id": task_id,
+                "reason": "execution_not_owned",
                 "status": existing.status,
             }
         changed = store.cancel(task_id)

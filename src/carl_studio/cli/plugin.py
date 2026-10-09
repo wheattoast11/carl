@@ -37,8 +37,13 @@ def install(host: Annotated[list[str] | None, typer.Option("--host")] = None) ->
 @plugin_app.command("update")
 def update() -> None:
     """Rebuild the owned plugin projections from current source."""
-    installer = _installer()
-    typer.echo(json.dumps(installer.install(installer.installed_hosts() or None), indent=2))
+    try:
+        installer = _installer()
+        result = installer.install(installer.installed_hosts() or None)
+    except CARLError as exc:
+        get_console().error(f"{exc.code}: {exc}")
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, indent=2))
 
 
 @plugin_app.command("doctor")

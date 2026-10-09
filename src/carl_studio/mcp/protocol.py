@@ -15,6 +15,7 @@ ACTIVE_CONTEXT: ContextVar[Any] = ContextVar("carl_mcp_context", default=None)
 CHILD_TOOLS = frozenset(
     {
         "validate_config",
+        "prepare_training",
         "get_coherence_metrics",
         "list_backends",
         "list_skills",

@@ -138,8 +138,7 @@ def _default_show_help() -> None:
     ctx = typer.Context(typer.main.get_command(app))
     typer.echo(ctx.get_help())
     typer.echo(
-        "\nUse `carl chat` for an interactive session or "
-        '`carl ask "<prompt>"` for one-shot.'
+        '\nUse `carl chat` for an interactive session or `carl ask "<prompt>"` for one-shot.'
     )
 
 
@@ -198,10 +197,10 @@ def _resolve_default_handlers() -> tuple[
     from carl_studio.cli.init import init_cmd
 
     def _chat(*, initial_message: str | None = None) -> None:
-        chat_cmd(initial_message=initial_message)
+        _invoke_command(chat_cmd, initial_message=initial_message)
 
     def _ask(prompt: str) -> None:
-        ask_cmd(prompt=prompt)
+        _invoke_command(ask_cmd, prompt=prompt)
 
     def _init() -> None:
         init_cmd(
@@ -212,6 +211,22 @@ def _resolve_default_handlers() -> tuple[
         )
 
     return _chat, _ask, _init, _default_show_help, _default_trust_precheck
+
+
+def _invoke_command(function: Callable[..., object], **overrides: object) -> None:
+    """Resolve Typer metadata before invoking a command as a function."""
+    import inspect
+    from typer.models import ParameterInfo
+
+    arguments: dict[str, object] = {}
+    for name, parameter in inspect.signature(function).parameters.items():
+        default = parameter.default
+        if isinstance(default, ParameterInfo):
+            arguments[name] = default.default
+        elif default is not inspect.Parameter.empty:
+            arguments[name] = default
+    arguments.update(overrides)
+    function(**arguments)
 
 
 def _looks_like_prompt(token: str) -> bool:
@@ -300,15 +315,10 @@ def route(
     # non-interactive reply, not dropping into a long-lived session
     # bound to project context. Use ``carl trust acknowledge`` if you
     # want a project trusted ahead of any one-shot use.
-    bare_prompt_entry = (
-        stdin_tty
-        and (
-            not argv
-            or (
-                len(argv) == 1
-                and argv[0] not in REGISTERED_SUBCOMMANDS
-                and _looks_like_prompt(argv[0])
-            )
+    bare_prompt_entry = stdin_tty and (
+        not argv
+        or (
+            len(argv) == 1 and argv[0] not in REGISTERED_SUBCOMMANDS and _looks_like_prompt(argv[0])
         )
     )
     if bare_prompt_entry:

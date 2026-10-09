@@ -46,9 +46,7 @@ class BackendStatus:
     FAILED = "failed"
     CANCELED = "canceled"
 
-    _ALL: frozenset[str] = frozenset(
-        {PENDING, PROVISIONING, RUNNING, COMPLETED, FAILED, CANCELED}
-    )
+    _ALL: frozenset[str] = frozenset({PENDING, PROVISIONING, RUNNING, COMPLETED, FAILED, CANCELED})
 
     @classmethod
     def is_terminal(cls, status: str) -> bool:
@@ -75,6 +73,8 @@ class BackendJob:
     metrics: dict[str, float] = field(default_factory=dict)
     logs_url: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+
+    checkpoint: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-safe representation."""

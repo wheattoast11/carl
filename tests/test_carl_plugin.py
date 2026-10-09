@@ -140,3 +140,98 @@ def test_projected_reference_symlink_refuses_update(tmp_path: Path) -> None:
     with pytest.raises(CARLError):
         installer.install(["codex"], native=False)
     assert victim.read_text() == "unchanged"
+
+
+@pytest.mark.parametrize("edited", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_update_removes_retired_references_and_preserves_edits(tmp_path, edited, legacy):
+    import shutil
+
+    root = tmp_path / "source"
+    root.mkdir()
+    for name in ("plugin.json", "mcp.json", "pyproject.toml", "uv.lock"):
+        shutil.copyfile(ROOT / name, root / name)
+    shutil.copytree(ROOT / "skills", root / "skills")
+    home = tmp_path / "home"
+    installer = PluginInstaller(root, home=home)
+    installer.install(["codex"], native=False)
+    alias = home / ".agents/skills/carl/references/workflows.md"
+    snapshot = installer.state / "marketplace/plugins/carl/skills/carl/references/workflows.md"
+    if legacy:
+        import hashlib
+
+        projection = installer.state / "marketplace/projection.json"
+        data = json.loads(projection.read_text())
+        del data["owned_files"]
+        projection.write_text(json.dumps(data))
+        record = json.loads(installer.marker.read_text())
+        record["projection_files"][str(projection)] = hashlib.sha256(
+            projection.read_bytes()
+        ).hexdigest()
+        installer.marker.write_text(json.dumps(record))
+    (root / "skills/carl/references/workflows.md").unlink()
+    if edited:
+        alias.write_text("operator edit")
+        with pytest.raises(CARLError, match="Edited retired"):
+            installer.install(["codex"], native=False)
+        assert alias.read_text() == "operator edit"
+        assert snapshot.is_file()
+    else:
+        assert installer.install(["codex"], native=False)["healthy"]
+        assert not alias.exists()
+        assert not snapshot.exists()
+
+
+@pytest.mark.parametrize("kind", ["absent", "local", "git", "foreign"])
+def test_codex_marketplace_registration_preserves_source(tmp_path, monkeypatch, kind):
+    installer = PluginInstaller(ROOT, home=tmp_path)
+    source = {"sourceType": "local", "source": str(installer.state / "marketplace")}
+    if kind == "git":
+        source = {"sourceType": "git", "source": "https://github.com/wheattoast11/carl.git"}
+    elif kind == "foreign":
+        source = {"sourceType": "git", "source": "https://example.com/foreign.git"}
+    entries = [] if kind == "absent" else [{"name": "carl-local", "marketplaceSource": source}]
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        return json.dumps({"marketplaces": entries}).encode()
+
+    monkeypatch.setattr(installer, "_run", run)
+    if kind == "foreign":
+        with pytest.raises(CARLError, match="Foreign Codex"):
+            installer._register_codex_marketplace()
+        assert len(calls) == 1
+    else:
+        installer._register_codex_marketplace()
+        if kind == "absent":
+            assert calls[-1] == [
+                "codex",
+                "plugin",
+                "marketplace",
+                "add",
+                str(installer.state / "marketplace"),
+            ]
+        elif kind == "git":
+            assert calls[-1] == ["codex", "plugin", "marketplace", "upgrade", "carl-local"]
+        else:
+            assert len(calls) == 1
+    assert not any("remove" in call for call in calls)
+
+
+def test_plugin_update_formats_source_errors(monkeypatch):
+    import importlib
+
+    from typer.testing import CliRunner
+
+    module = importlib.import_module("carl_studio.cli.plugin")
+
+    def unavailable():
+        raise CARLError("Run from a CARL checkout", code="carl.plugin.source")
+
+    monkeypatch.setattr(module, "_installer", unavailable)
+    result = CliRunner().invoke(module.plugin_app, ["update"])
+    assert result.exit_code == 1
+    assert "carl.plugin.source" in result.output
+    assert "Traceback" not in result.output
+    assert isinstance(result.exception, SystemExit)

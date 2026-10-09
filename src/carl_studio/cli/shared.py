@@ -483,6 +483,14 @@ def _persist_training_run(training_config: Any, run: Any, mode: str) -> None:
             "checkpoint_steps": list(getattr(run, "checkpoint_steps", [])),
             "output_repo": training_config.output_repo,
             "method": training_config.method.value,
+            "checkpoint": getattr(run, "checkpoint", None),
+            "artifacts": [
+                artifact.model_dump(mode="json") for artifact in getattr(run, "artifacts", [])
+            ],
+            "acceptance": run.acceptance.model_dump(mode="json")
+            if getattr(run, "acceptance", None) is not None
+            else None,
+            "resource_usage": getattr(run, "resource_usage", {}),
         },
         "started_at": existing.get("started_at")
         if existing and existing.get("started_at")

@@ -9,7 +9,9 @@ from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
+from carl_studio.experiment.types import Artifact
 from carl_studio.types.config import TrainingConfig
+from carl_studio.types.preparation import TrainingAcceptance
 
 
 class RunPhase(str, Enum):
@@ -46,6 +48,14 @@ class TrainingRun(BaseModel):
     coherence_health: CoherenceHealth = CoherenceHealth.HEALTHY
     loss: float = 0.0
     reward_mean: float = 0.0
-    error_message: Optional[str] = Field(default=None, description="Error details if phase == FAILED")
+    error_message: Optional[str] = Field(
+        default=None, description="Error details if phase == FAILED"
+    )
     hub_job_id: Optional[str] = Field(default=None, description="HuggingFace Jobs job ID")
-    checkpoint_steps: List[int] = Field(default_factory=list, description="Steps at which checkpoints were saved")
+    checkpoint_steps: List[int] = Field(
+        default_factory=list, description="Steps at which checkpoints were saved"
+    )
+    checkpoint: str | None = None
+    artifacts: list[Artifact] = Field(default_factory=list)
+    acceptance: TrainingAcceptance | None = None
+    resource_usage: dict[str, float] = Field(default_factory=dict)
