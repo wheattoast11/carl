@@ -3,12 +3,26 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, ClassVar
 
 import numpy as np
 import pytest
 from carl_encoders import artifacts, worker
+
+
+def test_metadata_binds_native_thread_limits_before_loading_models(monkeypatch: pytest.MonkeyPatch):
+    for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        monkeypatch.setenv(name, "32")
+    worker.configure_threads()
+    assert {
+        os.environ[name] for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")
+    } == {"4"}
+    assert (
+        worker.metadata()["dependencies"]["carl.encoder.thread_policy"]
+        == "OMP=4,OPENBLAS=4,MKL=4,torch<=4"
+    )
 
 
 def sample(text: str, event: str = "event") -> dict[str, Any]:

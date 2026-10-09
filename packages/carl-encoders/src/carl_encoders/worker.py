@@ -8,10 +8,17 @@ import importlib
 import importlib.metadata
 import importlib.util
 import json
+import os
 import sys
 import time
 from pathlib import Path
 from typing import Any
+
+
+def configure_threads() -> None:
+    """Bound native BLAS pools before importing numerical libraries."""
+    for name in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ[name] = "4"
 
 
 def metadata() -> dict[str, Any]:
@@ -22,6 +29,7 @@ def metadata() -> dict[str, Any]:
         except importlib.metadata.PackageNotFoundError:
             dependencies[name] = "unavailable"
     dependencies["carl.encoder.environment"] = str(Path(sys.prefix).resolve())
+    dependencies["carl.encoder.thread_policy"] = "OMP=4,OPENBLAS=4,MKL=4,torch<=4"
     dependencies["carl.encoder.worker_sha256"] = hashlib.sha256(
         Path(__file__).read_bytes()
     ).hexdigest()
@@ -253,6 +261,7 @@ def restore_candidate(
 
 
 def main() -> None:
+    configure_threads()
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "operation",
