@@ -5,11 +5,49 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import numpy as np
 import pytest
 from carl_encoders import artifacts, worker
+
+
+@pytest.mark.parametrize("exceeded", ["host", "reserved"])
+def test_gpu_cache_enforces_both_memory_spaces(tmp_path, monkeypatch, exceeded):
+    import resource
+
+    req = request(tmp_path)
+    req["cache_binding"] = {"execution": {"device": "cuda:0", "dtype": "float32"}}
+    loaded = False
+
+    def load(*args):
+        nonlocal loaded
+        loaded = True
+        return SimpleNamespace(device="cuda:0", eval=lambda: None)
+
+    monkeypatch.setattr(worker, "load_model", load)
+    monkeypatch.setattr(
+        resource,
+        "getrusage",
+        lambda who: SimpleNamespace(
+            ru_maxrss=8 * 1024**2 if loaded and exceeded == "host" else 1024,
+        ),
+    )
+    monkeypatch.setattr(
+        worker.importlib,
+        "import_module",
+        lambda name: SimpleNamespace(
+            cuda=SimpleNamespace(
+                max_memory_reserved=lambda device: 8 * 1024**3 if exceeded == "reserved" else 1024,
+                max_memory_allocated=lambda device: 1024,
+            ),
+            inference_mode=lambda: pytest.fail("Inference ran above its memory ceiling"),
+        ),
+    )
+    with pytest.raises(TimeoutError, match="memory exceeded"):
+        worker.cache_carriers(req)
+    assert loaded
 
 
 def test_metadata_binds_native_thread_limits_before_loading_models(monkeypatch: pytest.MonkeyPatch):

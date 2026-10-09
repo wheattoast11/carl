@@ -198,7 +198,7 @@ def cache_carriers(request: dict[str, Any]) -> dict[str, Any]:
             raise TimeoutError("Encoder cache runtime exceeded")
         allocated = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
         if model is not None and str(model.device).startswith("cuda"):
-            allocated = torch.cuda.max_memory_reserved(model.device)
+            allocated = max(allocated, torch.cuda.max_memory_reserved(model.device))
         if allocated > settings["memory_gib"] * 1024**3:
             raise TimeoutError("Encoder cache memory exceeded")
 
@@ -213,6 +213,7 @@ def cache_carriers(request: dict[str, Any]) -> dict[str, Any]:
             modalities,
             binding["execution"].get("dtype", "float32"),
         )
+        limit()
         model.eval()
         buckets: dict[str, list[tuple[str, dict[str, Any]]]] = {}
         for key, value in pending:

@@ -66,7 +66,7 @@ def fit(
             "host_peak_memory_bytes": host,
             "gpu_peak_allocated_bytes": allocated,
             "gpu_peak_reserved_bytes": reserved,
-            "peak_memory_bytes": reserved if device.type == "cuda" else host,
+            "peak_memory_bytes": max(host, reserved),
         }
 
     def limit() -> None:

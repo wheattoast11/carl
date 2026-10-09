@@ -96,5 +96,6 @@ Preparation records the actual device, precision, GPU model, compute capability
 and installed CUDA runtime. A loaded model that differs from that binding fails.
 Carrier caches retain that producer identity, so changing precision or device
 requires a new cache. Cached heads train on the selected device without loading
-the encoder. GPU limits use peak reserved device memory; host RAM, allocated
-device memory and reserved device memory are reported separately.
+the encoder. The memory ceiling applies independently to host RAM and peak
+reserved device memory; both must fit. Host RAM, allocated device memory and
+reserved device memory are reported separately.
