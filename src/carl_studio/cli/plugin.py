@@ -37,8 +37,8 @@ def install(host: Annotated[list[str] | None, typer.Option("--host")] = None) ->
 @plugin_app.command("update")
 def update() -> None:
     """Rebuild the owned plugin projections from current source."""
-    installer = _installer()
     try:
+        installer = _installer()
         result = installer.install(installer.installed_hosts() or None)
     except CARLError as exc:
         get_console().error(f"{exc.code}: {exc}")

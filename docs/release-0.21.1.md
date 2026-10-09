@@ -72,6 +72,6 @@ The installer now preserves that Git registration and upgrades only the named
 CARL marketplace. Foreign Git sources remain refused. Update errors use the
 normal CLI error surface instead of a traceback.
 
-Plugin regression after this fix: **19 passed**; Ruff and strict Pyright for
+Plugin regression after this fix: **20 passed**; Ruff and strict Pyright for
 plugin installation and its CLI: **passed**. Installed CARL doctor reported
 all three hosts present, no source drift, and `healthy: true`.

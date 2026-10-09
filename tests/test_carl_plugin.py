@@ -217,3 +217,21 @@ def test_codex_marketplace_registration_preserves_source(tmp_path, monkeypatch, 
         else:
             assert len(calls) == 1
     assert not any("remove" in call for call in calls)
+
+
+def test_plugin_update_formats_source_errors(monkeypatch):
+    import importlib
+
+    from typer.testing import CliRunner
+
+    module = importlib.import_module("carl_studio.cli.plugin")
+
+    def unavailable():
+        raise CARLError("Run from a CARL checkout", code="carl.plugin.source")
+
+    monkeypatch.setattr(module, "_installer", unavailable)
+    result = CliRunner().invoke(module.plugin_app, ["update"])
+    assert result.exit_code == 1
+    assert "carl.plugin.source" in result.output
+    assert "Traceback" not in result.output
+    assert isinstance(result.exception, SystemExit)
