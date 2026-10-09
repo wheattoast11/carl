@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-10-08
+last_updated: 2026-10-09
 author: CARL project
 applies_to: carl-studio 0.21.1
 ---
@@ -63,3 +63,15 @@ submitted. Native witnesses use synthetic localhost providers. The 55 GB
 checkpoint from the integration report was not benchmarked. Cold checkpoint
 binding still requires reading its bytes; repeated preparation uses the cache.
 GitHub and PyPI publication are separate from these local checks.
+
+## Native installation continuation (October 9)
+
+The operator's Codex CARL marketplace was registered from the canonical Git
+repository. Updating it as a local marketplace failed with a source collision.
+The installer now preserves that Git registration and upgrades only the named
+CARL marketplace. Foreign Git sources remain refused. Update errors use the
+normal CLI error surface instead of a traceback.
+
+Plugin regression after this fix: **19 passed**; Ruff and strict Pyright for
+plugin installation and its CLI: **passed**. Installed CARL doctor reported
+all three hosts present, no source drift, and `healthy: true`.

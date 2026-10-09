@@ -9,6 +9,7 @@
 - Hash checkpoint files with bounded concurrency and cache SHA-256 digests by file identity and change timestamps. Execution still validates full source bytes.
 - Apply terminal privacy penalties outside cascade masks and reward weights; reject public trajectories exposing private draft identifiers.
 - Remove retired installer-owned skill references during plugin updates and preserve edited files.
+- Preserve an existing canonical Git-backed Codex marketplace during plugin updates instead of conflicting with its registration.
 
 
 ## [0.21.0] - 2026-10-08

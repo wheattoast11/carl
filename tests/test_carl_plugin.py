@@ -180,3 +180,40 @@ def test_update_removes_retired_references_and_preserves_edits(tmp_path, edited,
         assert installer.install(["codex"], native=False)["healthy"]
         assert not alias.exists()
         assert not snapshot.exists()
+
+
+@pytest.mark.parametrize("kind", ["absent", "local", "git", "foreign"])
+def test_codex_marketplace_registration_preserves_source(tmp_path, monkeypatch, kind):
+    installer = PluginInstaller(ROOT, home=tmp_path)
+    source = {"sourceType": "local", "source": str(installer.state / "marketplace")}
+    if kind == "git":
+        source = {"sourceType": "git", "source": "https://github.com/wheattoast11/carl.git"}
+    elif kind == "foreign":
+        source = {"sourceType": "git", "source": "https://example.com/foreign.git"}
+    entries = [] if kind == "absent" else [{"name": "carl-local", "marketplaceSource": source}]
+    calls = []
+
+    def run(argv):
+        calls.append(argv)
+        return json.dumps({"marketplaces": entries}).encode()
+
+    monkeypatch.setattr(installer, "_run", run)
+    if kind == "foreign":
+        with pytest.raises(CARLError, match="Foreign Codex"):
+            installer._register_codex_marketplace()
+        assert len(calls) == 1
+    else:
+        installer._register_codex_marketplace()
+        if kind == "absent":
+            assert calls[-1] == [
+                "codex",
+                "plugin",
+                "marketplace",
+                "add",
+                str(installer.state / "marketplace"),
+            ]
+        elif kind == "git":
+            assert calls[-1] == ["codex", "plugin", "marketplace", "upgrade", "carl-local"]
+        else:
+            assert len(calls) == 1
+    assert not any("remove" in call for call in calls)

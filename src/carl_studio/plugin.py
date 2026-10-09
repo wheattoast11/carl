@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -270,9 +271,7 @@ class PluginInstaller:
         if native:
             for host in selected:
                 if host == "codex":
-                    self._run(
-                        [host, "plugin", "marketplace", "add", str(self.state / "marketplace")]
-                    )
+                    self._register_codex_marketplace()
                     self._run([host, "plugin", "add", "carl@carl-local"])
                 elif host == "claude":
                     self._run(
@@ -285,10 +284,36 @@ class PluginInstaller:
         _write_json(self.marker, record)
         return self.doctor()
 
-    def _run(self, argv: list[str]) -> None:
+    def _register_codex_marketplace(self) -> None:
+        listing = json.loads(self._run(["codex", "plugin", "marketplace", "list", "--json"]))
+        entries: list[dict[str, Any]] = listing.get("marketplaces", [])
+        existing = next((row for row in entries if row.get("name") == "carl-local"), None)
+        local = self.state / "marketplace"
+        if existing is None:
+            self._run(["codex", "plugin", "marketplace", "add", str(local)])
+            return
+        source: dict[str, Any] = existing.get("marketplaceSource", {})
+        location = source.get("source", existing.get("root", ""))
+        if (
+            source.get("sourceType", "local") == "local"
+            and Path(location).resolve() == local.resolve()
+        ):
+            return
+        repository = tomllib.loads((self.root / "pyproject.toml").read_text())["project"]["urls"][
+            "Repository"
+        ]
+        if source.get("sourceType") == "git" and location.removesuffix(
+            ".git"
+        ) == repository.removesuffix(".git"):
+            self._run(["codex", "plugin", "marketplace", "upgrade", "carl-local"])
+            return
+        raise CARLError("Foreign Codex carl marketplace", code="carl.plugin.ownership")
+
+    def _run(self, argv: list[str]) -> bytes:
         result = subprocess.run(argv, capture_output=True, timeout=60, check=False)
         if result.returncode:
             raise CARLError(f"{argv[0]} plugin command failed", code="carl.plugin.native")
+        return result.stdout
 
     def _opencode(self, record: dict[str, Any]) -> None:
         path = self.home / ".config/opencode/opencode.json"
