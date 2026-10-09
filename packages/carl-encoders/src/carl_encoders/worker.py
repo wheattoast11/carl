@@ -191,6 +191,7 @@ def cache_carriers(request: dict[str, Any]) -> dict[str, Any]:
     started = request.get("_started", time.monotonic())
     settings = request["settings"]
     model = None
+    torch: Any = None
 
     def limit() -> None:
         if time.monotonic() - started >= settings["runtime_s"]:
@@ -204,7 +205,7 @@ def cache_carriers(request: dict[str, Any]) -> dict[str, Any]:
     limit()
     if pending:
         limit()
-        torch: Any = importlib.import_module("torch")
+        torch = importlib.import_module("torch")
         modalities = {p["modality"] for _, v in pending for p in v["parts"]}
         model = load_model(
             request["model"],
@@ -250,7 +251,10 @@ def cache_carriers(request: dict[str, Any]) -> dict[str, Any]:
                     artifacts.atomic_json(manifest, document)
                     limit()
     limit()
-    gpu = model is not None and str(model.device).startswith("cuda")
+    gpu_allocated = gpu_reserved = 0
+    if model is not None and str(model.device).startswith("cuda"):
+        gpu_allocated = torch.cuda.max_memory_allocated(model.device)
+        gpu_reserved = torch.cuda.max_memory_reserved(model.device)
     return {
         "manifest": str(manifest.resolve()),
         "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
@@ -261,8 +265,8 @@ def cache_carriers(request: dict[str, Any]) -> dict[str, Any]:
         "processed_tokens": tokens,
         "elapsed_seconds": time.monotonic() - started,
         "host_peak_memory_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
-        "gpu_peak_allocated_bytes": torch.cuda.max_memory_allocated(model.device) if gpu else 0,
-        "gpu_peak_reserved_bytes": torch.cuda.max_memory_reserved(model.device) if gpu else 0,
+        "gpu_peak_allocated_bytes": gpu_allocated,
+        "gpu_peak_reserved_bytes": gpu_reserved,
     }
 
 
