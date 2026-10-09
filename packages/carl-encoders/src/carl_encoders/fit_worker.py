@@ -47,6 +47,25 @@ def fit(
         model.requires_grad_(False)
     elif cached_vectors is None or mode != "frozen_heads":
         raise ValueError("Frozen-head fitting requires bound carriers or an encoder")
+    baseline_vectors = None
+    if settings.get("baseline_cache"):
+        if mode != "adapter" or model is None:
+            raise ValueError("Baseline cache requires an adapter encoder")
+        baseline_vectors, _ = artifacts.load_carriers(
+            Path(settings["baseline_cache"]),
+            request["cache_binding"],
+            set(artifacts.inputs(request)),
+        )
+        sample = next(iter(artifacts.inputs(request).values()))
+        sample = {**sample, "max_tokens": min(sample["max_tokens"], settings["processed_tokens"])}
+        model.eval()
+        with torch.no_grad():
+            fresh = raw_forward(model, features_for(model, sample))[0].float().cpu()
+        expected = torch.tensor(
+            baseline_vectors[artifacts.sample_key(sample, settings["processed_tokens"])]
+        )
+        if not torch.allclose(fresh, expected, rtol=1e-5, atol=1e-6):
+            raise ValueError("Baseline cache numerical correspondence failed")
     targets: list[str] = []
     if mode == "adapter":
         if model is None:
@@ -128,7 +147,12 @@ def fit(
     global_step = 0
     data_position = 0
     cache: dict[str, Any] = {}
-    counters = {"encoder_forwards": 0, "cache_hits": 0, "processed_tokens": 0}
+    counters = {
+        "encoder_forwards": int(baseline_vectors is not None),
+        "gradient_forwards": 0,
+        "cache_hits": 0,
+        "processed_tokens": 0,
+    }
     timings = {
         "encoding_seconds": 0.0,
         "evaluation_seconds": 0.0,
@@ -137,6 +161,9 @@ def fit(
     }
     history: list[dict[str, Any]] = []
     best_parameters: dict[str, Any] | None = None
+    best_validation: dict[str, Any] | None = None
+    baseline_phase = False
+    evaluation_cache: dict[str, Any] = {}
     best_step = 0
     best_score: tuple[bool, float, float] | None = None
     stale_checks = 0
@@ -190,6 +217,12 @@ def fit(
         limit()
         sample = {**sample, "max_tokens": min(sample["max_tokens"], settings["processed_tokens"])}
         key = artifacts.sample_key(sample, settings["processed_tokens"])
+        if baseline_phase and baseline_vectors is not None:
+            counters["cache_hits"] += 1
+            return torch.tensor(baseline_vectors[key], device=device)
+        if not gradients and key in evaluation_cache:
+            counters["cache_hits"] += 1
+            return evaluation_cache[key]
         if mode == "frozen_heads" and key in cache:
             counters["cache_hits"] += 1
             return cache[key]
@@ -201,6 +234,7 @@ def fit(
         with torch.set_grad_enabled(gradients and mode == "adapter"):
             value = raw_forward(model, features)[0]
         counters["encoder_forwards"] += 1
+        counters["gradient_forwards"] += int(gradients and mode == "adapter")
         mask = features.get("attention_mask")
         if mask is not None:
             counters["processed_tokens"] += int(mask.sum())
@@ -209,7 +243,7 @@ def fit(
         if value.shape != (768,) or not bool(torch.isfinite(value).all()):
             raise ValueError("Nonfinite or invalid encoder carrier")
         for d in (128, 256, 512, 768):
-            if float(value[:d].norm()) <= 1e-12:
+            if float(value[:d].detach().norm()) <= 1e-12:
                 raise ValueError("Collapsed encoder prefix")
         if mode == "frozen_heads":
             cache[key] = value.detach()
@@ -224,6 +258,43 @@ def fit(
 
     def measurements(rows: list[dict[str, Any]]) -> dict[str, Any]:
         began = time.monotonic()
+        evaluation_cache.clear()
+        if mode == "adapter" and not baseline_phase:
+            spec = importlib.util.spec_from_file_location(
+                "encoder_batch_worker", Path(__file__).with_name("worker.py")
+            )
+            assert spec is not None and spec.loader is not None
+            worker = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(worker)
+            samples = artifacts.inputs({"groups": {"evaluation": rows}, "settings": settings})
+            buckets: dict[str, list[tuple[str, Any]]] = {}
+            for key, sample in samples.items():
+                if all(p["modality"] in {"text", "structured"} for p in sample["parts"]):
+                    buckets.setdefault(sample["recipe"], []).append((key, sample))
+            with torch.no_grad():
+                for bucket in buckets.values():
+                    for offset in range(0, len(bucket), settings.get("encode_batch_size", 4)):
+                        limit()
+                        chunk = bucket[offset : offset + settings.get("encode_batch_size", 4)]
+                        batch = [
+                            {
+                                **sample,
+                                "max_tokens": min(
+                                    sample["max_tokens"], settings["processed_tokens"]
+                                ),
+                            }
+                            for _, sample in chunk
+                        ]
+                        features = worker.batch_features(model, batch)
+                        values = raw_forward(model, features)
+                        if values.shape != (len(chunk), 768):
+                            raise ValueError("Adapter evaluation batch shape changed")
+                        counters["encoder_forwards"] += 1
+                        counters["processed_tokens"] += int(features["attention_mask"].sum())
+                        for (key, _), value in zip(chunk, values, strict=True):
+                            artifacts.admit(value.float().cpu().tolist())
+                            evaluation_cache[key] = value.detach()
+                        limit()
         correct = {str(d): 0 for d in (128, 256, 512, 768)}
         margins: list[float] = []
         vectors: list[Any] = []
@@ -290,6 +361,8 @@ def fit(
             else {name: p.detach().cpu() for name, p in trainable},
             "selected_parameters": best_parameters,
             "selected_step": best_step,
+            "selected_validation": best_validation,
+            "counters": counters,
             "best_score": best_score,
             "stale_checks": stale_checks,
             "sampler_order": order,
@@ -335,8 +408,10 @@ def fit(
             limit()
             artifacts.admit(value)
             cache[key] = torch.tensor(value, device=device)
+        baseline_phase = True
         baseline = measurements(request["groups"]["test"])
         validation_baseline = measurements(request["groups"]["validation"])
+        baseline_phase = False
     except InterruptedError:
         save("stopped", current_parameters)
         return {"status": "stopped", "checkpoint": str(output), "steps": global_step}
@@ -364,6 +439,8 @@ def fit(
         best_parameters, best_step = saved.get("selected_parameters"), saved.get("selected_step", 0)
         best_score, stale_checks = saved.get("best_score"), saved.get("stale_checks", 0)
         history = saved.get("history", [])
+        best_validation = saved.get("selected_validation")
+        counters.update(saved.get("counters", {}))
 
     try:
         rows = request["groups"]["train"]
@@ -475,6 +552,7 @@ def fit(
                 progress["validation"] = {k: v for k, v in checked.items() if k != "predictions"}
                 if best_score is None or score > tuple(best_score):
                     best_score, best_step, stale_checks = score, global_step, 0
+                    best_validation = checked
                     best_parameters = {name: p.detach().cpu().clone() for name, p in trainable}
                 else:
                     stale_checks += 1
@@ -491,7 +569,11 @@ def fit(
         if model is not None:
             model.eval()
         candidate = measurements(request["groups"]["test"])
-        validation = measurements(request["groups"]["validation"])
+        validation = (
+            best_validation
+            if best_validation is not None
+            else measurements(request["groups"]["validation"])
+        )
         updated = [name for name, p in trainable if not torch.equal(initial[name], p)]
         result: dict[str, Any] = {
             "status": "complete",

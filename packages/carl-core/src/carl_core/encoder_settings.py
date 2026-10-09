@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .encoder import Contract, ExecutionBinding
 
@@ -32,6 +32,7 @@ class EncoderSettings(Contract):
     action_evaluator: str | None = None
     required_slices: tuple[str, ...] = ("text:128", "text:256", "text:512", "text:768")
     required_policies: tuple[str, ...] = ()
+    baseline_cache: str | None = None
     embedding_cache: str | None = None
     head_layout: Literal["shared", "per_rung"] = "shared"
     relation_weight: float = Field(default=1, ge=0, allow_inf_nan=False)
@@ -40,3 +41,9 @@ class EncoderSettings(Contract):
     early_stop_patience: int = Field(default=3, ge=1)
     checkpoint_every_steps: int = Field(default=16, ge=1)
     encode_batch_size: int = Field(default=4, ge=1, le=4)
+
+    @model_validator(mode="after")
+    def validate_cache_mode(self) -> EncoderSettings:
+        if self.baseline_cache and (self.mode != "adapter" or self.embedding_cache):
+            raise ValueError("Adapter baseline cache is separate from frozen-head embedding cache")
+        return self

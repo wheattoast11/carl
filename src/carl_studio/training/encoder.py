@@ -68,7 +68,9 @@ def carrier_binding(config: TrainingConfig) -> dict[str, Any]:
         raise ValueError("Prepared encoder execution required")
     return {
         "model": source_identity(Path(config.base_model))[0],
-        "execution": config.encoder.execution.model_dump(mode="json"),
+        "execution": config.encoder.execution.model_copy(
+            update={"trainable_modules": ()}
+        ).model_dump(mode="json"),
         "processed_tokens": config.encoder.processed_tokens,
         "encoding_batch_size": config.encoder.encode_batch_size,
     }
@@ -271,14 +273,15 @@ def prepare(
         config.encoder = settings.model_copy(update={"execution": execution})
     except (ValueError, OSError, RuntimeError, CARLError):
         issue("encoder_environment", "Isolated interpreter or model qualification failed")
-    if config.encoder and config.encoder.embedding_cache:
+    if config.encoder and (config.encoder.embedding_cache or config.encoder.baseline_cache):
         from carl_encoders.artifacts import inputs, load_carriers
 
         try:
-            if config.encoder.mode != "frozen_heads":
+            if config.encoder.embedding_cache and config.encoder.mode != "frozen_heads":
                 raise ValueError("Adapter learning requires differentiable fresh features")
-            manifest = Path(config.encoder.embedding_cache).resolve()
-            config.encoder = config.encoder.model_copy(update={"embedding_cache": str(manifest)})
+            field = "embedding_cache" if config.encoder.embedding_cache else "baseline_cache"
+            manifest = Path(getattr(config.encoder, field)).resolve()
+            config.encoder = config.encoder.model_copy(update={field: str(manifest)})
             request = {
                 "settings": config.encoder.model_dump(mode="json"),
                 "groups": {
@@ -527,7 +530,7 @@ async def train(trainer: Any) -> TrainingRun:
         ),
         "resume": config.resume_from_checkpoint,
     }
-    if config.encoder.embedding_cache:
+    if config.encoder.embedding_cache or config.encoder.baseline_cache:
         request["cache_binding"] = carrier_binding(config)
     trainer.run.checkpoint = str(config.output_dir)
     trainer.run.phase = RunPhase.TRAINING
