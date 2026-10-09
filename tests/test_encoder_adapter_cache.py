@@ -41,6 +41,9 @@ def test_adapter_cache_baseline_and_differentiable_batches(tmp_path, monkeypatch
                 self.language_model.q_proj.weight.fill_(0)
                 self.language_model.v_proj.weight.fill_(0)
 
+        def gradient_checkpointing_enable(self, *, gradient_checkpointing_kwargs):
+            self.checkpointing = gradient_checkpointing_kwargs
+
     class Tower(torch.nn.Module):
         def __init__(self):
             super().__init__()
@@ -104,6 +107,7 @@ def test_adapter_cache_baseline_and_differentiable_batches(tmp_path, monkeypatch
     ]
     settings = {
         "mode": "adapter",
+        "gradient_checkpointing": True,
         "rank": 8,
         "alpha": 16,
         "dropout": 0,
@@ -143,6 +147,7 @@ def test_adapter_cache_baseline_and_differentiable_batches(tmp_path, monkeypatch
     settings["baseline_cache"] = str(manifest)
     model.batches.clear()
     result = fit(request, model, process, forward)
+    assert model[0].auto_model.checkpointing == {"use_reentrant": False}
     assert result["counters"]["gradient_forwards"] == 6
     assert result["counters"]["cache_hits"] >= 12
     assert any(size > 1 for size in model.batches)

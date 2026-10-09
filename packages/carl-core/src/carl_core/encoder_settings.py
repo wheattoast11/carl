@@ -18,6 +18,7 @@ class EncoderSettings(Contract):
     rank: int = Field(default=8, ge=1, le=64)
     alpha: int = Field(default=16, ge=1)
     dropout: float = Field(default=0, ge=0, lt=1, allow_inf_nan=False)
+    gradient_checkpointing: bool = True
     temperature: float = Field(default=0.05, gt=0, allow_inf_nan=False)
     optimizer_steps: int = Field(default=128, ge=1, le=128)
     microbatch: int = Field(default=4, ge=1, le=4)

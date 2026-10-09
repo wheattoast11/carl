@@ -56,6 +56,8 @@ unadapted reference after a fresh numerical correspondence check. Candidate
 evaluation uses current adapter weights and batches text by recipe. The selected
 validation measurement is retained with its checkpoint. Media uses singleton
 processing. Preparation also hashes the installed PEFT implementation.
+Adapters enable nonreentrant activation checkpointing by default to bound memory;
+its recomputation cost remains part of the execution deadline.
 
 ## Select with validation
 

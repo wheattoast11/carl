@@ -144,6 +144,10 @@ def fit(
                 bias="none",
             ),
         )
+        if settings.get("gradient_checkpointing", False):
+            model[0].auto_model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
     per_rung = settings.get("head_layout", "shared") == "per_rung"
     ranker = (
         torch.nn.ModuleDict(
