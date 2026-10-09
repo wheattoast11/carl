@@ -284,7 +284,7 @@ def fit(
         began = time.monotonic()
         features = features_for(model, sample)
         with torch.set_grad_enabled(gradients and mode == "adapter"):
-            value = raw_forward(model, features)[0]
+            value = raw_forward(model, features)[0].float()
         counters["encoder_forwards"] += 1
         counters["gradient_forwards"] += int(gradients and mode == "adapter")
         mask = features.get("attention_mask")
@@ -338,7 +338,7 @@ def fit(
                             for _, sample in chunk
                         ]
                         features = worker.batch_features(model, batch)
-                        values = raw_forward(model, features)
+                        values = raw_forward(model, features).float()
                         if values.shape != (len(chunk), 768):
                             raise ValueError("Adapter evaluation batch shape changed")
                         counters["encoder_forwards"] += 1

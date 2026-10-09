@@ -80,7 +80,10 @@ def test_processor_order_and_combined_budget():
         features_for(Processor(), {**request, "max_tokens": 11})
 
 
-def test_real_head_optimizer_checkpoint_and_constant_counterexample(tmp_path: Path):
+@pytest.mark.parametrize("feature_dtype", ["float32", "bfloat16"])
+def test_real_head_optimizer_checkpoint_and_constant_counterexample(
+    tmp_path: Path, feature_dtype: str
+):
     torch: Any = importlib.import_module("torch")
     from carl_studio.semantic.fit_worker import fit
 
@@ -124,7 +127,7 @@ def test_real_head_optimizer_checkpoint_and_constant_counterexample(tmp_path: Pa
         return {"label": sample["parts"][0]["text"]}
 
     def forward(model, features):
-        values = torch.ones((1, 768))
+        values = torch.ones((1, 768), dtype=getattr(torch, feature_dtype))
         values[0, 0] = 2 if "positive" in features["label"] else -1
         return values
 
