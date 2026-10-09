@@ -143,3 +143,9 @@ The initial Codex scope monitor omitted children launched from worker threads.
 The protocol receipt is valid; its launcher-only RSS peak is not a scope peak.
 The monitor was corrected to traverse every thread's child list before Claude.
 Claude's total owned-process peak was 2,870,018,048 bytes.
+
+
+OpenCode final-source retry passed under a fresh 3.25 GiB owned-tree scope.
+Its peak was 3,174,379,520 bytes. The earlier failed scope remains a separate
+resource-limit result. All three native hosts completed the shared semantic
+operation with the real pinned text encoder and synthetic localhost providers.
