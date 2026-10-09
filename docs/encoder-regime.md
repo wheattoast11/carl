@@ -89,3 +89,12 @@ Resource admission applies before any model qualification or cache computation.
 Use the configured compute owner to cover all child processes, fresh aggregate
 headroom, deadlines and settlement. The package does not embed a workstation's
 private resource policy.
+
+Choose `encoder.device: cuda:0` for a GPU worker. The default remains CPU.
+`encoder.dtype` explicitly selects `float32` (default) or `bfloat16` on CUDA.
+Preparation records the actual device, precision, GPU model, compute capability
+and installed CUDA runtime. A loaded model that differs from that binding fails.
+Carrier caches retain that producer identity, so changing precision or device
+requires a new cache. Cached heads train on the selected device without loading
+the encoder. GPU limits use peak reserved device memory; host RAM, allocated
+device memory and reserved device memory are reported separately.

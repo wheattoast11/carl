@@ -21,7 +21,7 @@ def configure_threads() -> None:
         os.environ[name] = "4"
 
 
-def metadata() -> dict[str, Any]:
+def metadata(device: str = "cpu", dtype: str = "float32") -> dict[str, Any]:
     dependencies = {}
     for name in ("torch", "transformers", "sentence-transformers", "peft"):
         try:
@@ -39,15 +39,33 @@ def metadata() -> dict[str, Any]:
     dependencies["carl.encoder.artifacts_sha256"] = hashlib.sha256(
         Path(__file__).with_name("artifacts.py").read_bytes()
     ).hexdigest()
+    if device != "cpu":
+        torch: Any = importlib.import_module("torch")
+        selected = torch.device(device)
+        if selected.type != "cuda" or not torch.cuda.is_available():
+            raise ValueError("Requested encoder CUDA device is unavailable")
+        index = selected.index if selected.index is not None else torch.cuda.current_device()
+        properties = torch.cuda.get_device_properties(index)
+        device = f"cuda:{index}"
+        dependencies["carl.encoder.cuda_device"] = str(properties.name)
+        dependencies["carl.encoder.cuda_capability"] = f"{properties.major}.{properties.minor}"
+        dependencies["carl.encoder.cuda_runtime"] = str(torch.version.cuda or torch.version.hip)
     interpreter = Path(sys.executable).resolve()
     return {
         "interpreter": str(interpreter),
         "interpreter_sha256": hashlib.sha256(interpreter.read_bytes()).hexdigest(),
         "dependencies": dependencies,
+        "device": device,
+        "dtype": dtype,
     }
 
 
-def load_model(path: str, device: str = "cpu", modalities: set[str] | None = None) -> Any:
+def load_model(
+    path: str,
+    device: str = "cpu",
+    modalities: set[str] | None = None,
+    dtype: str | None = None,
+) -> Any:
     torch: Any = importlib.import_module("torch")
     torch.set_num_threads(min(4, torch.get_num_threads()))
     SentenceTransformer: Any = importlib.import_module("sentence_transformers").SentenceTransformer
@@ -58,13 +76,25 @@ def load_model(path: str, device: str = "cpu", modalities: set[str] | None = Non
         config["vision_config"] = None
     if "audio" not in selected:
         config["audio_config"] = None
-    return SentenceTransformer(
+    selected_dtype = dtype or ("float32" if device == "cpu" else "bfloat16")
+    if selected_dtype not in {"float32", "bfloat16"}:
+        raise ValueError("Unsupported encoder precision")
+    model = SentenceTransformer(
         path,
         config_kwargs=config,
         local_files_only=True,
         device=device,
-        model_kwargs={"torch_dtype": torch.float32 if device == "cpu" else torch.bfloat16},
+        model_kwargs={"torch_dtype": getattr(torch, selected_dtype)},
     )
+    actual_device = torch.device(model.device)
+    requested_device = torch.device(device)
+    if actual_device.type != requested_device.type or (
+        requested_device.index is not None and actual_device.index != requested_device.index
+    ):
+        raise ValueError("Loaded encoder device differs from its binding")
+    if next(model[0].auto_model.parameters()).dtype != getattr(torch, selected_dtype):
+        raise ValueError("Loaded encoder precision differs from its binding")
+    return model
 
 
 def features_for(model: Any, request: dict[str, Any]) -> dict[str, Any]:
@@ -160,14 +190,15 @@ def cache_carriers(request: dict[str, Any]) -> dict[str, Any]:
     tokens = 0
     started = request.get("_started", time.monotonic())
     settings = request["settings"]
+    model = None
 
     def limit() -> None:
         if time.monotonic() - started >= settings["runtime_s"]:
             raise TimeoutError("Encoder cache runtime exceeded")
-        if (
-            resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
-            > settings["memory_gib"] * 1024**3
-        ):
+        allocated = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+        if model is not None and str(model.device).startswith("cuda"):
+            allocated = torch.cuda.max_memory_reserved(model.device)
+        if allocated > settings["memory_gib"] * 1024**3:
             raise TimeoutError("Encoder cache memory exceeded")
 
     limit()
@@ -175,7 +206,12 @@ def cache_carriers(request: dict[str, Any]) -> dict[str, Any]:
         limit()
         torch: Any = importlib.import_module("torch")
         modalities = {p["modality"] for _, v in pending for p in v["parts"]}
-        model = load_model(request["model"], binding["execution"]["device"], modalities)
+        model = load_model(
+            request["model"],
+            binding["execution"]["device"],
+            modalities,
+            binding["execution"].get("dtype", "float32"),
+        )
         model.eval()
         buckets: dict[str, list[tuple[str, dict[str, Any]]]] = {}
         for key, value in pending:
@@ -214,6 +250,7 @@ def cache_carriers(request: dict[str, Any]) -> dict[str, Any]:
                     artifacts.atomic_json(manifest, document)
                     limit()
     limit()
+    gpu = model is not None and str(model.device).startswith("cuda")
     return {
         "manifest": str(manifest.resolve()),
         "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
@@ -223,6 +260,9 @@ def cache_carriers(request: dict[str, Any]) -> dict[str, Any]:
         "model_loads": int(bool(pending)),
         "processed_tokens": tokens,
         "elapsed_seconds": time.monotonic() - started,
+        "host_peak_memory_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
+        "gpu_peak_allocated_bytes": torch.cuda.max_memory_allocated(model.device) if gpu else 0,
+        "gpu_peak_reserved_bytes": torch.cuda.max_memory_reserved(model.device) if gpu else 0,
     }
 
 
@@ -269,10 +309,10 @@ def main() -> None:
     )
     parser.add_argument("--request")
     args = parser.parse_args()
+    request: dict[str, Any] = json.loads(Path(args.request).read_text()) if args.request else {}
     if args.operation == "metadata":
-        print(json.dumps(metadata()))
+        print(json.dumps(metadata(request.get("device", "cpu"), request.get("dtype", "float32"))))
         return
-    request = json.loads(Path(args.request).read_text())
     request["_started"] = request.get("started", time.monotonic())
     if args.operation == "cache":
         print(json.dumps(cache_carriers(request)))
@@ -339,14 +379,17 @@ def main() -> None:
         modalities = set(request.get("modalities", ["text"]))
     else:
         modalities = {part["modality"] for part in request["input"]["parts"]}
-    model = load_model(request["model"], request.get("device", "cpu"), modalities)
+    model = load_model(
+        request["model"], request.get("device", "cpu"), modalities, request.get("dtype")
+    )
     if args.operation == "qualify":
         targets = [
             name
             for name, _ in model[0].auto_model.named_modules()
             if ".language_model." in "." + name and name.endswith((".q_proj", ".v_proj"))
         ]
-        print(json.dumps({**metadata(), "trainable_modules": targets}))
+        dtype = str(next(model[0].auto_model.parameters()).dtype).removeprefix("torch.")
+        print(json.dumps({**metadata(str(model.device), dtype), "trainable_modules": targets}))
         return
     if args.operation == "fit":
         print(json.dumps(sibling("fit_worker").fit(request, model, features_for, raw_forward)))

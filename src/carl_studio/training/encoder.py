@@ -262,8 +262,14 @@ def prepare(
     try:
         _, processor = source_identity(Path(config.base_model))
         with Session() as session:
-            operation = "qualify" if settings.mode == "adapter" else "metadata"
-            request = {"model": config.base_model} if operation == "qualify" else None
+            operation = (
+                "qualify" if settings.mode == "adapter" or settings.device != "cpu" else "metadata"
+            )
+            request = {
+                "model": config.base_model,
+                "device": settings.device,
+                "dtype": settings.dtype,
+            }
             metadata = invoke(session, Path(settings.interpreter), operation, request)
             if settings.mode == "adapter":
                 metadata["dependencies"].update(
@@ -440,12 +446,20 @@ def validate(prepared: TrainingPreparation, config: TrainingConfig | None = None
     if bound.encoder is None or bound.encoder.execution is None:
         raise ValidationError("Encoder execution unbound", code="carl.encoder.stale")
     with Session() as session:
-        current = invoke(session, Path(bound.encoder.interpreter), "metadata")
+        current = invoke(
+            session,
+            Path(bound.encoder.interpreter),
+            "metadata",
+            {
+                "device": bound.encoder.device,
+                "dtype": bound.encoder.dtype,
+            },
+        )
         if bound.encoder.mode == "adapter":
             current["dependencies"].update(
                 invoke(session, Path(bound.encoder.interpreter), "fit_metadata")
             )
-    for key in ("interpreter", "interpreter_sha256", "dependencies"):
+    for key in ("interpreter", "interpreter_sha256", "dependencies", "device", "dtype"):
         if current[key] != getattr(bound.encoder.execution, key):
             raise ValidationError("Encoder environment changed", code="carl.encoder.stale")
     groups(bound)
@@ -521,6 +535,8 @@ async def train(trainer: Any) -> TrainingRun:
     await run_in_worker(prepare_media, on_cancel=trainer._cancel_requested.set)
     request = {
         "model": config.base_model,
+        "device": config.encoder.device,
+        "dtype": config.encoder.dtype,
         "run_id": trainer.run.id,
         "started": started,
         "settings": config.encoder.model_dump(mode="json"),
@@ -577,6 +593,9 @@ async def train(trainer: Any) -> TrainingRun:
         "elapsed_seconds": result.get("elapsed_seconds", 0),
         "peak_memory_bytes": result.get("peak_memory_bytes", 0),
     }
+    for name in ("host_peak_memory_bytes", "gpu_peak_allocated_bytes", "gpu_peak_reserved_bytes"):
+        if name in result:
+            trainer.run.resource_usage[name] = float(result[name])
     for name in ("counters", "timings"):
         trainer.run.resource_usage.update(
             {key: float(value) for key, value in result.get(name, {}).items()}

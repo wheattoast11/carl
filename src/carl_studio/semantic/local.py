@@ -94,11 +94,12 @@ def bind_local(
     model: Path,
     interpreter: Path,
     *,
-    device: str = "cpu",
+    device: str | None = None,
     checkpoint: Path | None = None,
     expected_execution: ExecutionBinding | None = None,
 ) -> None:
     """Use exact offline model and environment bytes without installing anything."""
+    device = device or (expected_execution.device if expected_execution is not None else "cpu")
     artifact, processor = source_identity(model)
     checkpoint_identity = None
     state: dict[str, Any] = {}
@@ -118,17 +119,33 @@ def bind_local(
         artifact_sha256=artifact,
         processor_sha256=processor,
     )
-    runtime = invoke(session, interpreter, "metadata")
+    dtype = (
+        expected_execution.dtype
+        if expected_execution is not None
+        else ("float32" if device == "cpu" else "bfloat16")
+    )
+    runtime = invoke(session, interpreter, "metadata", {"device": device, "dtype": dtype})
+    if expected_execution is not None and any(
+        name.startswith("carl.encoder.fit.") for name in expected_execution.dependencies
+    ):
+        runtime["dependencies"].update(invoke(session, interpreter, "fit_metadata"))
+    runtime.setdefault("device", device)
+    runtime.setdefault("dtype", dtype)
     execution = ExecutionBinding(
         **runtime,
         processor_sha256=processor,
-        device=device,
-        dtype="float32" if device == "cpu" else "bfloat16",
     )
 
     if expected_execution is not None and any(
         getattr(execution, key) != getattr(expected_execution, key)
-        for key in ("interpreter", "interpreter_sha256", "dependencies", "processor_sha256")
+        for key in (
+            "interpreter",
+            "interpreter_sha256",
+            "dependencies",
+            "processor_sha256",
+            "device",
+            "dtype",
+        )
     ):
         raise ValueError("Active worker execution identity changed")
 
@@ -191,6 +208,7 @@ def bind_local(
                 {
                     "model": str(model),
                     "device": device,
+                    "dtype": dtype,
                     "input": data,
                     "checkpoint": str(checkpoint) if checkpoint else None,
                 },

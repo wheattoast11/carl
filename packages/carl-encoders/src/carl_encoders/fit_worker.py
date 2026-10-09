@@ -56,17 +56,23 @@ def fit(
     ceiling = settings["memory_gib"] * 1024**3
     output = Path(request["output"])
     output.mkdir(parents=True, exist_ok=True)
-    device = model.device if model is not None else torch.device("cpu")
+    device = model.device if model is not None else torch.device(settings.get("device", "cpu"))
+
+    def memory_usage() -> dict[str, int]:
+        host = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
+        allocated = torch.cuda.max_memory_allocated(device) if device.type == "cuda" else 0
+        reserved = torch.cuda.max_memory_reserved(device) if device.type == "cuda" else 0
+        return {
+            "host_peak_memory_bytes": host,
+            "gpu_peak_allocated_bytes": allocated,
+            "gpu_peak_reserved_bytes": reserved,
+            "peak_memory_bytes": reserved if device.type == "cuda" else host,
+        }
 
     def limit() -> None:
-        allocated = (
-            torch.cuda.max_memory_allocated(device)
-            if device.type == "cuda"
-            else resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
-        )
         if (output / "cancel").exists():
             raise InterruptedError("Encoder execution was cancelled")
-        if time.monotonic() > deadline or allocated > ceiling:
+        if time.monotonic() > deadline or memory_usage()["peak_memory_bytes"] > ceiling:
             raise TimeoutError("Encoder pilot resource ceiling exceeded")
 
     if device.type == "cpu":
@@ -477,9 +483,9 @@ def fit(
         optimizer.load_state_dict(saved["optimizer"])
         scheduler.load_state_dict(saved["scheduler"])
         random.setstate(saved["python_rng"])
-        torch.set_rng_state(saved["torch_rng"])
+        torch.set_rng_state(saved["torch_rng"].cpu())
         if device.type == "cuda":
-            torch.cuda.set_rng_state_all(saved["cuda_rng"])
+            torch.cuda.set_rng_state_all([state.cpu() for state in saved["cuda_rng"]])
         global_step, data_position = saved["step"], saved["data_position"]
         order, order_position = saved.get("sampler_order", []), saved.get("sampler_position", 0)
         best_parameters, best_step = saved.get("selected_parameters"), saved.get("selected_step", 0)
@@ -633,7 +639,8 @@ def fit(
             "updated_parameters": updated,
             "targets": targets,
             "elapsed_seconds": time.monotonic() - started,
-            "peak_memory_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
+            **memory_usage(),
+            "device": str(device),
             "selected_step": best_step,
             "history": history,
             "timings": timings,

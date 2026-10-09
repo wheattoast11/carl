@@ -14,6 +14,8 @@ class EncoderSettings(Contract):
 
     mode: Literal["frozen_heads", "adapter"] = "frozen_heads"
     interpreter: str
+    device: str = Field(default="cpu", pattern=r"^(cpu|cuda(?::[0-9]+)?)$")
+    dtype: Literal["float32", "bfloat16"] = "float32"
     execution: ExecutionBinding | None = None
     rank: int = Field(default=8, ge=1, le=64)
     alpha: int = Field(default=16, ge=1)
@@ -45,6 +47,8 @@ class EncoderSettings(Contract):
 
     @model_validator(mode="after")
     def validate_cache_mode(self) -> EncoderSettings:
+        if self.device == "cpu" and self.dtype != "float32":
+            raise ValueError("CPU encoder execution requires float32")
         if self.baseline_cache and (self.mode != "adapter" or self.embedding_cache):
             raise ValueError("Adapter baseline cache is separate from frozen-head embedding cache")
         return self
