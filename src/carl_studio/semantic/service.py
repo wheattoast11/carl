@@ -328,9 +328,16 @@ class SemanticService:
                 for ref, text, lexical in sources
             ]
             dimensions = self.binding.dimensions if self.binding is not None else q.dimensions
-            initial = next(
-                (d for d in dimensions if active_view_head(d, dimensions[-1]) is not None),
-                next((d for d in dimensions if d >= 128), dimensions[-1]),
+            from .views import default_view_width
+
+            preferred = default_view_width()
+            armed = [d for d in dimensions if active_view_head(d, dimensions[-1]) is not None]
+            initial = (
+                preferred
+                if preferred in armed
+                else armed[0]
+                if armed
+                else next((d for d in dimensions if d >= 128), dimensions[-1])
             )
             middle = next((d for d in dimensions if d >= 512), dimensions[-1])
             full = dimensions[-1]

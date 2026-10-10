@@ -1,4 +1,4 @@
-"""Accepted linear view heads: a judged 768->width int8 view replaces the scoring prefix at that width."""
+"""Accepted linear view heads: judged 768->width int8 views replace the scoring prefix at their widths (rulings 60, 61, 63, 66)."""
 
 from __future__ import annotations
 
@@ -15,8 +15,12 @@ from pydantic import Field
 from .types import Contract, register_view_head
 
 HEADS = Path(__file__).resolve().parent / "heads"
-SHIPPED = HEADS / "embeddinggemma2-view256.json"
+SHIPPED_256 = HEADS / "embeddinggemma2-view256.json"
+SHIPPED_512 = HEADS / "embeddinggemma2-view512.json"
+SHIPPED = SHIPPED_512
 FLAG = "CARL_VIEW_HEAD"
+WIDTH_FLAG = "CARL_VIEW_WIDTH"
+DEFAULT_WIDTH = 512
 
 
 class ViewHeadAcceptance(Contract):
@@ -114,16 +118,25 @@ def load_view_head(acceptance_path: Path) -> ViewHead:
     return ViewHead(acceptance, (acceptance_path.parent / acceptance.weights_file).read_bytes())
 
 
-def arm_shipped() -> ViewHead | None:
-    """Register the shipped accepted head; the prefix stays the scoring path when the flag is off or acceptance fails."""
-    if not enabled() or not SHIPPED.exists():
-        return None
-    try:
-        head = load_view_head(SHIPPED)
-    except (ValueError, OSError):
-        return None
-    register_view_head(head)
-    return head
+def default_view_width() -> int:
+    """Width recall starts at: 512 int8 (full budget) unless CARL_VIEW_WIDTH names another armed width."""
+    raw = os.environ.get(WIDTH_FLAG, "")
+    return int(raw) if raw.isdigit() else DEFAULT_WIDTH
+
+
+def arm_shipped() -> list[ViewHead]:
+    """Register every shipped accepted head; a head whose acceptance fails is skipped and the prefix stays at its width."""
+    if not enabled():
+        return []
+    armed: list[ViewHead] = []
+    for path in sorted(HEADS.glob("*.json")):
+        try:
+            head = load_view_head(path)
+        except (ValueError, OSError):
+            continue
+        register_view_head(head)
+        armed.append(head)
+    return armed
 
 
 def activate_view_head(

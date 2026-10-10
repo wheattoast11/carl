@@ -150,7 +150,7 @@ Its peak was 3,174,379,520 bytes. The earlier failed scope remains a separate
 resource-limit result. All three native hosts completed the shared semantic
 operation with the real pinned text encoder and synthetic localhost providers.
 
-## Accepted view head (2026-10-10)
+## Accepted view heads (2026-10-10)
 
 Field plan rulings 60, 61 and 63 set representation acceptance for views as a
 byte budget: at most 512 bytes per view, judged by strix-mind
@@ -161,9 +161,15 @@ head is `src/carl_studio/semantic/heads/embeddinggemma2-view256.f32`, a
 over random projection 0.2434, shuffled 0.0375, 256 bytes. The receipt is
 `heads/embeddinggemma2-view256.json`; source carl 354e98b.
 
-`Carrier.scoring(256)` returns this int8 view when the head is armed;
-`CARL_VIEW_HEAD=prefix` keeps the normalized 256 prefix. `SemanticService.bind`
-arms the shipped head and `recall` starts at the armed width. Local activation
+Ruling 66 moved the shipped default to `heads/embeddinggemma2-view512.f32`, the
+top 512 principal directions of the same 5,771 rows, int8: man1-256 candidate
+0.9934, margin 0.2344, 512 bytes, the byte cost of the old 128 fp32 prefix;
+held-out validation draws 0.9930, 0.9891, 0.9887. The 256 head stays shipped as
+the half-budget option.
+
+`Carrier.scoring(w)` returns the armed int8 view at width 256 or 512;
+`CARL_VIEW_HEAD=prefix` keeps the normalized prefixes. `SemanticService.bind`
+arms every shipped head and `recall` starts at `CARL_VIEW_WIDTH` (default 512). Local activation
 records the declared effect `Activate accepted view head 256 for <workspace>`
 under `view-head:<workspace hash>` with its predecessor
 (`semantic/views.py::activate_view_head`). The 224-wide (0.9016) and 320-wide
