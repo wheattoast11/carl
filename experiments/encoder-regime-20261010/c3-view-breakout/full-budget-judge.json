@@ -1,0 +1,29 @@
+{
+ "schema": "carl.c3-full-budget-judge/v1",
+ "predicted": {
+  "pca512-int8": 0.993,
+  "pca384-int8": 0.945
+ },
+ "rows": [
+  {
+   "tag": "pca384-int8",
+   "views_sha256": "94f19ca3cfbddf943209f603f9bd7931a95c969e7632048125ed5f34bf5bdadd",
+   "candidate": 0.944921875,
+   "margin": 0.21406250000000004,
+   "shuffled": 0.0375,
+   "view_bytes": 384,
+   "within_budget": true,
+   "passed": true
+  },
+  {
+   "tag": "pca512-int8",
+   "views_sha256": "d4646193d39e10b04eb635703ea85dabfd772c55f5cebd7cec24fac3d4e65346",
+   "candidate": 0.993359375,
+   "margin": 0.234375,
+   "shuffled": 0.036328125,
+   "view_bytes": 512,
+   "within_budget": true,
+   "passed": true
+  }
+ ]
+}
