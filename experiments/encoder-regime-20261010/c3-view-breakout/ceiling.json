@@ -1,0 +1,158 @@
+{
+  "schema": "carl.c3-ceiling/v1",
+  "anchors": 256,
+  "k": 10,
+  "tie_gap_rank10_vs_11": {
+    "mean": 0.0027760721277445555,
+    "median": 0.0018117129802703857,
+    "p10": 0.00025260448455810547,
+    "below_0.005": 214,
+    "below_0.01": 247
+  },
+  "sim_rank1_mean": 0.8278008699417114,
+  "sim_rank10_mean": 0.7512114644050598,
+  "sim_rank11_mean": 0.748435378074646,
+  "pca_width_table": [
+    {
+      "width": 64,
+      "anchors_pca_train": 0.7375,
+      "val_pca_train": 0.6982421875,
+      "anchors_pca_on_anchors_leaky": 0.8394531250000001,
+      "anchors_pca_train_fp16": 0.7375,
+      "bytes_fp16": 128,
+      "anchors_pca_train_int8": 0.7390625,
+      "bytes_int8": 64
+    },
+    {
+      "width": 96,
+      "anchors_pca_train": 0.7859375,
+      "val_pca_train": 0.7627929687499999,
+      "anchors_pca_on_anchors_leaky": 0.8863281250000001,
+      "anchors_pca_train_fp16": 0.7859375,
+      "bytes_fp16": 192,
+      "anchors_pca_train_int8": 0.7871093750000001,
+      "bytes_int8": 96
+    },
+    {
+      "width": 128,
+      "anchors_pca_train": 0.8199218750000001,
+      "val_pca_train": 0.8040039062500001,
+      "anchors_pca_on_anchors_leaky": 0.9203125000000002,
+      "anchors_pca_train_fp16": 0.8203125000000001,
+      "bytes_fp16": 256,
+      "anchors_pca_train_int8": 0.8183593750000001,
+      "bytes_int8": 128
+    },
+    {
+      "width": 160,
+      "anchors_pca_train": 0.8359375000000002,
+      "val_pca_train": 0.83369140625,
+      "anchors_pca_on_anchors_leaky": 0.9421875000000002,
+      "anchors_pca_train_fp16": 0.8359375000000002,
+      "bytes_fp16": 320,
+      "anchors_pca_train_int8": 0.8355468750000001,
+      "bytes_int8": 160
+    },
+    {
+      "width": 192,
+      "anchors_pca_train": 0.8640625000000002,
+      "val_pca_train": 0.8589843750000001,
+      "anchors_pca_on_anchors_leaky": 0.962890625,
+      "anchors_pca_train_fp16": 0.8644531250000003,
+      "bytes_fp16": 384,
+      "anchors_pca_train_int8": 0.8632812500000002,
+      "bytes_int8": 192
+    },
+    {
+      "width": 224,
+      "anchors_pca_train": 0.8773437500000002,
+      "val_pca_train": 0.8770507812500001,
+      "anchors_pca_on_anchors_leaky": 0.9773437500000001,
+      "anchors_pca_train_fp16": 0.8773437500000002,
+      "bytes_fp16": 448,
+      "anchors_pca_train_int8": 0.8773437500000001,
+      "bytes_int8": 224
+    },
+    {
+      "width": 256,
+      "anchors_pca_train": 0.8898437500000002,
+      "val_pca_train": 0.8965820312500001,
+      "anchors_pca_on_anchors_leaky": 1.0,
+      "anchors_pca_train_fp16": 0.8898437500000002,
+      "bytes_fp16": 512,
+      "anchors_pca_train_int8": 0.8906250000000002,
+      "bytes_int8": 256
+    },
+    {
+      "width": 320,
+      "anchors_pca_train": 0.9144531250000002,
+      "val_pca_train": 0.9252929687500002,
+      "anchors_pca_on_anchors_leaky": 1.0,
+      "anchors_pca_train_fp16": 0.9144531250000002,
+      "bytes_fp16": 640,
+      "anchors_pca_train_int8": 0.9140625000000002,
+      "bytes_int8": 320
+    },
+    {
+      "width": 384,
+      "anchors_pca_train": 0.9449218750000001,
+      "val_pca_train": 0.9471679687500001,
+      "anchors_pca_on_anchors_leaky": 1.0,
+      "anchors_pca_train_fp16": 0.9449218750000001,
+      "bytes_fp16": 768,
+      "anchors_pca_train_int8": 0.9449218750000001,
+      "bytes_int8": 384
+    },
+    {
+      "width": 512,
+      "anchors_pca_train": 1.0,
+      "val_pca_train": 1.0,
+      "anchors_pca_on_anchors_leaky": 1.0,
+      "anchors_pca_train_fp16": 1.0,
+      "bytes_fp16": 1024,
+      "anchors_pca_train_int8": 0.993359375,
+      "bytes_int8": 512
+    },
+    {
+      "width": 768,
+      "anchors_pca_train": 1.0,
+      "val_pca_train": 1.0,
+      "anchors_pca_train_fp16": 1.0,
+      "bytes_fp16": 1536,
+      "anchors_pca_train_int8": 0.993359375,
+      "bytes_int8": 768
+    }
+  ],
+  "anchor_fitted_oracles": [
+    {
+      "width": 64,
+      "map": "linear",
+      "anchors_agreement_leaky": 0.994921875
+    },
+    {
+      "width": 64,
+      "map": "free",
+      "anchors_agreement_leaky": 0.9953125
+    },
+    {
+      "width": 96,
+      "map": "linear",
+      "anchors_agreement_leaky": 0.996484375
+    },
+    {
+      "width": 96,
+      "map": "free",
+      "anchors_agreement_leaky": 0.99453125
+    },
+    {
+      "width": 128,
+      "map": "linear",
+      "anchors_agreement_leaky": 0.998046875
+    },
+    {
+      "width": 128,
+      "map": "free",
+      "anchors_agreement_leaky": 0.9945312500000001
+    }
+  ]
+}

@@ -1,0 +1,113 @@
+{
+  "anchors_agreement": 0.8511718750000001,
+  "args": {
+    "groups": 4,
+    "hard": 100,
+    "hidden": 1536,
+    "judge": true,
+    "loss": "rank",
+    "lr": 0.001,
+    "man1_frac": 0.7,
+    "margin": 0.02,
+    "mix": 0.5,
+    "pop": 256,
+    "predicted": 0.85,
+    "steps": 2000,
+    "subset": null,
+    "tag": "rank128-mlp-man1-0.7",
+    "tau": 0.05,
+    "temp": 0.01,
+    "width": 128
+  },
+  "history": [
+    {
+      "step": 0,
+      "val": 0.8040039062500001
+    },
+    {
+      "loss": 0.00048,
+      "s": 6.4,
+      "step": 250,
+      "val": 0.8177734375000001
+    },
+    {
+      "loss": 0.00044,
+      "s": 13.1,
+      "step": 500,
+      "val": 0.81904296875
+    },
+    {
+      "loss": 0.00042,
+      "s": 24.2,
+      "step": 750,
+      "val": 0.8148437500000001
+    },
+    {
+      "loss": 0.00042,
+      "s": 34.2,
+      "step": 1000,
+      "val": 0.8182617187500001
+    },
+    {
+      "loss": 0.0004,
+      "s": 41.8,
+      "step": 1250,
+      "val": 0.81904296875
+    },
+    {
+      "loss": 0.00038,
+      "s": 51.6,
+      "step": 1500,
+      "val": 0.8210937500000002
+    },
+    {
+      "loss": 0.00039,
+      "s": 59.1,
+      "step": 1750,
+      "val": 0.8201171875000002
+    },
+    {
+      "loss": 0.00041,
+      "s": 66.2,
+      "step": 2000,
+      "val": 0.81953125
+    }
+  ],
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": false,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": false,
+    "rows": {
+      "candidate": 0.851171875,
+      "margin_over_random_projection": 0.263671875,
+      "random_projection_encoder": 0.5875,
+      "shuffled_across_anchors": 0.03984375
+    },
+    "schema": "strix.rank-arm-candidate/v2",
+    "seed": 20261010
+  },
+  "n_train": 5771,
+  "n_val": 1024,
+  "predicted_anchor_agreement": 0.85,
+  "rank_arm_sha256": "436ee9afb0a5cf5d780139c6c96ee5e36670228190377314274bfecb6acd27c7",
+  "schema": "carl.c3-view-fit/v1",
+  "selected_step": 1500,
+  "tag": "rank128-mlp-man1-0.7",
+  "val_full": 0.8210937500000002,
+  "val_pop256": {
+    "draws": 32,
+    "mean": 0.8384033203125001,
+    "min": 0.8230468750000001,
+    "size": 256,
+    "std": 0.007039002277485
+  },
+  "views_sha256": "4fc90ef0a85c4264bd733e0954e582d9352ab6ab684ce14d918c29492a3fc839"
+}

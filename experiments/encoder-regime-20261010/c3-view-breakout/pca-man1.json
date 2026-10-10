@@ -1,0 +1,9 @@
+{
+ "man1_train_rows": 1639,
+ "anchors_pca_man1only_128": 0.812109375,
+ "anchors_pca_all_128": 0.8199218750000001,
+ "anchors_pca_man1only_192": 0.8578125000000002,
+ "anchors_pca_all_192": 0.8640625000000002,
+ "anchors_pca_man1only_256": 0.8929687500000002,
+ "anchors_pca_all_256": 0.8898437500000002
+}

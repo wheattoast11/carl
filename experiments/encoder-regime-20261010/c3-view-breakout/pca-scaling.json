@@ -1,0 +1,35 @@
+{
+ "schema": "carl.c3-pca-scaling/v1",
+ "rows": [
+  {
+   "n_train": 256,
+   "anchors_pca128_mean": 0.7669270833333334,
+   "draws": 3
+  },
+  {
+   "n_train": 512,
+   "anchors_pca128_mean": 0.7852864583333333,
+   "draws": 3
+  },
+  {
+   "n_train": 1024,
+   "anchors_pca128_mean": 0.7990885416666668,
+   "draws": 3
+  },
+  {
+   "n_train": 2048,
+   "anchors_pca128_mean": 0.8091145833333334,
+   "draws": 3
+  },
+  {
+   "n_train": 4096,
+   "anchors_pca128_mean": 0.8162760416666668,
+   "draws": 3
+  },
+  {
+   "n_train": 5771,
+   "anchors_pca128_mean": 0.8199218750000001,
+   "draws": 1
+  }
+ ]
+}

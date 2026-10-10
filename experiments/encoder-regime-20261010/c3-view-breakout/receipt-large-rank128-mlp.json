@@ -1,0 +1,129 @@
+{
+  "anchors_agreement": 0.8382812500000002,
+  "args": {
+    "corpus": "large",
+    "groups": 4,
+    "hard": 100,
+    "hidden": 1536,
+    "judge": true,
+    "loss": "rank",
+    "lr": 0.001,
+    "man1_frac": null,
+    "margin": 0.02,
+    "mix": 0.5,
+    "no_c2": false,
+    "ossl": 0.05,
+    "pop": 256,
+    "predicted": 0.855,
+    "sec1": 0.3,
+    "steps": 2500,
+    "subset": null,
+    "tag": "large-rank128-mlp",
+    "tau": 0.05,
+    "temp": 0.01,
+    "width": 128
+  },
+  "history": [
+    {
+      "step": 0,
+      "val": 0.8
+    },
+    {
+      "loss": 0.00082,
+      "s": 40.2,
+      "step": 250,
+      "val": 0.8185546875
+    },
+    {
+      "loss": 0.00076,
+      "s": 87.1,
+      "step": 500,
+      "val": 0.8134765625
+    },
+    {
+      "loss": 0.00083,
+      "s": 124.8,
+      "step": 750,
+      "val": 0.81708984375
+    },
+    {
+      "loss": 0.00076,
+      "s": 166.4,
+      "step": 1000,
+      "val": 0.8166015625
+    },
+    {
+      "loss": 0.00075,
+      "s": 205.7,
+      "step": 1250,
+      "val": 0.8165039062500001
+    },
+    {
+      "loss": 0.00074,
+      "s": 238.1,
+      "step": 1500,
+      "val": 0.81298828125
+    },
+    {
+      "loss": 0.00075,
+      "s": 287.0,
+      "step": 1750,
+      "val": 0.8142578125000001
+    },
+    {
+      "loss": 0.00075,
+      "s": 316.7,
+      "step": 2000,
+      "val": 0.8138671875000002
+    },
+    {
+      "loss": 0.00075,
+      "s": 353.8,
+      "step": 2250,
+      "val": 0.81650390625
+    },
+    {
+      "loss": 0.00069,
+      "s": 387.4,
+      "step": 2500,
+      "val": 0.8197265625000001
+    }
+  ],
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": false,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": false,
+    "rows": {
+      "candidate": 0.83828125,
+      "margin_over_random_projection": 0.25078124999999996,
+      "random_projection_encoder": 0.5875,
+      "shuffled_across_anchors": 0.04140625
+    },
+    "schema": "strix.rank-arm-candidate/v2",
+    "seed": 20261010
+  },
+  "n_train": 64747,
+  "n_val": 1024,
+  "predicted_anchor_agreement": 0.855,
+  "rank_arm_sha256": "436ee9afb0a5cf5d780139c6c96ee5e36670228190377314274bfecb6acd27c7",
+  "schema": "carl.c3-view-fit/v1",
+  "selected_step": 2500,
+  "tag": "large-rank128-mlp",
+  "val_full": 0.8197265625000001,
+  "val_pop256": {
+    "draws": 32,
+    "mean": 0.8286376953125001,
+    "min": 0.8132812500000002,
+    "size": 256,
+    "std": 0.007082224553411098
+  },
+  "views_sha256": "fd5a8b7c7e09bf88bd380a41bfbf05ff85536df168b307c407db9c2717f3d1f5"
+}

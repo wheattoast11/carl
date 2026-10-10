@@ -1,0 +1,101 @@
+{
+  "anchors_agreement": 0.8406250000000002,
+  "args": {
+    "groups": 4,
+    "hard": 100,
+    "hidden": 0,
+    "judge": true,
+    "loss": "rank",
+    "lr": 0.001,
+    "man1_frac": 0.7,
+    "margin": 0.02,
+    "mix": 0.5,
+    "pop": 256,
+    "predicted": 0.825,
+    "steps": 1500,
+    "subset": null,
+    "tag": "rank128-man1-0.7",
+    "tau": 0.05,
+    "temp": 0.01,
+    "width": 128
+  },
+  "history": [
+    {
+      "step": 0,
+      "val": 0.8040039062500001
+    },
+    {
+      "loss": 0.00051,
+      "s": 24.8,
+      "step": 250,
+      "val": 0.8162109375000001
+    },
+    {
+      "loss": 0.00047,
+      "s": 44.4,
+      "step": 500,
+      "val": 0.8142578125000001
+    },
+    {
+      "loss": 0.00045,
+      "s": 73.8,
+      "step": 750,
+      "val": 0.8100585937500001
+    },
+    {
+      "loss": 0.00045,
+      "s": 96.4,
+      "step": 1000,
+      "val": 0.81171875
+    },
+    {
+      "loss": 0.00044,
+      "s": 114.5,
+      "step": 1250,
+      "val": 0.80927734375
+    },
+    {
+      "loss": 0.00043,
+      "s": 138.3,
+      "step": 1500,
+      "val": 0.8114257812500001
+    }
+  ],
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": false,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": false,
+    "rows": {
+      "candidate": 0.840625,
+      "margin_over_random_projection": 0.25312499999999993,
+      "random_projection_encoder": 0.5875,
+      "shuffled_across_anchors": 0.03828125
+    },
+    "schema": "strix.rank-arm-candidate/v2",
+    "seed": 20261010
+  },
+  "n_train": 5771,
+  "n_val": 1024,
+  "predicted_anchor_agreement": 0.825,
+  "rank_arm_sha256": "436ee9afb0a5cf5d780139c6c96ee5e36670228190377314274bfecb6acd27c7",
+  "schema": "carl.c3-view-fit/v1",
+  "selected_step": 250,
+  "tag": "rank128-man1-0.7",
+  "val_full": 0.8162109375000001,
+  "val_pop256": {
+    "draws": 32,
+    "mean": 0.82874755859375,
+    "min": 0.8152343750000002,
+    "size": 256,
+    "std": 0.006934184734249259
+  },
+  "views_sha256": "c4d1a68bec46ed0283322cc8f02bcdad640d4ebb771bc130a4051d8045730807"
+}

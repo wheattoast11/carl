@@ -1,0 +1,99 @@
+{
+  "anchors_agreement": 0.8296875000000001,
+  "args": {
+    "groups": 4,
+    "hard": 50,
+    "hidden": 0,
+    "judge": true,
+    "loss": "rank",
+    "lr": 0.001,
+    "margin": 0.02,
+    "mix": 0.5,
+    "pop": 256,
+    "predicted": 0.85,
+    "steps": 1500,
+    "tag": "rank128-p256",
+    "tau": 0.05,
+    "temp": 0.02,
+    "width": 128
+  },
+  "history": [
+    {
+      "step": 0,
+      "val": 0.8040039062500001
+    },
+    {
+      "loss": 0.00204,
+      "s": 21.8,
+      "step": 250,
+      "val": 0.8115234375
+    },
+    {
+      "loss": 0.00188,
+      "s": 46.6,
+      "step": 500,
+      "val": 0.8128906250000001
+    },
+    {
+      "loss": 0.00186,
+      "s": 69.9,
+      "step": 750,
+      "val": 0.81318359375
+    },
+    {
+      "loss": 0.00191,
+      "s": 94.2,
+      "step": 1000,
+      "val": 0.8108398437500002
+    },
+    {
+      "loss": 0.00188,
+      "s": 110.0,
+      "step": 1250,
+      "val": 0.8129882812500001
+    },
+    {
+      "loss": 0.00179,
+      "s": 126.1,
+      "step": 1500,
+      "val": 0.8118164062500001
+    }
+  ],
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": false,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": false,
+    "rows": {
+      "candidate": 0.8296875,
+      "margin_over_random_projection": 0.2421875,
+      "random_projection_encoder": 0.5875,
+      "shuffled_across_anchors": 0.039453125
+    },
+    "schema": "strix.rank-arm-candidate/v2",
+    "seed": 20261010
+  },
+  "n_train": 5771,
+  "n_val": 1024,
+  "predicted_anchor_agreement": 0.85,
+  "rank_arm_sha256": "436ee9afb0a5cf5d780139c6c96ee5e36670228190377314274bfecb6acd27c7",
+  "schema": "carl.c3-view-fit/v1",
+  "selected_step": 750,
+  "tag": "rank128-p256",
+  "val_full": 0.81318359375,
+  "val_pop256": {
+    "draws": 32,
+    "mean": 0.82437744140625,
+    "min": 0.80625,
+    "size": 256,
+    "std": 0.008076508041083109
+  },
+  "views_sha256": "7fc05c6a5df7449302d433d7246e67620682315048fe75f75d1eb72b20fcc2ad"
+}

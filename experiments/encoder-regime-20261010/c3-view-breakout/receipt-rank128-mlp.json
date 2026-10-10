@@ -1,0 +1,100 @@
+{
+  "anchors_agreement": 0.8375000000000001,
+  "args": {
+    "groups": 4,
+    "hard": 50,
+    "hidden": 1536,
+    "judge": true,
+    "loss": "rank",
+    "lr": 0.001,
+    "man1_frac": null,
+    "margin": 0.02,
+    "mix": 0.5,
+    "pop": 256,
+    "predicted": 0.835,
+    "steps": 1500,
+    "tag": "rank128-mlp",
+    "tau": 0.05,
+    "temp": 0.02,
+    "width": 128
+  },
+  "history": [
+    {
+      "step": 0,
+      "val": 0.8040039062500001
+    },
+    {
+      "loss": 0.00194,
+      "s": 34.9,
+      "step": 250,
+      "val": 0.8155273437500001
+    },
+    {
+      "loss": 0.0018,
+      "s": 66.5,
+      "step": 500,
+      "val": 0.8179687500000001
+    },
+    {
+      "loss": 0.00177,
+      "s": 117.0,
+      "step": 750,
+      "val": 0.8192382812500002
+    },
+    {
+      "loss": 0.0018,
+      "s": 180.1,
+      "step": 1000,
+      "val": 0.8206054687500001
+    },
+    {
+      "loss": 0.00176,
+      "s": 239.2,
+      "step": 1250,
+      "val": 0.82275390625
+    },
+    {
+      "loss": 0.00167,
+      "s": 320.2,
+      "step": 1500,
+      "val": 0.82001953125
+    }
+  ],
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": false,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": false,
+    "rows": {
+      "candidate": 0.8375,
+      "margin_over_random_projection": 0.25,
+      "random_projection_encoder": 0.5875,
+      "shuffled_across_anchors": 0.03984375
+    },
+    "schema": "strix.rank-arm-candidate/v2",
+    "seed": 20261010
+  },
+  "n_train": 5771,
+  "n_val": 1024,
+  "predicted_anchor_agreement": 0.835,
+  "rank_arm_sha256": "436ee9afb0a5cf5d780139c6c96ee5e36670228190377314274bfecb6acd27c7",
+  "schema": "carl.c3-view-fit/v1",
+  "selected_step": 1250,
+  "tag": "rank128-mlp",
+  "val_full": 0.82275390625,
+  "val_pop256": {
+    "draws": 32,
+    "mean": 0.8369018554687502,
+    "min": 0.821484375,
+    "size": 256,
+    "std": 0.007379985853533132
+  },
+  "views_sha256": "d369f15aa5184bd485f7fa4e4267fc5eefa9d9ba20577b55e5ef22ec30e16d9a"
+}

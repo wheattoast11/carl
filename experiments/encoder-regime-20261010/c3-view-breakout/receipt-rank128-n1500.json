@@ -1,0 +1,101 @@
+{
+  "anchors_agreement": 0.8093750000000002,
+  "args": {
+    "groups": 4,
+    "hard": 100,
+    "hidden": 0,
+    "judge": true,
+    "loss": "rank",
+    "lr": 0.001,
+    "man1_frac": null,
+    "margin": 0.02,
+    "mix": 0.5,
+    "pop": 256,
+    "predicted": 0.8,
+    "steps": 1500,
+    "subset": 1500,
+    "tag": "rank128-n1500",
+    "tau": 0.05,
+    "temp": 0.01,
+    "width": 128
+  },
+  "history": [
+    {
+      "step": 0,
+      "val": 0.7903320312500001
+    },
+    {
+      "loss": 0.00033,
+      "s": 26.5,
+      "step": 250,
+      "val": 0.7932617187500001
+    },
+    {
+      "loss": 0.00029,
+      "s": 57.1,
+      "step": 500,
+      "val": 0.7912109375
+    },
+    {
+      "loss": 0.00027,
+      "s": 87.3,
+      "step": 750,
+      "val": 0.78662109375
+    },
+    {
+      "loss": 0.00027,
+      "s": 110.7,
+      "step": 1000,
+      "val": 0.7830078125
+    },
+    {
+      "loss": 0.00025,
+      "s": 137.5,
+      "step": 1250,
+      "val": 0.7815429687500001
+    },
+    {
+      "loss": 0.00024,
+      "s": 174.7,
+      "step": 1500,
+      "val": 0.781640625
+    }
+  ],
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": false,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": false,
+    "rows": {
+      "candidate": 0.809375,
+      "margin_over_random_projection": 0.22187499999999993,
+      "random_projection_encoder": 0.5875,
+      "shuffled_across_anchors": 0.0375
+    },
+    "schema": "strix.rank-arm-candidate/v2",
+    "seed": 20261010
+  },
+  "n_train": 1500,
+  "n_val": 1024,
+  "predicted_anchor_agreement": 0.8,
+  "rank_arm_sha256": "436ee9afb0a5cf5d780139c6c96ee5e36670228190377314274bfecb6acd27c7",
+  "schema": "carl.c3-view-fit/v1",
+  "selected_step": 250,
+  "tag": "rank128-n1500",
+  "val_full": 0.7932617187500001,
+  "val_pop256": {
+    "draws": 32,
+    "mean": 0.8032592773437501,
+    "min": 0.7871093750000001,
+    "size": 256,
+    "std": 0.0090127827545762
+  },
+  "views_sha256": "73cabdf6373c7bef35e64235ea2bf09d31d30a41c7c84d7e41d5108e373c62cf"
+}
