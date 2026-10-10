@@ -1,0 +1,117 @@
+{
+  "anchors_agreement": 0.8160156250000001,
+  "args": {
+    "corpus": "large",
+    "groups": 4,
+    "hard": 100,
+    "hidden": 0,
+    "judge": true,
+    "loss": "rank",
+    "lr": 0.001,
+    "man1_frac": null,
+    "margin": 0.02,
+    "mix": 0.5,
+    "no_c2": false,
+    "ossl": 0.05,
+    "pop": 256,
+    "predicted": 0.845,
+    "sec1": 0.3,
+    "steps": 2000,
+    "subset": null,
+    "tag": "large-rank128-linear",
+    "tau": 0.05,
+    "temp": 0.01,
+    "width": 128
+  },
+  "history": [
+    {
+      "step": 0,
+      "val": 0.8
+    },
+    {
+      "loss": 0.00089,
+      "s": 16.9,
+      "step": 250,
+      "val": 0.815234375
+    },
+    {
+      "loss": 0.00084,
+      "s": 30.0,
+      "step": 500,
+      "val": 0.8124023437500001
+    },
+    {
+      "loss": 0.00094,
+      "s": 44.4,
+      "step": 750,
+      "val": 0.80927734375
+    },
+    {
+      "loss": 0.00087,
+      "s": 56.5,
+      "step": 1000,
+      "val": 0.80693359375
+    },
+    {
+      "loss": 0.00085,
+      "s": 84.2,
+      "step": 1250,
+      "val": 0.80673828125
+    },
+    {
+      "loss": 0.00086,
+      "s": 116.5,
+      "step": 1500,
+      "val": 0.80830078125
+    },
+    {
+      "loss": 0.00085,
+      "s": 148.1,
+      "step": 1750,
+      "val": 0.8065429687500001
+    },
+    {
+      "loss": 0.00087,
+      "s": 172.1,
+      "step": 2000,
+      "val": 0.8048828125
+    }
+  ],
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": false,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": false,
+    "rows": {
+      "candidate": 0.816015625,
+      "margin_over_random_projection": 0.228515625,
+      "random_projection_encoder": 0.5875,
+      "shuffled_across_anchors": 0.03828125
+    },
+    "schema": "strix.rank-arm-candidate/v2",
+    "seed": 20261010
+  },
+  "n_train": 64747,
+  "n_val": 1024,
+  "predicted_anchor_agreement": 0.845,
+  "rank_arm_sha256": "436ee9afb0a5cf5d780139c6c96ee5e36670228190377314274bfecb6acd27c7",
+  "schema": "carl.c3-view-fit/v1",
+  "selected_step": 250,
+  "tag": "large-rank128-linear",
+  "val_full": 0.815234375,
+  "val_pop256": {
+    "draws": 32,
+    "mean": 0.8206176757812501,
+    "min": 0.8070312500000001,
+    "size": 256,
+    "std": 0.00776826734508955
+  },
+  "views_sha256": "3be01faae9fb9c85e52d7aa4894ee492c423bce8d6a15464644b34b7aa91d980"
+}

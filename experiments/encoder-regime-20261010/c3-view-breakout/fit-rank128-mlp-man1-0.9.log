@@ -1,0 +1,9 @@
+{"step": 250, "loss": 0.00035, "val": 0.8044921875000002, "s": 6.1}
+{"step": 500, "loss": 0.00034, "val": 0.8044921875, "s": 12.3}
+{"step": 750, "loss": 0.00033, "val": 0.8011718750000001, "s": 18.3}
+{"step": 1000, "loss": 0.00033, "val": 0.80419921875, "s": 24.1}
+{"step": 1250, "loss": 0.00032, "val": 0.8057617187500001, "s": 30.0}
+{"step": 1500, "loss": 0.00029, "val": 0.8054687500000001, "s": 35.9}
+{"step": 1750, "loss": 0.00031, "val": 0.8052734375000001, "s": 41.9}
+{"step": 2000, "loss": 0.00031, "val": 0.8055664062500001, "s": 48.1}
+{"tag": "rank128-mlp-man1-0.9", "val_full": 0.8057617187500001, "val_pop256": {"mean": 0.8215820312500001, "std": 0.007854501354530441, "min": 0.80390625, "draws": 32, "size": 256}, "anchors_agreement": 0.8492187500000001, "selected_step": 1250, "predicted_anchor_agreement": 0.845, "judge_passed": false, "judge_rows": {"candidate": 0.84921875, "shuffled_across_anchors": 0.03671875, "random_projection_encoder": 0.5875, "margin_over_random_projection": 0.26171875}}

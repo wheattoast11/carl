@@ -1,0 +1,117 @@
+{
+  "anchors_agreement": 0.8492187500000001,
+  "args": {
+    "corpus": "c2",
+    "groups": 4,
+    "hard": 100,
+    "hidden": 1536,
+    "judge": true,
+    "loss": "rank",
+    "lr": 0.001,
+    "man1_frac": 0.9,
+    "margin": 0.02,
+    "mix": 0.5,
+    "no_c2": false,
+    "ossl": 0.05,
+    "pop": 256,
+    "predicted": 0.845,
+    "sec1": 0.3,
+    "steps": 2000,
+    "subset": null,
+    "tag": "rank128-mlp-man1-0.9",
+    "tau": 0.05,
+    "temp": 0.01,
+    "width": 128
+  },
+  "history": [
+    {
+      "step": 0,
+      "val": 0.8040039062500001
+    },
+    {
+      "loss": 0.00035,
+      "s": 6.1,
+      "step": 250,
+      "val": 0.8044921875000002
+    },
+    {
+      "loss": 0.00034,
+      "s": 12.3,
+      "step": 500,
+      "val": 0.8044921875
+    },
+    {
+      "loss": 0.00033,
+      "s": 18.3,
+      "step": 750,
+      "val": 0.8011718750000001
+    },
+    {
+      "loss": 0.00033,
+      "s": 24.1,
+      "step": 1000,
+      "val": 0.80419921875
+    },
+    {
+      "loss": 0.00032,
+      "s": 30.0,
+      "step": 1250,
+      "val": 0.8057617187500001
+    },
+    {
+      "loss": 0.00029,
+      "s": 35.9,
+      "step": 1500,
+      "val": 0.8054687500000001
+    },
+    {
+      "loss": 0.00031,
+      "s": 41.9,
+      "step": 1750,
+      "val": 0.8052734375000001
+    },
+    {
+      "loss": 0.00031,
+      "s": 48.1,
+      "step": 2000,
+      "val": 0.8055664062500001
+    }
+  ],
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": false,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": false,
+    "rows": {
+      "candidate": 0.84921875,
+      "margin_over_random_projection": 0.26171875,
+      "random_projection_encoder": 0.5875,
+      "shuffled_across_anchors": 0.03671875
+    },
+    "schema": "strix.rank-arm-candidate/v2",
+    "seed": 20261010
+  },
+  "n_train": 5771,
+  "n_val": 1024,
+  "predicted_anchor_agreement": 0.845,
+  "rank_arm_sha256": "436ee9afb0a5cf5d780139c6c96ee5e36670228190377314274bfecb6acd27c7",
+  "schema": "carl.c3-view-fit/v1",
+  "selected_step": 1250,
+  "tag": "rank128-mlp-man1-0.9",
+  "val_full": 0.8057617187500001,
+  "val_pop256": {
+    "draws": 32,
+    "mean": 0.8215820312500001,
+    "min": 0.80390625,
+    "size": 256,
+    "std": 0.007854501354530441
+  },
+  "views_sha256": "e462f822a17fce3263187a6c5be306af894e2a18768c31d597773e6518f31c24"
+}

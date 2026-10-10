@@ -1,0 +1,117 @@
+{
+  "anchors_agreement": 0.848828125,
+  "args": {
+    "corpus": "c2",
+    "groups": 4,
+    "hard": 100,
+    "hidden": 1536,
+    "judge": true,
+    "loss": "rank",
+    "lr": 0.001,
+    "man1_frac": 0.5,
+    "margin": 0.02,
+    "mix": 0.5,
+    "no_c2": false,
+    "ossl": 0.05,
+    "pop": 256,
+    "predicted": 0.848,
+    "sec1": 0.3,
+    "steps": 2000,
+    "subset": null,
+    "tag": "rank128-mlp-man1-0.5",
+    "tau": 0.05,
+    "temp": 0.01,
+    "width": 128
+  },
+  "history": [
+    {
+      "step": 0,
+      "val": 0.8040039062500001
+    },
+    {
+      "loss": 0.00051,
+      "s": 5.9,
+      "step": 250,
+      "val": 0.8199218750000001
+    },
+    {
+      "loss": 0.00049,
+      "s": 12.1,
+      "step": 500,
+      "val": 0.8219726562500002
+    },
+    {
+      "loss": 0.00047,
+      "s": 18.1,
+      "step": 750,
+      "val": 0.8235351562500001
+    },
+    {
+      "loss": 0.00045,
+      "s": 24.5,
+      "step": 1000,
+      "val": 0.8246093750000001
+    },
+    {
+      "loss": 0.00045,
+      "s": 32.1,
+      "step": 1250,
+      "val": 0.8250976562500001
+    },
+    {
+      "loss": 0.00047,
+      "s": 38.3,
+      "step": 1500,
+      "val": 0.8255859375000001
+    },
+    {
+      "loss": 0.00043,
+      "s": 44.3,
+      "step": 1750,
+      "val": 0.8260742187500001
+    },
+    {
+      "loss": 0.00044,
+      "s": 50.5,
+      "step": 2000,
+      "val": 0.8251953125000001
+    }
+  ],
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": false,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": false,
+    "rows": {
+      "candidate": 0.848828125,
+      "margin_over_random_projection": 0.261328125,
+      "random_projection_encoder": 0.5875,
+      "shuffled_across_anchors": 0.039453125
+    },
+    "schema": "strix.rank-arm-candidate/v2",
+    "seed": 20261010
+  },
+  "n_train": 5771,
+  "n_val": 1024,
+  "predicted_anchor_agreement": 0.848,
+  "rank_arm_sha256": "436ee9afb0a5cf5d780139c6c96ee5e36670228190377314274bfecb6acd27c7",
+  "schema": "carl.c3-view-fit/v1",
+  "selected_step": 1750,
+  "tag": "rank128-mlp-man1-0.5",
+  "val_full": 0.8260742187500001,
+  "val_pop256": {
+    "draws": 32,
+    "mean": 0.8415161132812501,
+    "min": 0.828125,
+    "size": 256,
+    "std": 0.006626416882563542
+  },
+  "views_sha256": "32d3a5b1bb43d51c0b0d480c079943855f22a13eceb9d6d40cf72dd9e57866a8"
+}
