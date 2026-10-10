@@ -1,0 +1,50 @@
+{
+  "anchors_parents_sha256": "605da1ea082fcb3c0738748eb1c6e22e99885364e6bdba80e75b9caee67ec805",
+  "corpus_sha256": "1e1aad8895595ac27503fcde7dfffe161af5bf561b29215440e540f0f83b4566",
+  "dropped_cosine_gt_0.99": 0,
+  "endpoint": {
+    "binding": {
+      "active_modalities": [
+        "text"
+      ],
+      "artifact_manifest_ref": "sha256:0d3841c471a119965a7e53eae879e4ecc1b274f2199fc7ec60dcd06a88fc5f18",
+      "dimension": 768,
+      "dtype": "bfloat16",
+      "include_prompt": true,
+      "model": "google/embeddinggemma-2",
+      "native_dimension": 768,
+      "normalization": "l2",
+      "normalization_dtype": "float32",
+      "normalization_stage": "after-truncation",
+      "numerical_contract_ref": "sha256:c39d675da660e2e26c7664632cd429aa7d6271869f809f5280e4f7f802ed774b",
+      "pooling": "mean",
+      "processor_ref": "sha256:99ded0d67adec6c5411be49fbb0981f86ec74c4ad1685ee4ae30b25248df7e99",
+      "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+      "task_recipe_ref": "sha256:a3963edc86064d449898e583f409efb07e40c04bc507cd6bdbbc5eb48f287beb",
+      "tokenizer_ref": "sha256:4d26d74dd68a315537470d0c33288556152c830ff898d4e1bfc0809d63e7e232"
+    },
+    "execution": {
+      "active_modalities": [
+        "text"
+      ],
+      "backend_ref": "sha256:ac4675af7facf057f51b9f1641d4486bc3ab278f99f48b1285d25922a6198285",
+      "dtype": "bfloat16",
+      "environment_ref": "sha256:9e80fbff3cc044ec3bdeff546def0af71abe39525fa63929b7ac2df0f7919394",
+      "numerical_witness_ref": "sha256:1058fd30ed0cecb9afcb020d108f2f0944052649891c018ca3b4a3fb207d8026",
+      "runtime_ref": "sha256:ee45c9ab9e8a5e7d577e957e0a21fd694fe726d891bc16cb0c1554cf6a74494a",
+      "space_ref": "sha256:52d2963b81e736206b3a1d2201c50e06ff7c0b2ad6d195951cf10a92fd715856"
+    },
+    "execution_ref": "sha256:202bcb67016f18b96aca63939d5824185d702edbd642ee7bdfc1b24cef380359",
+    "space_ref": "sha256:52d2963b81e736206b3a1d2201c50e06ff7c0b2ad6d195951cf10a92fd715856",
+    "task_roles": [
+      "document",
+      "query"
+    ]
+  },
+  "held_out_exact": 256,
+  "n": 48007,
+  "parents_sha256": "4218606367bd3e615df8f17801f8b34304eaba04e636e620b987c9b95f863457",
+  "schema": "carl.c3-corpus/v1",
+  "seconds": 299.9,
+  "source": "dnf repoquery --available name: summary, unique summaries >= 20 chars, sorted"
+}

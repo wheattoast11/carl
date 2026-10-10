@@ -10,13 +10,14 @@ trap 'rm -f "$GIT_INDEX_FILE"' EXIT
 cd "$REPO"
 if git show-ref --verify --quiet "refs/heads/$BRANCH"; then PARENT=$(git rev-parse "$BRANCH"); else PARENT=$(git rev-parse fcb8368); fi
 git read-tree "$PARENT"
-for f in c3_lib.py c3_ceiling.py c3_train.py c3_transductive.py c3_table.py commit.sh batch1.sh batch2.sh \
-         ceiling.json transductive.json pca-scaling.json pca-man1.json c3-table.json man1-mask.npy \
-         receipt-*.json views-*.f32 fit-*.log transductive.log; do
+for f in c3_lib.py c3_ceiling.py c3_train.py c3_transductive.py c3_table.py c3_budget_judge.py c3_rpm_corpus.py pca_large.py commit.sh batch*.sh \
+         ceiling.json transductive.json pca-scaling.json pca-man1.json pca-large.json pca-rpm.json budget-judge.json c3-table.json man1-mask.npy \
+         predictions.jsonl rank-arm-byte-budget.patch receipt-*.json views-*.f32 fit-*.log transductive.log corpus-rpm.log \
+         corpus-rpm/receipt.json corpus-rpm/train-corpus.jsonl strix-scratch/strix-mind/lib/rank_arm.py strix-scratch/strix-mind/tests/test_rank_arm.py; do
   for p in "$SRC"/$f; do
     [ -f "$p" ] || continue
     blob=$(git hash-object -w "$p")
-    git update-index --add --cacheinfo 100644 "$blob" "$PREFIX/$(basename "$p")"
+    git update-index --add --cacheinfo 100644 "$blob" "$PREFIX/${p#"$SRC"/}"
   done
 done
 TREE=$(git write-tree)

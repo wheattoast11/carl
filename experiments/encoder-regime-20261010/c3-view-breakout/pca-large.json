@@ -1,0 +1,38 @@
+{
+ "schema": "carl.c3-pca-large/v1",
+ "train-parents.f32_sha256": "059a700e69735a678a4e41da1a24243fe613132b87857a53f9a030f73ff7dc84",
+ "train-corpus.jsonl_sha256": "9404b6592e019a115267b3b0386927610e6a0e6b080cdd1b67f8be26670d0ae7",
+ "rows": 60000,
+ "sections_top": [
+  [
+   "3ossl",
+   25978
+  ],
+  [
+   "1",
+   9935
+  ],
+  [
+   "3",
+   8176
+  ],
+  [
+   "8",
+   4412
+  ],
+  [
+   "3pm",
+   3007
+  ],
+  [
+   "5",
+   2311
+  ]
+ ],
+ "pca128_large_all": 0.7906250000000001,
+ "pca128_large_no3ossl": 0.7976562500000001,
+ "pca128_large_sec1_only": 0.8093750000000002,
+ "pca128_large_no3ossl_plus_c2": 0.80390625,
+ "pca256_large_no3ossl": 0.8910156250000001,
+ "max_cos_large_to_anchor": 0.9850221872329712
+}

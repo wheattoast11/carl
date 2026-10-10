@@ -1,0 +1,6 @@
+{"written": "2026-10-10T16:55-05:00", "arm": "pca128 on corpus-rpm (dnf summaries, NAME style)", "predicted_anchors": 0.83, "basis": "c2 NAME-style 5771 rows gave 0.820; corpus-large paragraphs 60k gave 0.791; style match outweighs size"}
+{"written": "2026-10-10T16:55-05:00", "arm": "rank128 mlp hard100 t0.01 on corpus-rpm plus c2", "predicted_anchors": 0.86, "basis": "c2-only mlp 0.8426, man1-weighted 0.8512; rpm adds in-style rows"}
+{"written": "2026-10-10T16:55-05:00", "arm": "large-rank128-linear (corpus-large)", "predicted_anchors": 0.83, "basis": "large mlp came in at 0.8383 against predicted 0.855"}
+{"written": "2026-10-10T17:06-05:00", "arm": "pca128 on corpus-rpm", "outcome": 0.7512, "predicted_anchors": 0.83, "note": "missed by 0.08: package summaries are out of domain for man1 neighbourhoods even in NAME style; 6k, 12k, 24k and 47k rows all give 0.75"}
+{"written": "2026-10-10T17:06-05:00", "arm": "rpm-rank128-mlp (revised after pca-rpm)", "predicted_anchors": 0.82, "basis": "pca128 rpm plus c2 0.784 against c2-only 0.820; the rank mlp adds about 0.03"}
+{"written": "2026-10-10T17:06-05:00", "arm": "rpm-rank128-linear (revised after pca-rpm)", "predicted_anchors": 0.80, "basis": "same"}
