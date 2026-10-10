@@ -28,7 +28,7 @@ class EncoderSettings(Contract):
     processed_tokens: int = Field(default=2048, ge=1, le=2048)
     seed: int = 42
     memory_gib: float = Field(default=12, gt=0, le=12, allow_inf_nan=False)
-    runtime_s: float = Field(default=900, gt=0, le=900, allow_inf_nan=False)
+    runtime_s: float = Field(default=900, gt=0, le=86400, allow_inf_nan=False)
     validation_dataset: str
     cutoff: str
     activate_workspace: str | None = None
