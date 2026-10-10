@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Literal
+from typing import Any, Literal
 
 from carl_core.hashing import content_hash
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -11,6 +11,30 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 Modality = Literal["text", "structured", "image", "audio", "video"]
 RUNGS = (128, 256, 512, 768)
 GEMMA_REVISION = "914f7f89142e33e77833254d9c9b90c3cef7303b"
+_VIEW_HEADS: dict[int, Any] = {}
+_armed = False
+
+
+def register_view_head(head: Any) -> None:
+    _VIEW_HEADS[head.width] = head
+
+
+def clear_view_heads() -> None:
+    global _armed
+    _VIEW_HEADS.clear()
+    _armed = False
+
+
+def active_view_head(dimension: int, native_dimension: int) -> Any | None:
+    """The accepted head at this width, if one is armed; the shipped acceptance arms once per process."""
+    global _armed
+    if not _armed:
+        _armed = True
+        from .views import arm_shipped
+
+        arm_shipped()
+    head = _VIEW_HEADS.get(dimension)
+    return head if head is not None and head.native_dimension == native_dimension else None
 
 
 class Contract(BaseModel):
@@ -163,6 +187,9 @@ class Carrier(Contract):
 
     def scoring(self, dimension: int) -> tuple[float, ...]:
         raw = self.prefix(dimension)
+        head = active_view_head(dimension, len(self.values))
+        if head is not None:
+            return head.view(self.values)
         norm = math.hypot(*raw)
         return tuple(v / norm for v in raw)
 

@@ -16,7 +16,14 @@ from carl_core.errors import CARLError
 from carl_core.hashing import content_hash
 from carl_core.interaction import ActionType
 
-from .types import Carrier, EncoderBinding, ExecutionBinding, Interpretation, SemanticInput
+from .types import (
+    Carrier,
+    EncoderBinding,
+    ExecutionBinding,
+    Interpretation,
+    SemanticInput,
+    active_view_head,
+)
 
 if TYPE_CHECKING:
     from carl_studio.session import Session
@@ -57,6 +64,9 @@ class SemanticService:
             self.binding, self.execution, self.encoder = binding, execution, encoder
             self.generation = generation or binding.space_id
             self._cache.clear()
+            from .views import arm_shipped
+
+            arm_shipped()
 
     @property
     def configured(self) -> bool:
@@ -318,7 +328,10 @@ class SemanticService:
                 for ref, text, lexical in sources
             ]
             dimensions = self.binding.dimensions if self.binding is not None else q.dimensions
-            initial = next((d for d in dimensions if d >= 128), dimensions[-1])
+            initial = next(
+                (d for d in dimensions if active_view_head(d, dimensions[-1]) is not None),
+                next((d for d in dimensions if d >= 128), dimensions[-1]),
+            )
             middle = next((d for d in dimensions if d >= 512), dimensions[-1])
             full = dimensions[-1]
             candidates.sort(key=lambda row: self.ranking_score(q, row[2], initial), reverse=True)

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-10-09
-author: Codex
+last_updated: 2026-10-10
+author: Codex + Claude (carl-14)
 applies_to: carl-studio 0.21.1 source checkout
 ---
 
@@ -149,3 +149,23 @@ OpenCode final-source retry passed under a fresh 3.25 GiB owned-tree scope.
 Its peak was 3,174,379,520 bytes. The earlier failed scope remains a separate
 resource-limit result. All three native hosts completed the shared semantic
 operation with the real pinned text encoder and synthetic localhost providers.
+
+## Accepted view head (2026-10-10)
+
+Field plan rulings 60, 61 and 63 set representation acceptance for views as a
+byte budget: at most 512 bytes per view, judged by strix-mind
+`lib/rank_arm.py` (9a3ac79) at the view width with int8 storage. The accepted
+head is `src/carl_studio/semantic/heads/embeddinggemma2-view256.f32`, a
+768->256 linear map fitted with the KD loss on 5,771 man-page descriptions
+(section 1 sampling mass 0.7), judged on man1-256: candidate 0.9203, margin
+over random projection 0.2434, shuffled 0.0375, 256 bytes. The receipt is
+`heads/embeddinggemma2-view256.json`; source carl 354e98b.
+
+`Carrier.scoring(256)` returns this int8 view when the head is armed;
+`CARL_VIEW_HEAD=prefix` keeps the normalized 256 prefix. `SemanticService.bind`
+arms the shipped head and `recall` starts at the armed width. Local activation
+records the declared effect `Activate accepted view head 256 for <workspace>`
+under `view-head:<workspace hash>` with its predecessor
+(`semantic/views.py::activate_view_head`). The 224-wide (0.9016) and 320-wide
+(0.9484) rows stay on file as the bracket. Binding into Work admission waits for
+the operator.
