@@ -12,7 +12,7 @@ import numpy as np
 
 from c3_lib import ANCHORS, OUT, agreement, large, load, rpm, sha, split, subset_agreement, train_head
 
-RANK_ARM = Path("/var/home/zero/strix-mind/lib/rank_arm.py")
+RANK_ARM = Path("/var/home/zero/strix-mind/lib/rank_arm.py")  # 9a3ac79: byte budget, any width
 
 
 def main() -> int:
@@ -37,7 +37,8 @@ def main() -> int:
     ap.add_argument("--ossl", type=float, default=0.05)
     ap.add_argument("--no-c2", action="store_true")
     ap.add_argument("--subset", type=int, help="train on this many rows drawn once by seed")
-    ap.add_argument("--judge", action="store_true", help="run strix-mind rank_arm.judge (128 wide only)")
+    ap.add_argument("--judge", action="store_true", help="run strix-mind rank_arm.judge at the view width")
+    ap.add_argument("--element-bytes", type=int, default=4, choices=(1, 2, 4))
     a = ap.parse_args()
     if a.corpus == "large":
         train, val, large_weights = large(a.sec1, a.ossl, not a.no_c2)
@@ -62,11 +63,11 @@ def main() -> int:
                "anchors_agreement": agreement(views, anchors), "selected_step": fit["selected_step"], "history": fit["history"],
                "views_sha256": sha(views.astype("<f4").tobytes()), "predicted_anchor_agreement": a.predicted}
     (OUT / f"views-{a.tag}.f32").write_bytes(views.astype("<f4").tobytes())
-    if a.judge and a.width == 128:
+    if a.judge:
         arm = runpy.run_path(str(RANK_ARM))
         parents = arm["read_f32"](ANCHORS, arm["PARENT"])
-        cands = [list(struct.unpack("<128f", r.astype("<f4").tobytes())) for r in views]
-        receipt["judge"] = arm["judge"](cands, parents)
+        cands = [list(struct.unpack(f"<{a.width}f", r.astype("<f4").tobytes())) for r in views]
+        receipt["judge"] = arm["judge"](cands, parents, element_bytes=a.element_bytes)
         receipt["rank_arm_sha256"] = sha(RANK_ARM.read_bytes())
     (OUT / f"receipt-{a.tag}.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
     print(json.dumps({k: receipt[k] for k in ("tag", "val_full", "val_pop256", "anchors_agreement", "selected_step", "predicted_anchor_agreement")}

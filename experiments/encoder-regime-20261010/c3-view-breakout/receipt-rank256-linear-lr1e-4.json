@@ -1,0 +1,111 @@
+{
+  "anchors_agreement": 0.8898437500000002,
+  "args": {
+    "corpus": "c2",
+    "element_bytes": 1,
+    "groups": 4,
+    "hard": 100,
+    "hidden": 0,
+    "judge": true,
+    "loss": "rank",
+    "lr": 0.0001,
+    "man1_frac": 0.7,
+    "margin": 0.02,
+    "mix": 0.5,
+    "no_c2": false,
+    "ossl": 0.05,
+    "pop": 256,
+    "predicted": 0.895,
+    "sec1": 0.3,
+    "steps": 1500,
+    "subset": null,
+    "tag": "rank256-linear-lr1e-4",
+    "tau": 0.05,
+    "temp": 0.01,
+    "width": 256
+  },
+  "history": [
+    {
+      "step": 0,
+      "val": 0.8965820312500001
+    },
+    {
+      "loss": 0.00033,
+      "s": 2.5,
+      "step": 250,
+      "val": 0.8959960937500001
+    },
+    {
+      "loss": 0.00031,
+      "s": 5.0,
+      "step": 500,
+      "val": 0.8935546875000002
+    },
+    {
+      "loss": 0.0003,
+      "s": 7.4,
+      "step": 750,
+      "val": 0.8923828125000002
+    },
+    {
+      "loss": 0.0003,
+      "s": 9.9,
+      "step": 1000,
+      "val": 0.8931640625000001
+    },
+    {
+      "loss": 0.00029,
+      "s": 12.3,
+      "step": 1250,
+      "val": 0.8921875000000001
+    },
+    {
+      "loss": 0.00027,
+      "s": 14.8,
+      "step": 1500,
+      "val": 0.8906250000000001
+    }
+  ],
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": false,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true,
+      "within_budget": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": false,
+    "rows": {
+      "budget_bytes": 512,
+      "candidate": 0.890625,
+      "element_bytes": 1,
+      "margin_over_random_projection": 0.21367187499999996,
+      "random_projection_encoder": 0.676953125,
+      "shuffled_across_anchors": 0.038671875,
+      "view_bytes": 256,
+      "view_width": 256
+    },
+    "schema": "strix.rank-arm-candidate/v3",
+    "seed": 20261010
+  },
+  "n_train": 5771,
+  "n_val": 1024,
+  "predicted_anchor_agreement": 0.895,
+  "rank_arm_sha256": "e76b54dcf3b2c85ddb22cf9fde2ba02f22a7791239b60f3de158a6cab7645313",
+  "schema": "carl.c3-view-fit/v1",
+  "selected_step": 0,
+  "tag": "rank256-linear-lr1e-4",
+  "val_full": 0.8965820312500001,
+  "val_pop256": {
+    "draws": 32,
+    "mean": 0.8905761718750002,
+    "min": 0.8769531250000002,
+    "size": 256,
+    "std": 0.005615658951339867
+  },
+  "views_sha256": "045c919b560aba109d2667cd4e2e543b9def74f7b575636b12da5b60508085ce"
+}

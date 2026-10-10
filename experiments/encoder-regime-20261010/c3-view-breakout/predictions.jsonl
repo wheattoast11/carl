@@ -4,3 +4,16 @@
 {"written": "2026-10-10T17:06-05:00", "arm": "pca128 on corpus-rpm", "outcome": 0.7512, "predicted_anchors": 0.83, "note": "missed by 0.08: package summaries are out of domain for man1 neighbourhoods even in NAME style; 6k, 12k, 24k and 47k rows all give 0.75"}
 {"written": "2026-10-10T17:06-05:00", "arm": "rpm-rank128-mlp (revised after pca-rpm)", "predicted_anchors": 0.82, "basis": "pca128 rpm plus c2 0.784 against c2-only 0.820; the rank mlp adds about 0.03"}
 {"written": "2026-10-10T17:06-05:00", "arm": "rpm-rank128-linear (revised after pca-rpm)", "predicted_anchors": 0.80, "basis": "same"}
+{"written": "2026-10-10T17:40-05:00", "arm": "rank256-mlp int8 (256 bytes)", "predicted_anchors": 0.905, "basis": "PCA 256 int8 0.8906; rank mlp added 0.023 over PCA at 128"}
+{"written": "2026-10-10T17:40-05:00", "arm": "rank256-linear int8 (256 bytes)", "predicted_anchors": 0.90, "basis": "rank linear added 0.012 over PCA at 128"}
+{"written": "2026-10-10T17:40-05:00", "arm": "rank320-mlp int8 (320 bytes)", "predicted_anchors": 0.928, "basis": "PCA 320 int8 0.9141"}
+{"written": "2026-10-10T17:40-05:00", "arm": "rank384-mlp int8 (384 bytes)", "predicted_anchors": 0.955, "basis": "PCA 384 int8 0.9449; carl-b2 KD 384 val 0.974 fp32"}
+{"written": "2026-10-10T17:46-05:00", "arm": "rank256/320 heads", "outcome": "selected step 0, heads equal PCA init: 0.8906 and 0.9141 int8", "note": "rank loss at lr 1e-3 never beats the PCA start on val at widths 256 and 320"}
+{"written": "2026-10-10T17:46-05:00", "arm": "kd256 linear int8 (tau 0.05, pop 1024)", "predicted_anchors": 0.905, "basis": "carl-b2 KD 384 val 0.974 against PCA 0.947; KD at 128 matched PCA"}
+{"written": "2026-10-10T17:46-05:00", "arm": "rank256 linear lr 1e-4 int8", "predicted_anchors": 0.895, "basis": "fine tuning from PCA with a small step"}
+{"written": "2026-10-10T17:46-05:00", "arm": "kd256 mlp int8", "predicted_anchors": 0.91, "basis": "mlp adds about 0.005 on KD"}
+{"written": "2026-10-10T17:52-05:00", "arm": "kd256 linear int8", "outcome": 0.9172, "predicted_anchors": 0.905, "note": "passes at 256 bytes, half the budget; KD beats PCA by 0.027 at 256"}
+{"written": "2026-10-10T17:52-05:00", "arm": "kd224 linear int8 (224 bytes)", "predicted_anchors": 0.904, "basis": "PCA 224 int8 0.8773 plus 0.027"}
+{"written": "2026-10-10T17:52-05:00", "arm": "kd192 linear int8 (192 bytes)", "predicted_anchors": 0.89, "basis": "PCA 192 int8 0.8633 plus 0.027"}
+{"written": "2026-10-10T17:52-05:00", "arm": "kd256 linear man1 0.7 int8", "predicted_anchors": 0.922, "basis": "man1 mass added 0.009 at 128"}
+{"written": "2026-10-10T17:52-05:00", "arm": "kd320 linear int8 (320 bytes)", "predicted_anchors": 0.935, "basis": "PCA 320 int8 0.9141 plus 0.02"}
