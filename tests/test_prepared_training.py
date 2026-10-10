@@ -834,3 +834,63 @@ def test_model_index_cannot_hide_shard_mutation(inputs, tmp_path):
     (model / "model.safetensors").write_bytes(b"changed-fixture")
     with pytest.raises(ValidationError, match="source changed"):
         validate_preparation(prepared)
+
+
+@pytest.mark.parametrize("baseline,status", [("starting", "rejected"), ("base", "accepted")])
+def test_staged_candidate_compares_with_explicit_prepared_baseline(
+    inputs, tmp_path, monkeypatch, baseline, status
+):
+    config, owner = inputs
+    adapter = tmp_path / "sft-stage"
+    adapter.mkdir()
+    (adapter / "adapter_config.json").write_text('{"peft_type":"LORA"}')
+    (adapter / "adapter_model.safetensors").write_bytes(b"bound-SFT-fixture")
+    config.sft_adapter = str(adapter)
+    config.comparison_baseline = baseline
+    prepared = prepare_training(config, project_root=tmp_path, manager=owner)
+    assert prepared.ready
+    assert any(
+        source.path == str(adapter / "adapter_model.safetensors") for source in prepared.sources
+    )
+    candidate = tmp_path / "grpo-candidate"
+    candidate.mkdir()
+    trainer = MagicMock()
+    trainer.run = TrainingRun(
+        id="staged-fixture",
+        config=TrainingConfig.model_validate(prepared.config),
+        phase=RunPhase.COMPLETE,
+        checkpoint=str(candidate),
+    )
+    trainer.train = AsyncMock(return_value=trainer.run)
+    factory = MagicMock(return_value=trainer)
+    monkeypatch.setattr("carl_studio.training.trainer.CARLTrainer", factory)
+    observed = []
+
+    def load(runner):
+        observed.append(runner.config)
+        return object(), object()
+
+    def generate(runner, model, tokenizer, samples):
+        competent = runner.config.checkpoint != config.base_model or runner.config.sft_adapter
+        return [sample["expected_output"] if competent else "wrong" for sample in samples]
+
+    monkeypatch.setattr(EvalRunner, "_load_model_simple", load)
+    monkeypatch.setattr(EvalRunner, "_generate_single_turn", generate)
+    monkeypatch.setattr(
+        EvalRunner,
+        "_compute_coherence",
+        lambda *args: {"phi_mean": 0.4, "discontinuity_score": 0.5},
+    )
+    result = asyncio.run(submit_training(config, prepared_plan_id=prepared.plan_id, manager=owner))
+    assert result.acceptance.status == status
+    assert result.acceptance.candidate.primary_value == 1.0
+    assert result.acceptance.baseline.primary_value == (1.0 if baseline == "starting" else 0.0)
+    assert observed[0].sft_adapter == (str(adapter) if baseline == "starting" else None)
+    assert observed[1].sft_adapter == str(adapter)
+    assert factory.call_args.args[0].sft_adapter == str(adapter)
+    replay = asyncio.run(submit_training(config, prepared_plan_id=prepared.plan_id, manager=owner))
+    assert replay.id == result.id
+    assert trainer.train.await_count == 1
+    config.comparison_baseline = "base" if baseline == "starting" else "starting"
+    with pytest.raises(ValidationError):
+        validate_preparation(prepared, config)

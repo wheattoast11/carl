@@ -14,8 +14,8 @@ CARL means Coherence-Aware Reinforcement Learning.
 3. Present the prepared inputs, task checks, policies, model, limits and effects.
    Pass the returned `plan_id` as `prepared_plan_id` to `start_training` or
    `submit_async_training` only after the user has authorized that run.
-4. Keep execution completion separate from candidate acceptance. Return the
-   checkpoint, baseline comparison, acceptance reasons and reuse instructions.
+4. Keep prepared, device-qualified, executed and accepted states separate.
+   Return the checkpoint, baseline comparison, acceptance reasons and reuse instructions.
 5. Use `list_skills` and `run_skill` for existing CARL workflows.
 6. Use `list_agent_harnesses` and `delegate_agent` when another native agent should do part of the work.
 
@@ -51,6 +51,28 @@ Local plugin access is FREE. Scheduled autonomy, paid services, publication, and
 private-runtime operations retain their own authorization and entitlement checks.
 Do not start paid training, transfer data, publish, or broaden a workspace grant
 without the user's authorization.
+
+Reuse authorization while actor, operation, targets, inputs, spend and validity
+remain inside the same bound grant. Reconcile existing effects before a retry;
+request further authorization when an increment or scope exceeds that grant.
+
+Before billable allocation, bind price, remaining exposure, stop deadline and
+persistent supervision to the existing execution owner. Cover setup, downloads,
+idle allocation, qualification, evaluation and shutdown. Client disconnect or
+process failure must leave the exact owned allocation supervised. A prompt,
+declared timeout or client-side sleep does not enforce a spend cap.
+
+Qualification executes the selected model and backend on the requested devices,
+including generation, rewards, backward/optimizer work and checkpoint reload.
+For multiple GPUs, exercise every rank and the actual collective. Initialize
+thread-local CUDA device state in the executor that performs GPU work. Neither
+prepared inputs nor a successful probe in another thread establishes that path.
+
+Require the worker terminal, observed progress and retrievable tensor checkpoint
+before reporting training completion. Provider status, JSON-only checkpoints and
+synthetic learning curves do not establish it. Reopen frozen source bytes and
+effect custody on resume. Inspect and stop only recorded owned process identities;
+keep command-line credentials and environments out of inspection output.
 
 ## Delegation
 

@@ -19,16 +19,16 @@ Design decisions
 * The task tool cancels an owned worker and waits for cleanup before recording
   ``cancelled``. Running tasks without live worker custody require reconciliation.
   Store-only cancellation remains available for pending work.
-* ``params_hash`` uses :func:`carl_core.hashing.content_hash` over a
-  canonical JSON representation so retries with the same params are
-  trivially deduplicatable by the orchestrator (we don't enforce dedup
-  here — we just surface the hash).
+* Prepared training uses its plan ID as a persistent request identity.
+  Replays reuse the task handle; changed parameters under that identity fail.
+  Other tools retain independent task handles and expose ``params_hash``.
 """
 
 from __future__ import annotations
 
-import json
 import asyncio
+import inspect
+import json
 import logging
 import os
 import sqlite3
@@ -43,7 +43,6 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Generator
 
 import anyio
-
 from carl_core.errors import CARLError
 from carl_core.hashing import content_hash
 
@@ -411,14 +410,46 @@ class MCPTaskStore:
 
     def create(self, tool_name: str, params: dict[str, Any]) -> MCPTask:
         """Insert a new pending task. ``params`` is hashed, not persisted."""
+        task, _ = self._create_pending(tool_name, params)
+        return task
+
+    def create_once(
+        self, tool_name: str, params: dict[str, Any], *, request_id: str
+    ) -> tuple[MCPTask, bool]:
+        """Reserve a scoped request once; return its task and whether it was created."""
+        if type(request_id) is not str or not request_id or len(request_id) > 128:
+            raise ValueError("request_id must be a nonempty string of at most 128 characters")
+        return self._create_pending(tool_name, params, request_id=request_id)
+
+    def _create_pending(
+        self, tool_name: str, params: dict[str, Any], *, request_id: str | None = None
+    ) -> tuple[MCPTask, bool]:
         if not tool_name:
             raise ValueError("tool_name must be non-empty")
-        task_id = str(uuid.uuid4())
+        task_id = str(
+            uuid.uuid4()
+            if request_id is None
+            else uuid.uuid5(
+                uuid.NAMESPACE_URL, content_hash({"tool_name": tool_name, "request_id": request_id})
+            )
+        )
         params_hash = content_hash(params or {})
         now_iso = _utcnow_iso()
         submitted_at = datetime.fromisoformat(now_iso)
 
         with self._connect() as conn:
+            if request_id is not None:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT * FROM mcp_tasks WHERE task_id=?", (task_id,)).fetchone()
+                if row is not None:
+                    previous = _task_from_row(row)
+                    if previous.tool_name != tool_name or previous.params_hash != params_hash:
+                        raise CARLError(
+                            "Request identity reused with different parameters",
+                            code="carl.tasks.request_conflict",
+                        )
+                    conn.commit()
+                    return previous, False
             conn.execute(
                 """INSERT INTO mcp_tasks
                    (task_id, tool_name, params_hash, status,
@@ -439,7 +470,7 @@ class MCPTaskStore:
                 )
                 conn.commit()
 
-        return MCPTask(
+        task = MCPTask(
             task_id=task_id,
             tool_name=tool_name,
             params_hash=params_hash,
@@ -447,6 +478,201 @@ class MCPTaskStore:
             submitted_at=submitted_at,
             _params=dict(params) if params else {},
         )
+        return task, True
+
+    @staticmethod
+    def _operation_task_id(operation_id: str) -> str:
+        if type(operation_id) is not str or not operation_id or len(operation_id) > 128:
+            raise ValueError("Invalid operation identity")
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, content_hash({"operation_id": operation_id})))
+
+    @staticmethod
+    def _operation_record(
+        record: dict[str, Any], operation_id: str, generation: int
+    ) -> dict[str, Any]:
+        if not isinstance(record, dict):
+            raise ValueError("Operation record must be a JSON mapping")
+        payload = dict(record)
+        if payload.get("operation_id", operation_id) != operation_id:
+            raise ValueError("Operation record identity changed")
+        payload.update(operation_id=operation_id, generation=generation)
+        return json.loads(json.dumps(payload, allow_nan=False))
+
+    def load_operation(self, operation_id: str) -> dict[str, Any] | None:
+        """Read the operation's retained JSON record without executing its action."""
+        task = self.get(self._operation_task_id(operation_id))
+        if task is None:
+            return None
+        if task.tool_name != "operation_state" or not isinstance(task.result, dict):
+            raise CARLError("Operation state is invalid", code="carl.tasks.operation_conflict")
+        return dict(task.result)
+
+    @staticmethod
+    def _operation_process_start(pid: int) -> str | None:
+        try:
+            raw = (Path("/proc") / str(pid) / "stat").read_text()
+            return raw[raw.rfind(")") + 2 :].split()[19]
+        except FileNotFoundError:
+            return None
+
+    @classmethod
+    def _operation_owner_alive(cls, claim: dict[str, Any]) -> bool:
+        start = claim.get("owner_start_ticks")
+        pid = claim.get("owner_pid")
+        if type(pid) is not int or type(start) is not str:
+            return True
+        try:
+            return cls._operation_process_start(pid) == start
+        except (OSError, IndexError):
+            return True
+
+    def reconcile_operation(
+        self,
+        operation_id: str,
+        expected_generation: int,
+        claimed_record: dict[str, Any],
+        action_ref: str,
+        *,
+        previous_token: str | None = None,
+    ) -> str:
+        """Recover observation custody after owner death or an explicit token handoff."""
+        return self.claim_operation(
+            operation_id,
+            expected_generation,
+            claimed_record,
+            action_ref,
+            reconcile_only=True,
+            previous_token=previous_token,
+        )
+
+    def claim_operation(
+        self,
+        operation_id: str,
+        expected_generation: int,
+        claimed_record: dict[str, Any],
+        action_ref: str,
+        *,
+        reconcile_only: bool = False,
+        previous_token: str | None = None,
+    ) -> str:
+        """Fence one action by generation; the caller supplies a content-free JSON record."""
+        task_id = self._operation_task_id(operation_id)
+        if type(expected_generation) is not int or expected_generation < 0:
+            raise ValueError("Invalid operation generation")
+        if type(action_ref) is not str or not action_ref or len(action_ref) > 256:
+            raise ValueError("Invalid operation action reference")
+        generation = expected_generation + 1
+        payload = self._operation_record(claimed_record, operation_id, generation)
+        params_hash = content_hash({"operation_id": operation_id})
+        token = task_id + "." + uuid.uuid4().hex
+        with self._connect() as conn:
+            if not self._has_metadata:
+                raise CARLError(
+                    "Run carl plugin migrate --apply", code="carl.tasks.migration_required"
+                )
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM mcp_tasks WHERE task_id=?", (task_id,)).fetchone()
+            metadata: dict[str, Any] = {"operation_id": operation_id, "generation": 0}
+            if row is not None:
+                metadata = json.loads(row["metadata"])
+                if (
+                    row["tool_name"] != "operation_state"
+                    or row["params_hash"] != params_hash
+                    or metadata.get("operation_id") != operation_id
+                    or row["status"] in _TERMINAL_STATES
+                ):
+                    raise CARLError(
+                        "Operation binding changed", code="carl.tasks.operation_conflict"
+                    )
+            if metadata.get("generation") != expected_generation:
+                raise CARLError(
+                    "Operation claim requires reconciliation", code="carl.tasks.operation_conflict"
+                )
+            previous = metadata.get("inflight")
+            if previous:
+                if not reconcile_only or (
+                    previous_token != previous.get("token")
+                    if previous_token is not None
+                    else self._operation_owner_alive(previous)
+                ):
+                    raise CARLError(
+                        "Operation claim requires reconciliation",
+                        code="carl.tasks.operation_conflict",
+                    )
+            elif previous_token is not None:
+                raise CARLError(
+                    "Operation handoff token is stale", code="carl.tasks.operation_conflict"
+                )
+            metadata.update(
+                generation=generation,
+                inflight={
+                    "token": token,
+                    "action_ref": action_ref,
+                    "generation": generation,
+                    "mode": "reconcile-only" if reconcile_only else "execute",
+                    "owner_pid": os.getpid(),
+                    "owner_start_ticks": self._operation_process_start(os.getpid()),
+                },
+            )
+            if row is None:
+                conn.execute(
+                    "INSERT INTO mcp_tasks (task_id,tool_name,params_hash,status,submitted_at,result,metadata) "
+                    "VALUES (?,'operation_state',?,'running',?,?,?)",
+                    (
+                        task_id,
+                        params_hash,
+                        _utcnow_iso(),
+                        json.dumps(payload),
+                        json.dumps(metadata),
+                    ),
+                )
+            else:
+                conn.execute(
+                    "UPDATE mcp_tasks SET status='running',result=?,metadata=? WHERE task_id=?",
+                    (json.dumps(payload), json.dumps(metadata), task_id),
+                )
+            conn.commit()
+        return token
+
+    def commit_operation(self, token: str, record: dict[str, Any]) -> dict[str, Any]:
+        """Commit the claimed action once; identical terminal replay returns its record."""
+        task_id, separator, nonce = token.partition(".")
+        if not separator or not task_id or not nonce:
+            raise ValueError("Invalid operation token")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT * FROM mcp_tasks WHERE task_id=?", (task_id,)).fetchone()
+            if row is None or row["tool_name"] != "operation_state":
+                raise CARLError("Operation token is unknown", code="carl.tasks.operation_conflict")
+            metadata = json.loads(row["metadata"])
+            operation_id = metadata["operation_id"]
+            if row["params_hash"] != content_hash({"operation_id": operation_id}):
+                raise CARLError("Operation binding changed", code="carl.tasks.operation_conflict")
+            payload = self._operation_record(record, operation_id, metadata["generation"])
+            record_hash = content_hash(payload)
+            previous = metadata.get("last_commit", {})
+            if previous.get("token") == token:
+                if previous.get("record_hash") != record_hash:
+                    raise CARLError(
+                        "Operation commit replay changed", code="carl.tasks.operation_conflict"
+                    )
+                conn.commit()
+                return json.loads(row["result"])
+            inflight = metadata.get("inflight", {})
+            if (
+                inflight.get("token") != token
+                or inflight.get("generation") != metadata["generation"]
+                or row["status"] != "running"
+            ):
+                raise CARLError("Operation claim is stale", code="carl.tasks.operation_conflict")
+            metadata.pop("inflight")
+            metadata["last_commit"] = {"token": token, "record_hash": record_hash}
+            conn.execute(
+                "UPDATE mcp_tasks SET status='pending',result=?,metadata=? WHERE task_id=?",
+                (json.dumps(payload), json.dumps(metadata), task_id),
+            )
+            conn.commit()
+        return payload
 
     def get(self, task_id: str) -> MCPTask | None:
         with self._connect() as conn:
@@ -707,7 +933,19 @@ def async_task(
             params: dict[str, Any] = dict(kwargs)
             for idx, val in enumerate(args):
                 params[f"_arg{idx}"] = val
-            task = resolved_store.create(tool_name, params)
+            created = True
+            if tool_name == "submit_async_training":
+                bound = inspect.signature(body).bind(*args, **kwargs)
+                prepared_plan_id = bound.arguments.get("prepared_plan_id")
+                if prepared_plan_id is not None:
+                    bound.apply_defaults()
+                    task, created = resolved_store.create_once(
+                        tool_name, dict(bound.arguments), request_id=prepared_plan_id
+                    )
+                else:
+                    task = resolved_store.create(tool_name, params)
+            else:
+                task = resolved_store.create(tool_name, params)
 
             async def _bg() -> None:
                 import asyncio
@@ -719,11 +957,12 @@ def async_task(
                     _live_tasks.pop(task.task_id, None)
 
             # Spawn detached: caller returns immediately with the handle.
-            async with anyio.create_task_group() as tg:
-                tg.start_soon(_sleep_then_spawn, _bg)
+            if created:
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(_sleep_then_spawn, _bg)
             return {
                 "task_id": task.task_id,
-                "status": "pending",
+                "status": task.status,
                 "tool_name": tool_name,
                 "submitted_at": task.submitted_at.isoformat(),
             }
