@@ -210,6 +210,7 @@ class TrainingConfig(BaseModel):
     base_model_revision: str | None = None
     sft_adapter: str | None = None
     starting_adapters: list[str] = Field(default_factory=list)
+    comparison_baseline: Literal["starting", "base"] = "starting"
     pipeline: bool = False
     resume_from_checkpoint: str | None = None
     base_model: str = Field(description="HuggingFace model ID (e.g. 'your-org/your-model')")

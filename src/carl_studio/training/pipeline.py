@@ -594,11 +594,14 @@ async def submit_training(
         checkpoint: str, *, candidate: bool, stage_config: TrainingConfig | None = None
     ) -> EvaluationMeasurement:
         measured_config = stage_config or config
+        compare_base = not candidate and config.comparison_baseline == "base"
+        sft_adapter = None if compare_base else measured_config.sft_adapter
+        starting_adapters = [] if compare_base else measured_config.starting_adapters
         evaluation = EvalConfig(
             checkpoint=checkpoint,
-            base_model=config.base_model if candidate or config.sft_adapter else None,
-            sft_adapter=measured_config.sft_adapter,
-            starting_adapters=measured_config.starting_adapters,
+            base_model=config.base_model if candidate or sft_adapter else None,
+            sft_adapter=sft_adapter,
+            starting_adapters=starting_adapters,
             tokenizer_source=measured_config.tokenizer_source,
             dataset=config.eval_dataset_repo or config.dataset_repo,
             dataset_split=config.eval_split,
