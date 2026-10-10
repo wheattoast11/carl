@@ -1,0 +1,33 @@
+{
+ "schema": "carl.c3-second-anchor-judge/v1",
+ "head": "pca512 int8",
+ "predicted_candidate": 0.99,
+ "weights_sha256": "0d38e7626885721510ba77168cd3e9be04d6edb61066ad0a3cfb85e61f41a7ce",
+ "anchor_candidate": 0.993359375,
+ "rows": [
+  {
+   "draw": 0,
+   "parents_sha256": "617963a17740db764fc90baa17f5cb85ef8b7f6f63c318ae9489d0823b2535b0",
+   "candidate": 0.99296875,
+   "margin": 0.27578125,
+   "shuffled": 0.0390625,
+   "passed": true
+  },
+  {
+   "draw": 1,
+   "parents_sha256": "f9dce770ab631135051040398d194aef0e882936e6303427379c183478c956eb",
+   "candidate": 0.9890625,
+   "margin": 0.2640625,
+   "shuffled": 0.0328125,
+   "passed": true
+  },
+  {
+   "draw": 2,
+   "parents_sha256": "ef667a7dd11d060fac815b49bc1ca9e53adce4ae90f79b03e54b628dc16473d2",
+   "candidate": 0.988671875,
+   "margin": 0.27031249999999996,
+   "shuffled": 0.03671875,
+   "passed": true
+  }
+ ]
+}

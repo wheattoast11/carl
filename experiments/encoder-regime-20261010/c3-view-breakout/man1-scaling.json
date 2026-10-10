@@ -1,0 +1,16 @@
+{"n_man1": 200, "pca128_anchors": 0.7676, "rank128_anchors": 0.7781}
+{"n_man1": 400, "pca128_anchors": 0.7872, "rank128_anchors": 0.793}
+{"n_man1": 800, "pca128_anchors": 0.8078, "rank128_anchors": 0.8105}
+{"n_man1": 1639, "pca128_anchors": 0.8121, "rank128_anchors": 0.8324}
+{
+ "schema": "carl.c3-man1-scaling/v1",
+ "man1_rows": 1639,
+ "predicted": "pca128 gains under 0.01 per doubling inside man1; extrapolated 20k in-domain rows stay under 0.86",
+ "pca_gain_per_doubling": [
+  0.0196,
+  0.0206,
+  0.0042
+ ],
+ "extrapolated_pca128_at_20k_in_domain": 0.8271,
+ "extrapolated_pca128_at_20k_if_gain_decays_half_per_doubling": 0.816
+}

@@ -1,0 +1,65 @@
+{
+  "anchor_set": {
+    "name": "man1-256",
+    "parents_sha256": "605da1ea082fcb3c0738748eb1c6e22e99885364e6bdba80e75b9caee67ec805"
+  },
+  "budget_bytes": 512,
+  "element_bytes": 1,
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": true,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true,
+      "within_budget": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": true,
+    "rows": {
+      "budget_bytes": 512,
+      "candidate": 0.993359375,
+      "element_bytes": 1,
+      "margin_over_random_projection": 0.234375,
+      "random_projection_encoder": 0.758984375,
+      "shuffled_across_anchors": 0.036328125,
+      "view_bytes": 512,
+      "view_width": 512
+    },
+    "schema": "strix.rank-arm-candidate/v3",
+    "seed": 20261010
+  },
+  "native_dimension": 768,
+  "rank_arm": {
+    "commit": "9a3ac79",
+    "path": "strix-mind lib/rank_arm.py",
+    "sha256": "e76b54dcf3b2c85ddb22cf9fde2ba02f22a7791239b60f3de158a6cab7645313"
+  },
+  "rulings": {
+    "60": "acceptance is a 512-byte budget per view",
+    "61": "byte-budget judge landed in strix-mind",
+    "66": "shipped default moves to PCA 512 int8; KD 256 int8 stays as the half-budget option"
+  },
+  "schema": "carl.view-head-acceptance/v1",
+  "source": {
+    "carl_commit": "8e8187a",
+    "receipt": "experiments/encoder-regime-20261010/c3-view-breakout/full-budget-judge.json"
+  },
+  "space": {
+    "model": "google/embeddinggemma-2",
+    "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b"
+  },
+  "training": {
+    "corpus": "c2 train-parents.f32 d1427365bd2f (5771 rows), top 512 principal directions of the centred rows",
+    "loss": "pca",
+    "selected_step": 0,
+    "steps": 0
+  },
+  "view_bytes": 512,
+  "weights_file": "embeddinggemma2-view512.f32",
+  "weights_layout": "row-major 512x768 float32 little-endian, view = normalize(W @ carrier)",
+  "weights_sha256": "0d38e7626885721510ba77168cd3e9be04d6edb61066ad0a3cfb85e61f41a7ce",
+  "width": 512
+}

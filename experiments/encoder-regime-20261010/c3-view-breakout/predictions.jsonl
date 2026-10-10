@@ -17,3 +17,5 @@
 {"written": "2026-10-10T17:52-05:00", "arm": "kd192 linear int8 (192 bytes)", "predicted_anchors": 0.89, "basis": "PCA 192 int8 0.8633 plus 0.027"}
 {"written": "2026-10-10T17:52-05:00", "arm": "kd256 linear man1 0.7 int8", "predicted_anchors": 0.922, "basis": "man1 mass added 0.009 at 128"}
 {"written": "2026-10-10T17:52-05:00", "arm": "kd320 linear int8 (320 bytes)", "predicted_anchors": 0.935, "basis": "PCA 320 int8 0.9141 plus 0.02"}
+{"written": "2026-10-10T18:11-05:00", "arm": "man1 in-domain scaling at 128", "outcome": "pca gain per doubling 0.0196, 0.0206, 0.0042; extrapolated 20k in-domain rows 0.827 (0.816 with decay)", "note": "in-domain augmentation cannot reach 0.9 at 128; no GPU paraphrase run"}
+{"written": "2026-10-10T18:11-05:00", "arm": "pca512 int8 on three seeded 256-row validation draws (ruling 66 held-out check)", "predicted_candidate": 0.99, "basis": "man1-256 0.9934; 512 of 768 PCA components from 5771 rows"}
