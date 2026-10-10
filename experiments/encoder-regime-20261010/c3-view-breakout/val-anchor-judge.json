@@ -1,0 +1,32 @@
+{
+  "schema": "carl.c3-second-anchor-judge/v1",
+  "anchor_set": "c2 validation rows (held out from head training), 3 seeded draws of 256",
+  "head_sha256": "e609bf48011e5424b99c7e8244c2d6e41d39990610e9ec83d1e17997c2098eda",
+  "predicted_candidate": 0.917,
+  "rows": [
+    {
+      "draw": 0,
+      "parents_sha256": "617963a17740db764fc90baa17f5cb85ef8b7f6f63c318ae9489d0823b2535b0",
+      "candidate": 0.915625,
+      "margin": 0.287109375,
+      "shuffled": 0.03828125,
+      "passed": true
+    },
+    {
+      "draw": 1,
+      "parents_sha256": "f9dce770ab631135051040398d194aef0e882936e6303427379c183478c956eb",
+      "candidate": 0.922265625,
+      "margin": 0.283203125,
+      "shuffled": 0.0359375,
+      "passed": true
+    },
+    {
+      "draw": 2,
+      "parents_sha256": "ef667a7dd11d060fac815b49bc1ca9e53adce4ae90f79b03e54b628dc16473d2",
+      "candidate": 0.920703125,
+      "margin": 0.28515625,
+      "shuffled": 0.0375,
+      "passed": true
+    }
+  ]
+}
