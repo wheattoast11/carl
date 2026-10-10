@@ -945,35 +945,51 @@ class EvalRunner:
         samples = self._load_dataset()
         if not samples:
             raise ValueError("Evaluation needs a nonempty held-out population")
-        model, tokenizer = self._load_model_simple()
-        completions = self._generate_single_turn(model, tokenizer, samples)
-        self.last_completions = completions
-        self.last_samples = samples
-        metrics = self._compute_metrics(completions, samples)
-        coherence = self._compute_coherence(model, tokenizer, completions)
+        model = tokenizer = None
+        try:
+            model, tokenizer = self._load_model_simple()
+            completions = self._generate_single_turn(model, tokenizer, samples)
+            self.last_completions = completions
+            self.last_samples = samples
+            metrics = self._compute_metrics(completions, samples)
+            coherence = self._compute_coherence(model, tokenizer, completions)
 
-        primary_metric = self.primary_metric or _PRIMARY_METRIC.get(
-            self.phase, "chain_completion_rate"
-        )
-        if self.evaluator is not None and primary_metric not in metrics:
-            raise ValueError("Evaluator did not report the declared primary metric")
-        primary_value = metrics.get(primary_metric, 0.0)
+            primary_metric = self.primary_metric or _PRIMARY_METRIC.get(
+                self.phase, "chain_completion_rate"
+            )
+            if self.evaluator is not None and primary_metric not in metrics:
+                raise ValueError("Evaluator did not report the declared primary metric")
+            primary_value = metrics.get(primary_metric, 0.0)
 
-        return EvalReport(
-            checkpoint=self.config.checkpoint,
-            phase=self.phase,
-            n_samples=len(samples),
-            metrics=metrics,
-            primary_metric=primary_metric,
-            primary_value=primary_value,
-            threshold=self.config.threshold,
-            passed=(
-                primary_value <= self.config.threshold
-                if self.config.metric_direction == "lower"
-                else primary_value >= self.config.threshold
-            ),
-            coherence=coherence,
-        )
+            return EvalReport(
+                checkpoint=self.config.checkpoint,
+                phase=self.phase,
+                n_samples=len(samples),
+                metrics=metrics,
+                primary_metric=primary_metric,
+                primary_value=primary_value,
+                threshold=self.config.threshold,
+                passed=(
+                    primary_value <= self.config.threshold
+                    if self.config.metric_direction == "lower"
+                    else primary_value >= self.config.threshold
+                ),
+                coherence=coherence,
+            )
+
+        except BaseException as error:
+            import traceback
+
+            traceback.clear_frames(error.__traceback__)
+            raise
+        finally:
+            model = tokenizer = None
+            import gc
+
+            gc.collect()
+            torch_module = sys.modules.get("torch")
+            if torch_module is not None and torch_module.cuda.is_available():
+                torch_module.cuda.empty_cache()
 
     # ------------------------------------------------------------------
     # Phase 2': multi-turn environment eval

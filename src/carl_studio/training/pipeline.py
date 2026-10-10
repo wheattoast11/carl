@@ -527,7 +527,7 @@ async def submit_training(
     from carl_studio.training.trainer import CARLTrainer
 
     if prepared_plan_id is None:
-        if config.goal is not None:
+        if config.goal is not None or config.method == TrainingMethod.ENCODER:
             from carl_core.errors import ValidationError
 
             raise ValidationError(
@@ -567,6 +567,9 @@ async def submit_training(
 
     owner = manager or default_manager()
     prepared = load_preparation(prepared_plan_id, owner)
+    if config.method == TrainingMethod.ENCODER:
+        from carl_studio.training.encoder import submit
+        return await submit(config, prepared, owner)
     await run_in_worker(partial(validate_preparation, prepared, config))
     existing = owner.load_training_result(prepared.plan_id)
     if existing is not None and not (
@@ -591,11 +594,14 @@ async def submit_training(
         checkpoint: str, *, candidate: bool, stage_config: TrainingConfig | None = None
     ) -> EvaluationMeasurement:
         measured_config = stage_config or config
+        compare_base = not candidate and config.comparison_baseline == "base"
+        sft_adapter = None if compare_base else measured_config.sft_adapter
+        starting_adapters = [] if compare_base else measured_config.starting_adapters
         evaluation = EvalConfig(
             checkpoint=checkpoint,
-            base_model=config.base_model if candidate or config.sft_adapter else None,
-            sft_adapter=measured_config.sft_adapter,
-            starting_adapters=measured_config.starting_adapters,
+            base_model=config.base_model if candidate or sft_adapter else None,
+            sft_adapter=sft_adapter,
+            starting_adapters=starting_adapters,
             tokenizer_source=measured_config.tokenizer_source,
             dataset=config.eval_dataset_repo or config.dataset_repo,
             dataset_split=config.eval_split,

@@ -57,6 +57,12 @@ class DataRegistry:
             except (KeyError, ValueError, TypeError) as e:
                 warnings.warn(f"Skipping malformed source '{entry.get('name', '?')}': {e}")
 
+        if path.resolve() == _SOURCES_YAML.resolve() and not any(source.name == "accepted-interpretations" for source in sources):
+            from carl_studio.settings import carl_home
+            sources.append(DataSource(name="accepted-interpretations", repo_id=str(carl_home() / "memory"),
+                adapter="carl_studio.data.adapters.interpretation.InterpretationAdapter",
+                domain=Domain.INSTRUCTION, modality=Modality.TEXT, description="Explicitly consented local interpretation feedback",
+                license="local-capture", default_split="unsplit"))
         return cls(sources)
 
     def register(self, source: DataSource) -> None:

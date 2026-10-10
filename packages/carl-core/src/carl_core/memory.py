@@ -276,10 +276,93 @@ class MemoryStore:
         # against decay_pass() racing with the append — without it, a
         # concurrent decay_pass that has already snapshotted survivors would
         # atomically replace the file after the append lands, losing the item.
-        with self._lock:
+        import fcntl
+        with self._lock, (self.root / ".commit.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            self._separate_tail(path)
             with path.open("a", encoding="utf-8") as f:
                 f.write(line)
         return item
+
+    @staticmethod
+    def _separate_tail(path: Path) -> None:
+        """Keep a torn final record from absorbing the next committed line."""
+        if path.exists() and path.stat().st_size:
+            with path.open("rb+") as stream:
+                stream.seek(-1, 2)
+                if stream.read(1) != b"\n":
+                    stream.seek(0, 2)
+                    stream.write(b"\n")
+
+    def commit_once(
+        self, key: str, content: str, *, metadata: dict[str, Any] | None = None,
+    ) -> MemoryItem:
+        """Commit one accepted event atomically across processes and retries."""
+        import fcntl
+        import os
+
+        if not re.fullmatch(r"[0-9a-f]{64}", key):
+            raise ValueError("Commit key must be a SHA-256 digest")
+        with self._lock, (self.root / ".commit.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            path = self._path(MemoryLayer.LONG)
+            for item in self._iter_layer(MemoryLayer.LONG):
+                if item.metadata.get("commit_key") == key:
+                    if item.content != content:
+                        raise ValueError("Committed artifact changed")
+                    return item
+            item = MemoryItem(
+                id=key[:16], content=content, layer=MemoryLayer.LONG,
+                created_at=datetime.now(timezone.utc),
+                metadata={**(metadata or {}), "commit_key": key},
+            )
+            self._separate_tail(path)
+            with path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(item.to_dict(), sort_keys=True) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            return item
+
+    def list_active(self, *, layers: set[MemoryLayer] | None = None,
+                    before: datetime | None = None) -> list[MemoryItem]:
+        """Project captured correction lineage without rewriting prior records."""
+        selected = layers if layers is not None else set(MemoryLayer)
+        items = [item for layer in selected for item in self._iter_layer(layer)]
+        if before is not None:
+            cutoff = before if before.tzinfo is not None else before.replace(tzinfo=timezone.utc)
+            items = [item for item in items if (item.created_at if item.created_at.tzinfo is not None else item.created_at.replace(tzinfo=timezone.utc)) <= cutoff]
+        superseded: set[str] = set()
+        for item in items:
+            if item.metadata.get("capture_kind") == "accepted_interpretation":
+                raw_record: Any = item.metadata.get("interpretation", {})
+                record = cast(dict[str, Any], raw_record) if isinstance(raw_record, dict) else {}
+                identifier = record.get("supersedes")
+                if isinstance(identifier, str):
+                    superseded.add(identifier)
+            elif item.metadata.get("capture_kind") == "interpretation_feedback":
+                identifier = item.metadata.get("interpretation_id")
+                if isinstance(identifier, str):
+                    superseded.add(identifier)
+        active: list[MemoryItem] = []
+        for item in items:
+            if item.metadata.get("capture_kind") == "interpretation_feedback":
+                continue
+            raw_record = item.metadata.get("interpretation", {})
+            record = cast(dict[str, Any], raw_record) if isinstance(raw_record, dict) else {}
+            if item.metadata.get("capture_kind") == "accepted_interpretation" and record.get("id") in superseded:
+                continue
+            active.append(item)
+        return active
+
+    def semantic_recall(
+        self, query: str, semantic: Any, *, top_k: int = 5,
+        layers: set[MemoryLayer] | None = None,
+        before: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        """Recall through a supplied shared service, retaining lexical APIs."""
+        items = self.list_active(layers=layers, before=before)
+        sources = [(item.id, item.content, self.resonance_score(item, query)) for item in items]
+        return semantic.recall(query, sources, limit=top_k)
 
     # ---- iteration / scoring ----------------------------------------------
 

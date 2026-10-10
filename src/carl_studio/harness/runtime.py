@@ -432,8 +432,8 @@ def get_runtime(ctx: Any = None) -> HarnessRuntime:
     if key not in _runtimes:
         from carl_studio.mcp.tasks import get_default_store
 
-        session = Session()
         root = Path(os.environ.get("CARL_WORKSPACE_ROOT", str(Path.cwd())))
+        session = Session(workspace=str(root))
         context = DelegationContext.local(
             owner=uuid.uuid4().hex, root=root, allow_write=os.environ.get("CARL_ALLOW_WRITE") == "1"
         )

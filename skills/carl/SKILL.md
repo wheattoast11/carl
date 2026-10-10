@@ -83,3 +83,31 @@ Update with `carl plugin update`; remove only CARL's owned entries with
 `carl plugin uninstall`.
 
 See [workflows](references/workflows.md) for training and verification commands.
+
+
+## Local encoders and interpretation
+
+Use `encode_data` for ordered text, structured actions, image, audio and video
+references. A Session shares the encoder across chat, MCP and data operations.
+Local execution uses `CARL_ENCODER_MODEL` and `CARL_ENCODER_PYTHON`; main package
+dependencies stay unchanged. Media requires hash-bound file artifacts.
+
+Use `interpret` to record a candidate with separate utterance, context, goal and
+proposal references. Use `interpretation_feedback` for explicit confirmation or
+a successor correction. Silence leaves the candidate unconfirmed. Similarity
+and action outcomes are separate measurements.
+
+Local capture is opt-in through `carl lab semantic capture`. Captured accepted
+records and their artifact descriptors consolidate once in the memory owner.
+Capture does not authorize training or network transmission.
+
+Use `method: encoder` with nested `encoder` settings for frozen heads or PEFT
+query/value adapters. Prepare grouped train, validation and test episodes before
+creating alternate views. Supply explicit positives, negatives and feedback
+provenance. Worker interpreter, dependencies, processor and modules are bound.
+Repeated prepared submissions return the recorded execution. Resume requires a
+stopped checkpoint. Ranking improvement alone does not establish action success.
+Missing action or policy measurements yield inconclusive acceptance.
+
+`carl lab semantic invoke OPERATION REQUEST.json --session-id ID` uses the same
+Session implementation and retains restart references through SessionStore.

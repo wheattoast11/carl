@@ -29,7 +29,7 @@ class ConnectionRegistry:
     """Thread-safe registry of live connection instances."""
 
     def __init__(self) -> None:
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._registry: weakref.WeakValueDictionary[str, ConnectionBase] = (
             weakref.WeakValueDictionary()
         )

@@ -61,7 +61,7 @@ class SourceBinding(BaseModel):
     """Exact local source bytes used by a prepared experiment."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    kind: Literal["config", "model", "resume", "train_data", "eval_data", "callable"]
+    kind: Literal["config", "model", "resume", "train_data", "eval_data", "callable", "artifact"]
     path: str
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 

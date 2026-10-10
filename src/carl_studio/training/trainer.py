@@ -691,6 +691,9 @@ class CARLTrainer:
             },
         )
 
+        if self.config.method == TrainingMethod.ENCODER:
+            from carl_studio.training.encoder import train
+            return await train(self)
         self.run.phase = RunPhase.LOADING_MODEL
         self._load_model_and_tokenizer()
 
@@ -1003,6 +1006,7 @@ class CARLTrainer:
             eval_dataset=eval_dataset,
             args=training_args,
             peft_config=peft_config,
+            callbacks=self._build_callbacks(),
         )
 
         resume = self._resolve_resume_arg(output_dir)
@@ -1287,6 +1291,7 @@ class CARLTrainer:
             vocab_size=getattr(tokenizer, "vocab_size", 128000),
             max_length=self.config.max_length,
             reward_class=self.config.reward_class,
+            goal=self.config.goal,
         )
 
         # (reward_fn, active_in_stages, weight)
@@ -1320,6 +1325,7 @@ class CARLTrainer:
     async def _fit(self, trainer: Any, resume: bool | str | None) -> None:
         """Keep the event loop responsive and wait for cancellation cleanup."""
         from transformers import TrainerCallback
+
         from carl_studio.training.preparation import run_in_worker
 
         stop = self._cancel_requested
@@ -1332,8 +1338,47 @@ class CARLTrainer:
                 return control
 
         trainer.add_callback(StopCallback())
+        adapters = getattr(getattr(trainer, "model", None), "peft_config", None)
+        if adapters is not None:
+            if not adapters or any(
+                getattr(config.peft_type, "value", config.peft_type) != "LORA"
+                for config in adapters.values()
+            ):
+                raise ValueError("Parameter-update evidence requires LoRA adapters")
+            accelerator_state = getattr(getattr(trainer, "accelerator", None), "state", None)
+            zero_stage = getattr(
+                getattr(accelerator_state, "deepspeed_plugin", None), "zero_stage", 0
+            )
+            if getattr(trainer, "is_fsdp_enabled", False) or zero_stage >= 3:
+                raise ValueError("Parameter-update evidence requires unsharded parameters")
+            from carl_studio.training.callbacks import ParameterUpdateCallback
+
+            trainer.add_callback(ParameterUpdateCallback(self.run))
 
         def fit() -> None:
+            device = getattr(getattr(trainer, "args", None), "device", None)
+            if getattr(device, "type", None) == "cuda":
+                import os
+
+                import torch
+
+                device_index = device.index
+                local_rank = os.environ.get("LOCAL_RANK")
+                if local_rank is not None:
+                    try:
+                        rank = int(local_rank)
+                    except ValueError as exc:
+                        raise ValueError("LOCAL_RANK must be a nonnegative integer") from exc
+                    if rank < 0:
+                        raise ValueError("LOCAL_RANK must be a nonnegative integer")
+                    if device_index is not None and device_index != rank:
+                        raise ValueError("CUDA training device does not match LOCAL_RANK")
+                    device_index = rank
+                if device_index is None or not 0 <= device_index < torch.cuda.device_count():
+                    raise ValueError("CUDA training requires a visible device index")
+                torch.cuda.set_device(device_index)
+                if torch.cuda.current_device() != device_index:
+                    raise RuntimeError("CUDA training device binding failed")
             if resume is None:
                 trainer.train()
             else:
@@ -1364,6 +1409,10 @@ class CARLTrainer:
             )
             if sample.golden_solution is not None:
                 row["completion"] = [{"role": "assistant", "content": sample.golden_solution}]
+            if self.config.method == TrainingMethod.SFT:
+                if isinstance(row["prompt"], str):
+                    row["prompt"] = [{"role": "user", "content": row["prompt"]}]
+                row["chat_template_kwargs"] = {"enable_thinking": not self.config.disable_thinking}
             rows.append(row)
         return Dataset.from_list(rows)
 
@@ -1377,6 +1426,19 @@ class CARLTrainer:
         trainer.save_model(output_dir)
         self._tokenizer.save_pretrained(output_dir)
         root = Path(output_dir).resolve()
+        weights = [
+            path
+            for pattern in (
+                "model*.safetensors",
+                "adapter_model*.safetensors",
+                "pytorch_model*.bin",
+                "adapter_model.bin",
+            )
+            for path in root.glob(pattern)
+            if path.is_file()
+        ]
+        if not weights or any(path.stat().st_size == 0 for path in weights):
+            raise ValueError("Training did not produce model weights")
         manifest = {
             str(path.relative_to(root)): file_hash(path)
             for path in sorted(root.rglob("*"))

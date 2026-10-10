@@ -1,6 +1,6 @@
 {
   "name": "carl",
-  "version": "0.21.1",
+  "version": "0.22.0",
   "description": "Coherence-Aware Reinforcement Learning and bidirectional local agent workflows.",
   "author": {
     "name": "Tej Desai"

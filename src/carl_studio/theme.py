@@ -1,4 +1,4 @@
-"""Camp CARL theme system.
+"""CARL terminal theme with legacy persona compatibility.
 
 Two personas (CARL/CARLI) with full color palette, iconography, and voice.
 Users pick on first run. Customizable via ~/.carl/theme.yaml.
@@ -24,12 +24,12 @@ class Persona(str, Enum):
 class Palette:
     """6-color system. Everything renders from these."""
 
-    primary: str = "#2D5F2D"      # Forest green
-    secondary: str = "#1A2744"    # Night sky navy
-    accent: str = "#E8722A"       # Campfire orange
-    success: str = "#D4A847"      # Merit badge gold
-    warning: str = "#C44B2F"      # Ember red
-    muted: str = "#8B7E6A"        # Trail dust
+    primary: str = "#E9F0F0"
+    secondary: str = "#B9CCCC"
+    accent: str = "#F2B35E"
+    success: str = "#9ECFD0"
+    warning: str = "#F2B35E"
+    muted: str = "#8AA3A3"
 
 
 @dataclass
@@ -68,12 +68,12 @@ class Voice:
 # ---------------------------------------------------------------------------
 
 CARL_PALETTE = Palette(
-    primary="#2D5F2D",
-    secondary="#1A2744",
-    accent="#E8722A",
-    success="#D4A847",
-    warning="#C44B2F",
-    muted="#8B7E6A",
+    primary="#E9F0F0",
+    secondary="#B9CCCC",
+    accent="#F2B35E",
+    success="#9ECFD0",
+    warning="#F2B35E",
+    muted="#8AA3A3",
 )
 
 CARLI_PALETTE = Palette(
@@ -86,16 +86,16 @@ CARLI_PALETTE = Palette(
 )
 
 CARL_VOICE = Voice(
-    greeting="Welcome to Camp CARL.",
-    farewell="Lights out. See you tomorrow.",
-    training_start="Drills started. Your carlito is warming up.",
-    training_done="Training complete. Merit badge earned.",
-    eval_pass="Skills test: PASS. Ready for graduation.",
-    eval_fail="Skills test: FAIL. Back to practice.",
-    phase_transition="Phase transition detected. Your carlito just had a breakthrough.",
-    send_it="Full send. Carl's got it from here.",
-    error="Something went sideways. Check the counselor's notes.",
-    idle="Quiet time. Your carlito is resting.",
+    greeting="Improve models. Keep the evidence.",
+    farewell="Session complete.",
+    training_start="Training started.",
+    training_done="Training complete. Review the evaluation.",
+    eval_pass="Evaluation completed. Review the results.",
+    eval_fail="Acceptance checks failed. Review the measurements.",
+    phase_transition="Coherence threshold crossed. Check task performance separately.",
+    send_it="Run the prepared experiment within its declared limits.",
+    error="Operation failed. Check the error details.",
+    idle="No operation is running.",
 )
 
 CARLI_VOICE = Voice(

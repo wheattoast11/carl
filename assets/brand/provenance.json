@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "license": "MIT",
+  "copyright": "2026 Intuition Labs LLC",
+  "kind": "authored explanatory diagrams",
+  "performance_claim": false,
+  "fonts_redistributed": false,
+  "source": "scripts/render_brand.py",
+  "source_sha256": "7c5a47ed6b4b60cf8eb5f19fe3b5b1de63f2094942eba201f5b7e40606b15566",
+  "files": {
+    "carl-overview.svg": "977c6245b79333d111f26d87b034645f48544aac427e2baabdc184781ed58f48",
+    "carl-overview.png": "ae86d623a223f4425bfb1b7c11c19f9a821976e8a375e3d4cdc4110490de58fe",
+    "carl-overview.gif": "b14e8e4210d673390e886b4438893d71f207a0ffc3a9d3a1d98586f2f6410ef0",
+    "interpretation.svg": "381b7f7658167931c5b346997123cd8517b9ac8fd957c4b91ee056ec356a7fd7",
+    "interpretation.png": "cd4ae84c9e19698b9bba3631b4963d8fb4cc9d93defdc9bea15bf4c97e9ff33e",
+    "interpretation.gif": "1e249bdacd4ecb8414fa8e12e30134a69d6533897c4192110b13c7cd9c98c178",
+    "representation.svg": "e0aea2fbc523e17109469edc883efcdea012bb27b1498a5bac1432e656144873",
+    "representation.png": "586f067b59f1cced0a49d0684626ce07c08e208b752748e0815d26d2919810ae",
+    "representation.gif": "356d2aad24b7804bbcb56ce6f18a17afd9b0d3b470d6d62bbdc9bbee426bed1f",
+    "boundaries.svg": "f69cfd6f65bf00d7110fce9d37af4b6053dd7ba9fa34d6f9e01447e034b9918d",
+    "boundaries.png": "b7408ad12de107e455367d0f7e889562fab5dac55e737f0217e9a4e43957e65d",
+    "boundaries.gif": "a875403b9727e4751b753749a53edfa68a80ccf2e49c2d0b415976e716ddc34e"
+  }
+}

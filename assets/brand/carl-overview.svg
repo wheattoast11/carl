@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img"><title>Improve models. Keep the evidence.</title><desc>Authored illustration, not a measured model result.</desc><rect width="1280" height="760" fill="#FAF6EE"/>
+<text x="64" y="72" font-family="system-ui,sans-serif" font-size="30" fill="#45424B">CARL</text>
+<text x="870" y="74" font-family="system-ui,sans-serif" font-size="20" fill="#45424B">Intuition Labs LLC · terminals</text>
+<text x="64" y="158" font-family="system-ui,sans-serif" font-size="38" fill="#45424B">Improve models. Keep the evidence.</text>
+<text x="64" y="210" font-family="system-ui,sans-serif" font-size="22" fill="#6B6570">Coherence-Aware Reinforcement Learning</text>
+<rect x="64" y="260" width="1152" height="76" rx="12" fill="#FAF6EE" stroke="#9D591C" stroke-width="2"/>
+<text x="90" y="307" font-family="system-ui,sans-serif" font-size="24" fill="#9D591C">1. Prepare</text>
+<text x="340" y="305" font-family="system-ui,sans-serif" font-size="22" fill="#45424B">Bind sources, goal, grader and limits.</text>
+<rect x="64" y="355" width="1152" height="76" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<text x="90" y="402" font-family="system-ui,sans-serif" font-size="24" fill="#635186">2. Learn</text>
+<text x="340" y="400" font-family="system-ui,sans-serif" font-size="22" fill="#45424B">Train heads or encoder adapters within the declared budget.</text>
+<rect x="64" y="450" width="1152" height="76" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<text x="90" y="497" font-family="system-ui,sans-serif" font-size="24" fill="#635186">3. Compare</text>
+<text x="340" y="495" font-family="system-ui,sans-serif" font-size="22" fill="#45424B">Measure held-out action and required retention slices.</text>
+<rect x="64" y="545" width="1152" height="76" rx="12" fill="#FAF6EE" stroke="#45424B" stroke-width="2"/>
+<text x="90" y="592" font-family="system-ui,sans-serif" font-size="24" fill="#45424B">4. Decide</text>
+<text x="340" y="590" font-family="system-ui,sans-serif" font-size="22" fill="#45424B">Accepted / rejected / inconclusive. Keep the predecessor.</text>
+<text x="64" y="721" font-family="system-ui,sans-serif" font-size="17" fill="#6B6570">Illustrated workflow · training updates do not establish held-out improvement</text>
+</svg>

@@ -212,12 +212,12 @@ class CampConsole:
     # -- Banner -------------------------------------------------------------
 
     def banner(self, version: str = "") -> None:
-        """Print the Camp CARL startup banner."""
+        """Print the CARL startup banner."""
         t = self.theme
         if not t.ascii_art:
-            self._console.print(f"CARL Studio {version}" if version else "CARL Studio")
+            self._console.print(f"CARL {version}" if version else "CARL")
             return
-        self.header(f"CAMP CARL  --  Coherence-Aware RL {version}", "carl.camp")
+        self.header(f"CARL  ·  Coherence-Aware Reinforcement Learning {version}", "Intuition Labs LLC · terminals")
         self.voice("greeting")
 
     # -- Constants line (kappa, sigma) --------------------------------------

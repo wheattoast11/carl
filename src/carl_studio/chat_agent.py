@@ -21,6 +21,7 @@ Features:
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
@@ -366,6 +367,8 @@ class AgentEvent(BaseModel):
 from carl_studio.harness.tool_schemas import tool_schemas as _harness_tool_schemas
 
 TOOLS.extend(_harness_tool_schemas())
+from carl_studio.semantic.service import SemanticService
+TOOLS.extend(SemanticService.tool_schemas())
 
 
 def _validate_tool_args(
@@ -720,7 +723,7 @@ class CARLAgent:
 
             from carl_studio.harness.types import trace_projection
             safe_input, safe_output = trace_projection(name, tool_input, output)
-            chain.record(
+            step = chain.record(
                 ActionType.TOOL_CALL,
                 f"agent.chat:tool:{name}",
                 input={"tool_name": name, "args": safe_input},
@@ -728,6 +731,8 @@ class CARLAgent:
                 success=success,
                 duration_ms=duration_ms,
             )
+            if name in {"encode_data", "interpret", "interpretation_feedback"}:
+                step.semantic_refs = safe_input
         except Exception as exc:  # pragma: no cover — observability-only
             logger.debug("chain.record TOOL_CALL failed: %s", exc)
 
@@ -907,6 +912,7 @@ class CARLAgent:
         # Memory recall — prepend relevant past learnings to the user turn,
         # and emit MEMORY_READ steps into the InteractionChain. Recall is
         # best-effort: any failure leaves the original prompt unchanged.
+        self._runtime_session().semantic.begin_turn()
         recalled_items = self._recall_memories(user_input)
         augmented_input = self._augment_prompt_with_recall(user_input, recalled_items)
 
@@ -1282,12 +1288,16 @@ class CARLAgent:
         try:
             from carl_core.memory import MemoryLayer as _MemoryLayer
 
-            recalled = self._memory.recall(
-                prompt,
-                layers={_MemoryLayer.WORKING, _MemoryLayer.LONG},
-                top_k=_MEMORY_RECALL_TOP_K,
-                min_score=_MEMORY_RECALL_MIN_SCORE,
-            )
+            semantic = self._runtime_session().semantic
+            if semantic.configured:
+                matches = self._memory.semantic_recall(prompt, semantic, top_k=_MEMORY_RECALL_TOP_K,
+                    layers={_MemoryLayer.WORKING, _MemoryLayer.LONG})
+                by_id = {item.id: item for layer in (_MemoryLayer.WORKING, _MemoryLayer.LONG)
+                         for item in self._memory.list_layer(layer)}
+                recalled = [by_id[match["source_ref"]] for match in matches]
+            else:
+                recalled = self._memory.recall(prompt, layers={_MemoryLayer.WORKING, _MemoryLayer.LONG},
+                    top_k=_MEMORY_RECALL_TOP_K, min_score=_MEMORY_RECALL_MIN_SCORE)
         except Exception as exc:
             logger.debug("memory.recall failed: %s", exc)
             return []
@@ -1305,8 +1315,8 @@ class CARLAgent:
                     chain.record(
                         ActionType.MEMORY_READ,
                         name=item.id,
-                        input=prompt,
-                        output=item.content[:_MEMORY_ITEM_OUTPUT_CAP],
+                        input={"query_sha256": hashlib.sha256(prompt.encode()).hexdigest()},
+                        output={"memory_id": item.id},
                     )
             except Exception as exc:
                 logger.debug("chain.record MEMORY_READ failed: %s", exc)
@@ -1364,7 +1374,7 @@ class CARLAgent:
                     ActionType.MEMORY_WRITE,
                     name=item.id,
                     input={"layer": target_layer.name, "tags": sorted(tags or set())},
-                    output=content[:_MEMORY_ITEM_OUTPUT_CAP],
+                    output={"memory_id": item.id},
                 )
             except Exception as exc:
                 logger.debug("chain.record MEMORY_WRITE failed: %s", exc)
@@ -1657,6 +1667,7 @@ class CARLAgent:
             parts.append(self._GREETING_INSTRUCTIONS)
             parts.append("")
 
+        parts.append("Use encode_data source_refs to keep utterance, context, goal and candidate interpretations separate. Speaker feedback must be explicit. If competing interpretations change the action, ask one clarification. Use at most two interpretation refinements per turn. Similarity does not confirm intent or action success.")
         # Behavioral instructions
         parts.extend([
             "YOUR APPROACH:",
@@ -1785,9 +1796,29 @@ class CARLAgent:
             lambda a: self._tool_dispatch_cli(a),
         )
 
+        for schema in SemanticService.tool_schemas():
+            name = schema["name"]
+            dispatcher.register_simple(name, lambda args, tool=name: self._tool_semantic(tool, args))
+
         for schema in _harness_tool_schemas():
             name = schema["name"]
             dispatcher.register_simple(name, lambda args, tool=name: self._tool_harness(tool, args))
+
+    def _runtime_session(self) -> Any:
+        bridge = getattr(self, "_harness_bridge", None)
+        if bridge is not None:
+            return bridge.runtime.session
+        session = getattr(self, "_handle_session", None)
+        if session is None:
+            from carl_core.interaction import InteractionChain
+            from carl_studio.session import Session
+            chain = self._get_chain()
+            session = Session(chain=chain if chain is not None else InteractionChain(), workspace=self._workdir)
+            self._handle_session = session
+        return session
+
+    def _tool_semantic(self, name: str, arguments: dict[str, Any]) -> str:
+        return json.dumps(getattr(self._runtime_session().semantic, name)(**arguments))
 
     def _tool_harness(self, name: str, arguments: dict[str, Any]) -> str:
         from carl_studio.harness.adapters import list_harnesses
@@ -1795,12 +1826,8 @@ class CARLAgent:
             return json.dumps({"harnesses": list_harnesses()})
         bridge = getattr(self, "_harness_bridge", None)
         if bridge is None:
-            from carl_core.interaction import InteractionChain
-
             from carl_studio.harness.bridge import HarnessBridge
-            from carl_studio.session import Session
-            chain = self._get_chain() or InteractionChain()
-            bridge = HarnessBridge(Session(chain=chain), Path(self._workdir), allow_write=True)
+            bridge = HarnessBridge(self._runtime_session(), Path(self._workdir), allow_write=True)
             self._harness_bridge = bridge
         return json.dumps(bridge.invoke(name, arguments), default=str)
 
@@ -1845,7 +1872,13 @@ class CARLAgent:
     def _tool_query(self, question: str) -> str:
         if self._knowledge_store.is_empty():
             return "Knowledge base is empty. Ingest files first with ingest_source."
-        results = self._knowledge_store.recall(question, limit=5)
+        semantic = self._runtime_session().semantic
+        if semantic.configured:
+            matches = self._knowledge_store.semantic_recall(question, semantic, limit=5)
+            chunks = {f"knowledge:{index}": chunk for index, chunk in enumerate(self._knowledge_store.chunks)}
+            results = [(match["semantic_score"] if match["semantic_score"] is not None else match["lexical_score"], chunks[match["chunk_ref"]]) for match in matches]
+        else:
+            results = self._knowledge_store.recall(question, limit=5)
         if not results:
             return "No relevant chunks found for that query."
         parts: list[str] = []

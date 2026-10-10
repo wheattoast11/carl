@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img"><title>Compute once. Reuse the full representation.</title><desc>Authored illustration, not a measured model result.</desc><rect width="1280" height="760" fill="#FAF6EE"/>
+<text x="64" y="72" font-family="system-ui,sans-serif" font-size="30" fill="#45424B">CARL</text>
+<text x="870" y="74" font-family="system-ui,sans-serif" font-size="20" fill="#45424B">Intuition Labs LLC · terminals</text>
+<text x="64" y="158" font-family="system-ui,sans-serif" font-size="38" fill="#45424B">Compute once. Reuse the full representation.</text>
+<text x="64" y="210" font-family="system-ui,sans-serif" font-size="22" fill="#6B6570">Coherence-Aware Reinforcement Learning</text>
+<rect x="64" y="250" width="1152" height="76" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<text x="88" y="294" font-family="system-ui,sans-serif" font-size="24" fill="#635186">Raw carrier · 768 dimensions · retained once</text>
+<path d="M199 326 L199 370" fill="none" stroke="#6B6570" stroke-width="2"/>
+<rect x="64" y="370" width="270" height="210" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<text x="84" y="414" font-family="system-ui,sans-serif" font-size="24" fill="#635186">128 dimensions</text>
+<text x="84" y="459" font-family="system-ui,sans-serif" font-size="19" fill="#45424B">Raw prefix retained</text>
+<text x="84" y="497" font-family="system-ui,sans-serif" font-size="19" fill="#45424B">Normalize for scoring</text>
+<rect x="84" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="102" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="120" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="138" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="156" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="174" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="192" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="210" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="228" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="246" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="264" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="282" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<path d="M493 326 L493 370" fill="none" stroke="#6B6570" stroke-width="2"/>
+<rect x="358" y="370" width="270" height="210" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<text x="378" y="414" font-family="system-ui,sans-serif" font-size="24" fill="#635186">256 dimensions</text>
+<text x="378" y="459" font-family="system-ui,sans-serif" font-size="19" fill="#45424B">Raw prefix retained</text>
+<text x="378" y="497" font-family="system-ui,sans-serif" font-size="19" fill="#45424B">Normalize for scoring</text>
+<rect x="378" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="396" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="414" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="432" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="450" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="468" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="486" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="504" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="522" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="540" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="558" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="576" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<path d="M787 326 L787 370" fill="none" stroke="#6B6570" stroke-width="2"/>
+<rect x="652" y="370" width="270" height="210" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<text x="672" y="414" font-family="system-ui,sans-serif" font-size="24" fill="#635186">512 dimensions</text>
+<text x="672" y="459" font-family="system-ui,sans-serif" font-size="19" fill="#45424B">Raw prefix retained</text>
+<text x="672" y="497" font-family="system-ui,sans-serif" font-size="19" fill="#45424B">Normalize for scoring</text>
+<rect x="672" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="690" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="708" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="726" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="744" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="762" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="780" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="798" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="816" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="834" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="852" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<rect x="870" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#6B6570" stroke-width="2"/>
+<path d="M1081 326 L1081 370" fill="none" stroke="#6B6570" stroke-width="2"/>
+<rect x="946" y="370" width="270" height="210" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<text x="966" y="414" font-family="system-ui,sans-serif" font-size="24" fill="#635186">768 dimensions</text>
+<text x="966" y="459" font-family="system-ui,sans-serif" font-size="19" fill="#45424B">Raw prefix retained</text>
+<text x="966" y="497" font-family="system-ui,sans-serif" font-size="19" fill="#45424B">Normalize for scoring</text>
+<rect x="966" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="984" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="1002" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="1020" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="1038" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="1056" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="1074" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="1092" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="1110" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="1128" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="1146" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<rect x="1164" y="530" width="12" height="24" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<text x="64" y="646" font-family="system-ui,sans-serif" font-size="22" fill="#45424B">Initial recipes: text 128; multimodal 256. Refine at 512 and 768.</text>
+<text x="64" y="721" font-family="system-ui,sans-serif" font-size="17" fill="#6B6570">Initial binding · same carrier · selected resolution is separate from model identity</text>
+</svg>

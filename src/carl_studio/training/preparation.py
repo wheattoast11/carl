@@ -83,7 +83,7 @@ async def run_in_worker[ResultT](
         raise
 
 
-def _implementation_sources() -> tuple[Path, ...]:
+def implementation_sources() -> tuple[Path, ...]:
     library = Path(__file__).parent
     return tuple(
         path.resolve()
@@ -91,6 +91,8 @@ def _implementation_sources() -> tuple[Path, ...]:
             library / "preparation.py",
             library / "pipeline.py",
             library / "trainer.py",
+            library / "callbacks.py",
+            library / "rewards" / "composite.py",
             library / "acceptance.py",
             library.parent / "eval" / "runner.py",
         )
@@ -456,6 +458,9 @@ def prepare_training(
             code="carl.preparation.credentials",
         )
     root = (project_root or Path.cwd()).resolve()
+    if config.method == TrainingMethod.ENCODER:
+        from carl_studio.training.encoder import prepare
+        return prepare(config, root, manager=manager, config_path=config_path, persist=persist)
     goal = config.goal or TrainingGoal()
     config = config.model_copy(deep=True, update={"goal": goal, "push_to_hub": False})
     issues: list[ReadinessIssue] = []
@@ -702,7 +707,7 @@ def prepare_training(
         *[binding.reference for binding in goal.rewards],
         *[policy.reference for policy in goal.policies],
     ]
-    for path in _implementation_sources():
+    for path in implementation_sources():
         sources.append(
             SourceBinding(kind="callable", path=str(path.resolve()), sha256=file_hash(path))
         )
@@ -790,6 +795,9 @@ def validate_preparation(
     preparation: TrainingPreparation, config: TrainingConfig | None = None
 ) -> None:
     """Refuse stale or incomplete inputs before constructing the trainer."""
+    if TrainingConfig.model_validate(preparation.config).method == TrainingMethod.ENCODER:
+        from carl_studio.training.encoder import validate
+        return validate(preparation, config)
     if not preparation.ready or preparation_identity(preparation) != preparation.plan_id:
         raise ValidationError("The experiment is not ready", code="carl.preparation.not_ready")
     bound = TrainingConfig.model_validate(preparation.config)
@@ -806,7 +814,7 @@ def validate_preparation(
             raise ValidationError(
                 "The resume source manifest changed", code="carl.preparation.stale"
             )
-    expected_callables = {str(path) for path in _implementation_sources()}
+    expected_callables = {str(path) for path in implementation_sources()}
     for reference in [
         preparation.goal.evaluator,
         *[binding.reference for binding in preparation.goal.rewards],

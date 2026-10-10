@@ -241,6 +241,7 @@ class Step:
     # float, ...}``. Absent by default so legacy serializations stay
     # byte-identical (see ``to_dict`` — the key is omitted when None).
     eml_tree: dict[str, Any] | None = None
+    semantic_refs: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -270,6 +271,8 @@ class Step:
         # stay byte-identical (no empty key proliferation in the jsonl).
         if self.eml_tree is not None:
             d["eml_tree"] = _json_safe(self.eml_tree)
+        if self.semantic_refs is not None:
+            d["semantic_refs"] = _json_safe(self.semantic_refs)
         # v0.17 D3: content-addressed step. Hash over the final serialized
         # + secret-scrubbed payload so re-serializing produces the same
         # hash. Append AFTER the serialization so the hash itself is not
@@ -478,6 +481,7 @@ class InteractionChain:
                     kuramoto_r=raw.get("kuramoto_r"),
                     channel_coherence=cc,
                     eml_tree=eml_tree,
+                    semantic_refs=raw.get("semantic_refs"),
                 )
             )
         return chain

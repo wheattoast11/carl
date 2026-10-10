@@ -28,9 +28,9 @@ from __future__ import annotations
 
 import ast
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
-
 
 # Packages whose module-level import into carl-core / carl-studio is forbidden.
 FORBIDDEN_ROOTS: frozenset[str] = frozenset({"resonance", "terminals_runtime"})
@@ -39,15 +39,18 @@ FORBIDDEN_ROOTS: frozenset[str] = frozenset({"resonance", "terminals_runtime"})
 SCAN_ROOTS: tuple[Path, ...] = (
     Path("packages/carl-core/src"),
     Path("src/carl_studio"),
+    Path("packages/carl-encoders/src"),
 )
 
 # Files explicitly exempt from the check. Keep this list minimal; every
 # exemption should be documented with a reason.
-EXEMPTIONS: frozenset[Path] = frozenset({
-    # admin.py's whole purpose is to bridge public -> private via
-    # load_private(). Its string references are fine; we check that no
-    # top-level `import resonance` lands.
-})
+EXEMPTIONS: frozenset[Path] = frozenset(
+    {
+        # admin.py's whole purpose is to bridge public -> private via
+        # load_private(). Its string references are fine; we check that no
+        # top-level `import resonance` lands.
+    }
+)
 
 
 class Violation(NamedTuple):
@@ -75,8 +78,29 @@ def check_file(path: Path) -> list[Violation]:
         return [Violation(path, exc.lineno or 0, "<parse-error>", str(exc))]
 
     violations: list[Violation] = []
+    dynamic_aliases = {"__import__"}
+    for imported in ast.walk(tree):
+        if isinstance(imported, ast.ImportFrom) and imported.module == "importlib":
+            dynamic_aliases.update(
+                alias.asname or alias.name
+                for alias in imported.names
+                if alias.name == "import_module"
+            )
 
-    for node in tree.body:
+    def executed_nodes(node: ast.AST) -> Iterator[ast.AST]:
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            for child in [
+                *getattr(node, "decorator_list", []),
+                *node.args.defaults,
+                *[v for v in node.args.kw_defaults if v is not None],
+            ]:
+                yield from executed_nodes(child)
+            return
+        for child in ast.iter_child_nodes(node):
+            yield from executed_nodes(child)
+
+    for node in executed_nodes(tree):
         # `import X` (possibly dotted)
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -102,6 +126,30 @@ def check_file(path: Path) -> list[Violation]:
                         lineno=node.lineno,
                         module=node.module,
                         detail=f"`from {node.module} import {names}` at module level",
+                    )
+                )
+
+        elif isinstance(node, ast.Call):
+            function = node.func
+            dynamic = isinstance(function, ast.Name) and function.id in dynamic_aliases
+            dynamic |= isinstance(function, ast.Attribute) and function.attr == "import_module"
+            value = (
+                node.args[0]
+                if node.args
+                else next((kw.value for kw in node.keywords if kw.arg == "name"), None)
+            )
+            if (
+                dynamic
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+                and _module_root(value.value) in FORBIDDEN_ROOTS
+            ):
+                violations.append(
+                    Violation(
+                        path,
+                        node.lineno,
+                        value.value,
+                        "Private dynamic import at module execution",
                     )
                 )
 

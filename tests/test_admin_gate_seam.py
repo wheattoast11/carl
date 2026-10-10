@@ -242,3 +242,35 @@ def test_runtime_resolver_on_resource_vault(monkeypatch: pytest.MonkeyPatch) -> 
 
 # Silence unused import (kept for completeness of the test module)
 _ = VaultError
+
+
+def test_private_fallback_requires_pin_before_download(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(admin, "is_admin", lambda: True)
+    with pytest.raises(ImportError, match="immutable source revision"):
+        admin.load_private("unavailable_encoder_fixture")
+
+
+@pytest.mark.parametrize("matches", [True, False])
+def test_private_download_checks_digest_before_execution(tmp_path, monkeypatch, matches) -> None:
+    import hashlib
+
+    source = tmp_path / "pinned_fixture.py"
+    source.write_text("VALUE = 'authored offline fixture'\n")
+    expected = hashlib.sha256(source.read_bytes()).hexdigest() if matches else "0" * 64
+    seen = []
+    fake = types.ModuleType("huggingface_hub")
+
+    def download(**kwargs):
+        seen.append(kwargs)
+        return str(source)
+
+    fake.hf_hub_download = download
+    monkeypatch.setitem(sys.modules, "huggingface_hub", fake)
+    monkeypatch.setattr(admin, "is_admin", lambda: True)
+    if matches:
+        module = admin.load_private("pinned_offline_fixture", revision="a" * 40, expected_sha256=expected)
+        assert module.VALUE == "authored offline fixture"
+    else:
+        with pytest.raises(ImportError, match="digest disagrees"):
+            admin.load_private("pinned_offline_fixture", revision="a" * 40, expected_sha256=expected)
+    assert seen[0]["revision"] == "a" * 40

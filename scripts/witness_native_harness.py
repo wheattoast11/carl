@@ -123,7 +123,7 @@ class Handler(BaseHTTPRequestHandler):
         STARTED.set()
         serialized = json.dumps(body)
         META[-1]["prepared_result_present"] = "Eprep_" in serialized
-        desired_tool = "prepare_training" if MODE == "prepare" else "get_coherence_metrics"
+        desired_tool = "encode_data" if MODE == "semantic" else "prepare_training" if MODE == "prepare" else "get_coherence_metrics"
         tool_arguments = (
             {
                 "config_yaml": json.dumps(
@@ -143,6 +143,9 @@ class Handler(BaseHTTPRequestHandler):
             if MODE == "prepare"
             else {"logits_summary": '{"embedding_dim":3072}'}
         )
+        if MODE == "semantic":
+            tool_arguments = {"data": {"event_id": "native-semantic-fixture", "parts": [{"modality": "text", "text": "A confirmed correction changes the selected action."}]}}
+        META[-1]["semantic_result_present"] = all(k in serialized for k in ("space_id", "dimensions", "artifact"))
         META[-1]["metrics_result_present"] = all(
             k in serialized for k in ("kappa", "sigma", "t_star", "embedding_dim")
         )
@@ -154,7 +157,7 @@ class Handler(BaseHTTPRequestHandler):
                     if x.get("name") == desired_tool:
                         chosen = x["name"]
                         chosen_scope = t["name"]
-        call_tool = MODE in {"metrics", "prepare"} and len(META) == 1 and chosen is not None
+        call_tool = MODE in {"metrics", "prepare", "semantic"} and len(META) == 1 and chosen is not None
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Connection", "close")
@@ -431,7 +434,7 @@ async def main():
             if not states or states[-1] != state:
                 states.append(state)
             if value.get("pending_input"):
-                rt.reply(tid, value["pending_input"]["request_id"], MODE in {"metrics", "prepare"})
+                rt.reply(tid, value["pending_input"]["request_id"], MODE in {"metrics", "prepare", "semantic"})
                 answers += 1
             if MODE == "cancel" and STARTED.is_set() and not cancelled:
                 await asyncio.sleep(0.2)
@@ -476,6 +479,10 @@ async def main():
             and not META[0]["metrics_result_present"]
             and any(m["metrics_result_present"] for m in META[1:])
         ), "Native CARL tool acceptance failed"
+    elif MODE == "semantic":
+        assert receipt["status"] == "completed" and receipt["result_match"] and any(
+            item["semantic_result_present"] for item in META[1:]
+        ), "Native semantic tool acceptance failed"
     elif MODE == "prepare":
         assert (
             receipt["status"] == "completed"

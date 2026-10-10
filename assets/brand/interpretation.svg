@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="760" viewBox="0 0 1280 760" role="img"><title>A correction changes the next interpretation.</title><desc>Authored illustration, not a measured model result.</desc><rect width="1280" height="760" fill="#FAF6EE"/>
+<text x="64" y="72" font-family="system-ui,sans-serif" font-size="30" fill="#45424B">CARL</text>
+<text x="870" y="74" font-family="system-ui,sans-serif" font-size="20" fill="#45424B">Intuition Labs LLC · terminals</text>
+<text x="64" y="158" font-family="system-ui,sans-serif" font-size="38" fill="#45424B">A correction changes the next interpretation.</text>
+<text x="64" y="210" font-family="system-ui,sans-serif" font-size="22" fill="#6B6570">Coherence-Aware Reinforcement Learning</text>
+<text x="64" y="266" font-family="system-ui,sans-serif" font-size="22" fill="#45424B">Fictional request: “Lighten it.”   Goal: reduce the application download size.</text>
+<rect x="64" y="296" width="1152" height="72" rx="12" fill="#FAF6EE" stroke="#9D591C" stroke-width="2"/>
+<text x="88" y="338" font-family="system-ui,sans-serif" font-size="22" fill="#9D591C">Proposal</text>
+<text x="395" y="337" font-family="system-ui,sans-serif" font-size="21" fill="#45424B">Use pale colors.</text>
+<rect x="64" y="384" width="1152" height="72" rx="12" fill="#FAF6EE" stroke="#2E6351" stroke-width="2"/>
+<text x="88" y="426" font-family="system-ui,sans-serif" font-size="22" fill="#2E6351">Explicit correction</text>
+<text x="395" y="425" font-family="system-ui,sans-serif" font-size="21" fill="#45424B">“I mean fewer bytes.”</text>
+<rect x="64" y="472" width="1152" height="72" rx="12" fill="#FAF6EE" stroke="#635186" stroke-width="2"/>
+<text x="88" y="514" font-family="system-ui,sans-serif" font-size="22" fill="#635186">Successor interpretation</text>
+<text x="395" y="513" font-family="system-ui,sans-serif" font-size="21" fill="#45424B">Remove unused assets. Supersedes the proposal.</text>
+<rect x="64" y="560" width="1152" height="72" rx="12" fill="#FAF6EE" stroke="#45424B" stroke-width="2"/>
+<text x="88" y="602" font-family="system-ui,sans-serif" font-size="22" fill="#45424B">Action and replay</text>
+<text x="395" y="601" font-family="system-ui,sans-serif" font-size="21" fill="#45424B">Measure bundle size. Commit once; retries reuse the artifact.</text>
+<text x="64" y="721" font-family="system-ui,sans-serif" font-size="17" fill="#6B6570">Fictional example · explicit feedback changes meaning · action success still requires measurement</text>
+</svg>

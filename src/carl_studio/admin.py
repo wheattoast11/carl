@@ -138,7 +138,9 @@ def admin_status() -> dict[str, str]:
     }
 
 
-def load_private(module_name: str) -> Any:
+def load_private(
+    module_name: str, *, revision: str | None = None, expected_sha256: str | None = None
+) -> Any:
     """Dynamically import a module from the private CARL runtime.
 
     Resolution order (v0.17):
@@ -187,6 +189,12 @@ def load_private(module_name: str) -> Any:
             f"The HuggingFace dataset fallback only supports flat module names "
             f"(no dotted paths). Install the resonance package for access."
         )
+    import re
+
+    if not revision or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ImportError("Private download requires an immutable source revision")
+    if not expected_sha256 or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+        raise ImportError("Private download requires an expected SHA-256 digest")
     try:
         import importlib.util
 
@@ -196,12 +204,16 @@ def load_private(module_name: str) -> Any:
             repo_id=_PRIVATE_REPO,
             filename=f"{module_name}.py",
             repo_type="dataset",
+            revision=revision,
         )
+        verified_source = Path(path).read_bytes()
+        if hashlib.sha256(verified_source).hexdigest() != expected_sha256:
+            raise ImportError("Private module digest disagrees with its binding")
         spec = importlib.util.spec_from_file_location(module_name, path)
         if spec is None or spec.loader is None:
             raise ImportError(f"Could not load spec for {module_name}")
         mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+        exec(compile(verified_source, path, "exec"), mod.__dict__)  # noqa: S102 - Admin-authorized, digest-verified snapshot.
         return mod
     except ImportError:
         raise

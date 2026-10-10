@@ -217,3 +217,28 @@ def test_dotted_path_variants_fail(tmp_path: Path, root_name: str) -> None:
     )
     assert r.returncode == 1
     assert root_name in r.stderr
+
+
+@pytest.mark.parametrize("wrapper", ["if True:\n    import resonance", "try:\n    import resonance\nexcept ImportError:\n    pass", "class Bridge:\n    import terminals_runtime"])
+def test_wrapped_module_execution_is_rejected(tmp_path: Path, wrapper: str) -> None:
+    root = tmp_path / "packages/carl-encoders/src/carl_encoders"
+    root.mkdir(parents=True)
+    (root / "bad.py").write_text(wrapper)
+    rc, _, _ = _run_check(tmp_path)
+    assert rc == 1
+
+
+@pytest.mark.parametrize("source", ["import importlib\nprivate = importlib.import_module('resonance')", "def f(value=__import__('terminals_runtime')):\n    pass"])
+def test_module_dynamic_and_function_defaults_are_rejected(tmp_path: Path, source: str) -> None:
+    root = tmp_path / "src/carl_studio"
+    root.mkdir(parents=True)
+    (root / "bad.py").write_text(source)
+    assert _run_check(tmp_path)[0] == 1
+
+
+@pytest.mark.parametrize("source", ["from importlib import import_module as load\nprivate=load('resonance')", "import importlib\nprivate=importlib.import_module(name='terminals_runtime')"])
+def test_aliased_and_keyword_private_imports_are_rejected(tmp_path: Path, source: str) -> None:
+    root = tmp_path / "src/carl_studio"
+    root.mkdir(parents=True)
+    (root / "bad.py").write_text(source)
+    assert _run_check(tmp_path)[0] == 1

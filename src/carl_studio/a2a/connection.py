@@ -30,6 +30,7 @@ and works even when the a2a extra is not installed.
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +52,7 @@ from carl_studio.a2a.spec import (
     INVALID_PARAMS,
     METHOD_NOT_FOUND,
     agent_card_to_spec,
+    message_send_to_task,
     task_to_jsonrpc_result,
     wrap_jsonrpc_error,
     wrap_jsonrpc_response,
@@ -62,6 +64,8 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
     from carl_studio.a2a.bus import LocalBus
     from carl_studio.a2a.push import PushConfig, PushSubscriberStore
+    from carl_studio.session import Session
+    from carl_studio.tool_dispatcher import PreToolHookT
 
 
 # ---------------------------------------------------------------------------
@@ -249,9 +253,7 @@ class A2APeerConnection(ProtocolConnection):
             params = {
                 "message": {
                     "role": message.sender,
-                    "parts": [
-                        {"kind": "text", "text": str(message.payload)},
-                    ],
+                    "parts": message.payload.get("parts", [{"kind": "text", "text": str(message.payload)}]),
                 },
                 "metadata": {"task_id": message.task_id, "type": message.type},
             }
@@ -320,7 +322,7 @@ class A2APeerConnection(ProtocolConnection):
         params = {
             "message": {
                 "role": message.sender,
-                "parts": [{"kind": "text", "text": str(message.payload)}],
+                "parts": message.payload.get("parts", [{"kind": "text", "text": str(message.payload)}]),
             },
             "metadata": {"task_id": message.task_id, "type": message.type},
         }
@@ -554,8 +556,13 @@ class A2AServerConnection(AsyncBaseConnection):
         advertise_streaming: bool = True,
         advertise_push: bool = True,
         advertise_identity: bool = False,
+        session: Session | None = None,
+        semantic_permission: PreToolHookT | None = None,
     ) -> None:
-        super().__init__(chain=chain, connection_id=connection_id)
+        super().__init__(chain=chain if chain is not None else (session.chain if session is not None else None), connection_id=connection_id)
+        self._semantic_session = session
+        self._owns_semantic_session = session is None
+        self._semantic_permission = semantic_permission
         self._bus: LocalBus | None = bus
         self._owns_bus: bool = bus is None
         self._agent_card = agent_card
@@ -563,6 +570,18 @@ class A2AServerConnection(AsyncBaseConnection):
         self._advertise_streaming = advertise_streaming
         self._advertise_push = advertise_push
         self._advertise_identity = advertise_identity
+
+    @property
+    def semantic_session(self) -> Session:
+        """Bind the same Session implementation to local CARL A2A extensions."""
+        if self._semantic_session is None:
+            from carl_core.interaction import InteractionChain
+
+            from carl_studio.session import Session
+            current_chain = getattr(self, "_chain", None)
+            self._semantic_session = Session(chain=current_chain if current_chain is not None else InteractionChain())
+            self._chain = self._semantic_session.chain
+        return self._semantic_session
 
     @property
     def bus(self) -> LocalBus:
@@ -597,6 +616,9 @@ class A2AServerConnection(AsyncBaseConnection):
             self._bus.close()
         self._bus = None
         self._push_store = None
+        if self._semantic_session is not None and self._owns_semantic_session:
+            self._semantic_session.teardown()
+            self._semantic_session = None
 
     # -- request handling ------------------------------------------------
 
@@ -634,6 +656,21 @@ class A2AServerConnection(AsyncBaseConnection):
         params: dict[str, Any] = dict(params_raw)  # type: ignore[arg-type]
         method = _normalize_method(method_any)
 
+        if method in {"encode_data", "interpret", "interpretation_feedback"}:
+            from carl_studio.tool_dispatcher import ToolDispatcher
+            from carl_studio.training.preparation import run_in_worker
+            dispatcher = ToolDispatcher(default_timeout_s=120)
+            self.semantic_session.semantic.register(dispatcher)
+            async with self.transact(method):
+                outcome, _ = await run_in_worker(lambda: dispatcher.execute_block(
+                    tool_name=method, tool_input=params, tool_use_id=str(request_id),
+                    pre_hook=self._semantic_permission))
+                self._record_event("connection.semantic." + method, success=not outcome.is_error,
+                                   outcome=outcome.outcome.value)
+                if outcome.is_error:
+                    return wrap_jsonrpc_error(request_id, INVALID_PARAMS, "Semantic operation " + outcome.outcome.value)
+                return wrap_jsonrpc_response(request_id if request_id is not None else 0, json.loads(outcome.result))
+
         if method == _METHOD_AGENT_CARD:
             async with self.transact(_METHOD_AGENT_CARD):
                 card = self._agent_card or CARLAgentCard()
@@ -643,6 +680,10 @@ class A2AServerConnection(AsyncBaseConnection):
                     push_notifications=self._advertise_push,
                     include_identity=self._advertise_identity,
                 )
+                spec_dict.setdefault("capabilities", {}).setdefault("extensions", []).append({
+                    "uri": "urn:carl:semantic:v1", "required": False,
+                    "description": "Session-owned semantic operations",
+                    "params": {"methods": ["encode_data", "interpret", "interpretation_feedback"]}})
                 return wrap_jsonrpc_response(
                     request_id if request_id is not None else 0,
                     spec_dict,
@@ -815,15 +856,6 @@ class A2AServerConnection(AsyncBaseConnection):
                 dict(msg_any) if isinstance(msg_any, dict) else {}  # type: ignore[arg-type]
             )
             role_any: Any = msg.get("role", "user") or "user"
-            parts_any: Any = msg.get("parts") or []
-            text_bits: list[str] = []
-            if isinstance(parts_any, list):
-                parts_list: list[Any] = list(parts_any)  # type: ignore[arg-type]
-                for p in parts_list:
-                    if isinstance(p, dict):
-                        pd: dict[str, Any] = dict(p)  # type: ignore[arg-type]
-                        if pd.get("kind") == "text":
-                            text_bits.append(str(pd.get("text", "")))
             meta_any: Any = params.get("metadata") or {}
             meta: dict[str, Any] = (
                 dict(meta_any) if isinstance(meta_any, dict) else {}  # type: ignore[arg-type]
@@ -834,7 +866,7 @@ class A2AServerConnection(AsyncBaseConnection):
                 id=str(uuid4()),
                 task_id=str(meta.get("task_id", "") or ""),
                 type="progress",
-                payload={"text": "".join(text_bits)},
+                payload=message_send_to_task(params)["inputs"],
                 sender=str(role_any),
             )
             async for frame in stream_message(self, message):

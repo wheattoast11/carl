@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "carl-studio"
-version = "0.21.1"
+version = "0.22.0"
 description = "CARL (Coherence-Aware Reinforcement Learning) — information-theoretic reward signals for LLM training via token-level probability distributions"
 readme = "README.md"
 license = "MIT"
@@ -50,7 +50,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "carl-core>=0.3.0",
+    "carl-core>=0.3.1",
     "pydantic>=2.13.5,<3",
     "pydantic-settings>=2.15.0,<3",
     "typer>=0.27.3,<1",
@@ -75,6 +75,7 @@ Repository = "https://github.com/wheattoast11/carl"
 Issues = "https://github.com/wheattoast11/carl/issues"
 
 [project.optional-dependencies]
+encoders = ["carl-encoders>=0.1.0"]
 # Meta-extra: the recommended starting point for most users.
 quickstart = ["carl-studio[training,hf,observe]"]
 training = [
@@ -137,8 +138,8 @@ secrets = [
 # path is fully covered by tests. Industry-standard arrow-key UX (gh,
 # vite, claude-code, codex) without the prompt_toolkit Textual footprint.
 cli = ["questionary>=2.1.1,<3"]
-dev = ["pytest>=9.1.1,<10", "pytest-asyncio>=1.4.0,<2", "ruff>=0.16.10,<1", "pyright>=1.1.414,<2", "hypothesis>=6.168.5,<7", "respx>=0.23.1,<1", "build==1.6.1", "cyclonedx-bom==7.5.0", "uv==0.12.23"]
-all = ["carl-studio[training,observe,hf,runpod,tinker,tui,mcp,research,a2a,x402,payments,metrics,constitutional,slime,secrets,cli,dev]"]
+dev = ["carl-encoders>=0.1.0", "pytest>=9.1.1,<10", "pytest-asyncio>=1.4.0,<2", "ruff>=0.16.10,<1", "pyright>=1.1.414,<2", "hypothesis>=6.168.5,<7", "respx>=0.23.1,<1", "build==1.6.1", "cyclonedx-bom==7.5.0", "uv==0.12.23"]
+all = ["carl-studio[encoders,training,observe,hf,runpod,tinker,tui,mcp,research,a2a,x402,payments,metrics,constitutional,slime,secrets,cli,dev]"]
 
 [project.scripts]
 carl = "carl_studio.cli:app"
@@ -157,6 +158,7 @@ exclude = ["packages/emlt-codec-ts"]
 
 [tool.uv.sources]
 carl-core = { workspace = true }
+carl-encoders = { workspace = true }
 
 # Declared dependency conflicts among optional extras. `coinbase-agentkit`
 # (inside `wallet`) pins x402<2 while the standalone `x402` extra requires
@@ -190,12 +192,12 @@ conflicts = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "packages/carl-core/tests"]
+testpaths = ["tests", "packages/carl-core/tests", "packages/carl-encoders/tests"]
 addopts = "--import-mode=importlib"
 # ``tests`` on the path lets test files share helper modules such as
 # ``tests/_playwright_stub.py`` without needing an ``__init__.py`` that
 # would conflict with the importlib import mode.
-pythonpath = [".", "src", "packages/carl-core/src", "tests"]
+pythonpath = [".", "src", "packages/carl-core/src", "packages/carl-encoders/src", "tests"]
 markers = [
     "private: tests that require the private resonance runtime (admin unlock or `resonance` package on sys.path). Skipped by default when the runtime is unreachable.",
 ]
@@ -206,7 +208,7 @@ venv = ".venv"
 include = ["src", "packages/*/src", "packages/*/tests", "tests"]
 typeCheckingMode = "strict"
 pythonVersion = "3.12"
-extraPaths = ["packages/carl-core/src"]
+extraPaths = ["packages/carl-core/src", "packages/carl-encoders/src"]
 
 [tool.ruff]
 target-version = "py312"
