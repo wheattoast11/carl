@@ -1,0 +1,20 @@
+{"stage": "adapter-long", "ready": true, "plan_id": "Eprep_4330f837ee0e923fd2ed6ad2", "issues": []}
+Traceback (most recent call last):
+  File "/workspace/c1_adapter_long.py", line 38, in <module>
+    result = asyncio.run(submit_training(config, prepared_plan_id=prepared.plan_id, manager=owner))
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/workspace/bundle/owner/src/carl_studio/training/pipeline.py", line 572, in submit_training
+    return await submit(config, prepared, owner)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/bundle/owner/src/carl_studio/training/encoder.py", line 731, in submit
+    raise ValidationError(failed.error_message, code="carl.encoder.execution") from None
+carl_core.errors.ValidationError: Prepared encoder training or evaluation failed

@@ -1,0 +1,7 @@
+{
+  "base768.f32": "b9bb4e3fc17e163bbce5a984910534e0bcf7ccbe0e4732b8a0f95be2ee61d66e",
+  "cand768.f32": "57cd1369c31f6770691c7bbf08caa30995abca29afe7513a687fd5713bf7abad",
+  "checkpoint": "results/adapter-long",
+  "corpus_sha256": "15639d6667557199ecd44dc13fe6d90a73a92c1349991c100adb1a7cf2128f89",
+  "trainer_state": "complete"
+}
