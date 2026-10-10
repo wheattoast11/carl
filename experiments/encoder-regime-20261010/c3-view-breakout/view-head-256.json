@@ -1,0 +1,66 @@
+{
+  "anchor_set": {
+    "name": "man1-256",
+    "parents_sha256": "605da1ea082fcb3c0738748eb1c6e22e99885364e6bdba80e75b9caee67ec805"
+  },
+  "budget_bytes": 512,
+  "element_bytes": 1,
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": true,
+      "margin_over_random_projection": true,
+      "shuffled_below_floor": true,
+      "within_budget": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": true,
+    "rows": {
+      "budget_bytes": 512,
+      "candidate": 0.9203125,
+      "element_bytes": 1,
+      "margin_over_random_projection": 0.24335937499999993,
+      "random_projection_encoder": 0.676953125,
+      "shuffled_across_anchors": 0.0375,
+      "view_bytes": 256,
+      "view_width": 256
+    },
+    "schema": "strix.rank-arm-candidate/v3",
+    "seed": 20261010
+  },
+  "native_dimension": 768,
+  "rank_arm": {
+    "commit": "9a3ac79",
+    "path": "strix-mind lib/rank_arm.py",
+    "sha256": "e76b54dcf3b2c85ddb22cf9fde2ba02f22a7791239b60f3de158a6cab7645313"
+  },
+  "rulings": {
+    "60": "acceptance is a 512-byte budget per view",
+    "61": "byte-budget judge landed in strix-mind",
+    "63": "candidate KD linear 256 int8, man section 1 mass 0.7"
+  },
+  "schema": "carl.view-head-acceptance/v1",
+  "source": {
+    "carl_commit": "354e98b",
+    "receipt": "experiments/encoder-regime-20261010/c3-view-breakout/receipt-kd256-linear-man1.json"
+  },
+  "space": {
+    "model": "google/embeddinggemma-2",
+    "revision": "914f7f89142e33e77833254d9c9b90c3cef7303b"
+  },
+  "training": {
+    "corpus": "c2 train-parents.f32 d1427365bd2f (5771 rows), man section 1 sampling mass 0.7",
+    "head_sha256_torch_state": "e609bf48011e5424b99c7e8244c2d6e41d39990610e9ec83d1e17997c2098eda",
+    "loss": "kd",
+    "selected_step": 1500,
+    "steps": 3000
+  },
+  "view_bytes": 256,
+  "weights_file": "embeddinggemma2-view256.f32",
+  "weights_layout": "row-major 256x768 float32 little-endian, view = normalize(W @ carrier)",
+  "weights_sha256": "e609bf48011e5424b99c7e8244c2d6e41d39990610e9ec83d1e17997c2098eda",
+  "width": 256
+}

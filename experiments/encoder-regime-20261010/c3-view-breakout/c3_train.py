@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from c3_lib import ANCHORS, OUT, agreement, large, load, rpm, sha, split, subset_agreement, train_head
 
@@ -63,6 +64,12 @@ def main() -> int:
                "anchors_agreement": agreement(views, anchors), "selected_step": fit["selected_step"], "history": fit["history"],
                "views_sha256": sha(views.astype("<f4").tobytes()), "predicted_anchor_agreement": a.predicted}
     (OUT / f"views-{a.tag}.f32").write_bytes(views.astype("<f4").tobytes())
+    state = {k: v.detach().clone() for k, v in head.state_dict().items()}
+    torch.save(state, OUT / f"head-{a.tag}.pt")
+    blob = b"".join(v.numpy().astype("<f4").tobytes() for _, v in sorted(state.items()))
+    receipt["head_sha256"] = sha(blob)
+    receipt["head_params"] = int(sum(v.numel() for v in state.values()))
+    receipt["head_file"] = f"head-{a.tag}.pt"
     if a.judge:
         arm = runpy.run_path(str(RANK_ARM))
         parents = arm["read_f32"](ANCHORS, arm["PARENT"])
