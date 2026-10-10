@@ -1,0 +1,61 @@
+{
+ "schema": "carl.c3-population-k-sweep/v1",
+ "head": "kd256 linear man1 int8",
+ "predicted": "population 512 and 1024 stay above 0.9; k 5 lower than k 10 by about 0.02",
+ "rows": [
+  {
+   "population": 256,
+   "k": 5,
+   "mean": 0.9176,
+   "min": 0.8977
+  },
+  {
+   "population": 256,
+   "k": 10,
+   "mean": 0.9171,
+   "min": 0.9109
+  },
+  {
+   "population": 256,
+   "k": 20,
+   "mean": 0.9195,
+   "min": 0.915
+  },
+  {
+   "population": 512,
+   "k": 5,
+   "mean": 0.914,
+   "min": 0.9105
+  },
+  {
+   "population": 512,
+   "k": 10,
+   "mean": 0.9169,
+   "min": 0.9129
+  },
+  {
+   "population": 512,
+   "k": 20,
+   "mean": 0.9214,
+   "min": 0.919
+  },
+  {
+   "population": 1024,
+   "k": 5,
+   "mean": 0.9188,
+   "min": 0.9188
+  },
+  {
+   "population": 1024,
+   "k": 10,
+   "mean": 0.9195,
+   "min": 0.9195
+  },
+  {
+   "population": 1024,
+   "k": 20,
+   "mean": 0.92,
+   "min": 0.92
+  }
+ ]
+}
