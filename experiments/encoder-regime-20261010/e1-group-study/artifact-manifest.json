@@ -1,0 +1,82 @@
+{
+ "schema": "carl.e1-artifacts/v1",
+ "node": "E1",
+ "files": [
+  {
+   "path": "/home/zero/.local/share/maxwell/models/prism-official/Ternary-Bonsai-2-27B-PQ2_0.gguf",
+   "role": "g128 official source",
+   "bytes": 7206168928,
+   "sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/bonsai2-27b-g1024.gguf",
+   "bytes": 7206169024,
+   "sha256": "391fad10073a1b11eb21ad8af22c73e5fcd1be469aae08d7212de582fe26470f"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/bonsai2-27b-g256.gguf",
+   "bytes": 7206169024,
+   "sha256": "22886bf7800f8a505b43f2d34d179140c624c334707269a06055ab6038ac2026"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/bonsai2-27b-g512.gguf",
+   "bytes": 7206169024,
+   "sha256": "406e695aa7d7f0c1d9262c20e471e3674a194421a294226d21871c20c4794631"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/bonsai2-27b-g64.gguf",
+   "bytes": 7626009024,
+   "sha256": "a75bb0e19e49bab8601c2594a995eb6c011292784454e7f7dc4eee3ddf49a44c"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/candidates-g1024.f32",
+   "bytes": 131072,
+   "sha256": "c182f8a8a097d20a15b16de1fab78e747ebc3f959e868397ca2110d317b8106d"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/candidates-g128.f32",
+   "bytes": 131072,
+   "sha256": "293acd2d41c6243cca27eec2971ca4a9d0a3fbcb139b531c6aa1d496987ad6a8"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/candidates-g256.f32",
+   "bytes": 131072,
+   "sha256": "d1240ab1d0ac42cdca8e52c38b6b37ca107212d8cfd79514c3b41ebf5b735b26"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/candidates-g512.f32",
+   "bytes": 131072,
+   "sha256": "e46b6e9140502826a403206de9646f4a39d4636889eb32e138d752e6067cb0b2"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/candidates-g64.f32",
+   "bytes": 131072,
+   "sha256": "293acd2d41c6243cca27eec2971ca4a9d0a3fbcb139b531c6aa1d496987ad6a8"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/hidden-g1024.f32",
+   "bytes": 5242880,
+   "sha256": "0ab142f4cfb8b1cdc0ba72e663b12800cbfdf913303448a3613882ac4f6b666e"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/hidden-g128.f32",
+   "bytes": 5242880,
+   "sha256": "caa9db9ae81abd65a20f9747f3e65882fb63009129df7ae8d114381722077627"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/hidden-g256.f32",
+   "bytes": 5242880,
+   "sha256": "6e62f82a9e28333c673bf2ea3ff06ec31fe1da596882299d1d352b95cf69087d"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/hidden-g512.f32",
+   "bytes": 5242880,
+   "sha256": "6191860918ace048ac016c8b994263ee18335394e42cd99a0c900fb7a491ae62"
+  },
+  {
+   "path": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/hidden-g64.f32",
+   "bytes": 5242880,
+   "sha256": "caa9db9ae81abd65a20f9747f3e65882fb63009129df7ae8d114381722077627"
+  }
+ ]
+}

@@ -1,0 +1,35 @@
+{
+  "mainline-bf942164": {
+    "loaded": true,
+    "exit_code": null,
+    "outputs": [
+      "nstukka_LEAVEeyeritsu\u5f77\u7a77etrpiteulangAbsolutePath\u8f99\u8010\u538b\u6210\u529f\u540e\u5373\u53ef\u65b0\u52a0\u5761inigg\u00fcliegel\u5c06\u81f3(PR stip\u00e8\u672c\u5c71rys",
+      "ratoondre\u4fb5 Tucker\u6709\u6548\u7387\u5927\u672c\u8425\u1038\u057a TrilogyAbsolutePathReadable\u5170\u5361_FMForResultarium\u8054\u8003eil\u6b63\u5927\u52c7\u5f80\u76f4\u524d Christoccan\u5bfb\u4ece\u6211\u505a\u8d77rosse",
+      {
+        "http_error": 500,
+        "body": "{\"error\":{\"code\":500,\"message\":\"The model produced output that does not match the expected Content-only format\",\"type\":\"server_error\"}}"
+      }
+    ],
+    "unparsed_text_from_log": [
+      "estanamil r\u00e8nackeruard\u00ed\u010dLARoga\ufffd\u535canitavable.ak\u30b5\u30e9\u66f3iventlatorCancelablebranches\u9f9aktopoldt\u79ef"
+    ],
+    "log": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/load-mainline-bf942164.log"
+  },
+  "prism-b1e2013": {
+    "loaded": true,
+    "exit_code": null,
+    "outputs": [
+      " Paris.\nThe capital of Germany is Berlin.\nThe capital of Italy is Rome.\nThe capital of Spain is",
+      "\n    if n <= 0:\n        return 0\n    elif n == 1:\n        return",
+      " 100\u00b0C. What is the temperature in Kelvin?\n\nTo convert a temperature from Celsius to Kelvin, you"
+    ],
+    "unparsed_text_from_log": [],
+    "log": "/var/home/zero/.carl/experiments/encoder-regime-20261010/e1-group-study/load-prism-b1e2013.log"
+  },
+  "prompts": [
+    "The capital of France is",
+    "def fibonacci(n):",
+    "Water boils at a temperature of"
+  ],
+  "outputs_equal": false
+}

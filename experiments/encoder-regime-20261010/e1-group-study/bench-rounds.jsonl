@@ -1,0 +1,10 @@
+{"g":128,"gpu_busy_before":10,"load1":4.94,"rows":[{"n_prompt": 512, "n_gen": 0, "avg_ts": 149.781167, "stddev_ts": 4.116391}, {"n_prompt": 0, "n_gen": 128, "avg_ts": 21.840887, "stddev_ts": 0.103059}]}
+{"g":64,"gpu_busy_before":94,"load1":5.82,"rows":[{"n_prompt": 512, "n_gen": 0, "avg_ts": 151.066791, "stddev_ts": 0.478063}, {"n_prompt": 0, "n_gen": 128, "avg_ts": 20.981388, "stddev_ts": 0.195241}]}
+{"g":256,"gpu_busy_before":96,"load1":4.96,"rows":[{"n_prompt": 512, "n_gen": 0, "avg_ts": 150.870221, "stddev_ts": 0.50618}, {"n_prompt": 0, "n_gen": 128, "avg_ts": 21.401898, "stddev_ts": 0.230557}]}
+{"g":512,"gpu_busy_before":95,"load1":4.33,"rows":[{"n_prompt": 512, "n_gen": 0, "avg_ts": 150.326559, "stddev_ts": 0.205801}, {"n_prompt": 0, "n_gen": 128, "avg_ts": 21.44496, "stddev_ts": 0.227296}]}
+{"g":1024,"gpu_busy_before":95,"load1":4.97,"rows":[{"n_prompt": 512, "n_gen": 0, "avg_ts": 150.165699, "stddev_ts": 0.60584}, {"n_prompt": 0, "n_gen": 128, "avg_ts": 20.570454, "stddev_ts": 0.159823}]}
+{"g":1024,"gpu_busy_before":93,"load1":5.30,"rows":[{"n_prompt": 512, "n_gen": 0, "avg_ts": 150.050016, "stddev_ts": 0.340129}, {"n_prompt": 0, "n_gen": 128, "avg_ts": 21.739982, "stddev_ts": 0.063667}]}
+{"g":512,"gpu_busy_before":96,"load1":4.78,"rows":[{"n_prompt": 512, "n_gen": 0, "avg_ts": 150.306723, "stddev_ts": 0.494018}, {"n_prompt": 0, "n_gen": 128, "avg_ts": 21.742526, "stddev_ts": 0.153862}]}
+{"g":256,"gpu_busy_before":95,"load1":4.62,"rows":[{"n_prompt": 512, "n_gen": 0, "avg_ts": 149.96344, "stddev_ts": 0.361404}, {"n_prompt": 0, "n_gen": 128, "avg_ts": 21.493825, "stddev_ts": 0.101307}]}
+{"g":64,"gpu_busy_before":94,"load1":4.43,"rows":[{"n_prompt": 512, "n_gen": 0, "avg_ts": 149.709072, "stddev_ts": 0.667261}, {"n_prompt": 0, "n_gen": 128, "avg_ts": 20.988479, "stddev_ts": 0.025096}]}
+{"g":128,"gpu_busy_before":95,"load1":4.23,"rows":[{"n_prompt": 512, "n_gen": 0, "avg_ts": 148.829001, "stddev_ts": 1.688384}, {"n_prompt": 0, "n_gen": 128, "avg_ts": 19.575458, "stddev_ts": 1.598394}]}

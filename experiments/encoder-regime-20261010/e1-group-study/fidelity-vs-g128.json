@@ -1,0 +1,27 @@
+{
+ "g64": {
+  "hidden_neighbour_agreement_vs_g128": 1.0,
+  "mean_cosine_vs_g128": 1.0,
+  "bytes_equal_g128": true
+ },
+ "g128": {
+  "hidden_neighbour_agreement_vs_g128": 1.0,
+  "mean_cosine_vs_g128": 1.0,
+  "bytes_equal_g128": true
+ },
+ "g256": {
+  "hidden_neighbour_agreement_vs_g128": 0.95078125,
+  "mean_cosine_vs_g128": 0.9980796575546265,
+  "bytes_equal_g128": false
+ },
+ "g512": {
+  "hidden_neighbour_agreement_vs_g128": 0.949609375,
+  "mean_cosine_vs_g128": 0.996830940246582,
+  "bytes_equal_g128": false
+ },
+ "g1024": {
+  "hidden_neighbour_agreement_vs_g128": 0.943359375,
+  "mean_cosine_vs_g128": 0.9962358474731445,
+  "bytes_equal_g128": false
+ }
+}

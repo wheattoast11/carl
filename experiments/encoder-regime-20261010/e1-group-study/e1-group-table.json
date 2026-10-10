@@ -1,0 +1,140 @@
+{
+ "schema": "carl.e1-group-study/v1",
+ "node": "E1",
+ "digest": "0b9970e028ffbc7130061f4df7acf8127eaa120745f529521bec4926b3bc622a",
+ "ruling": 22,
+ "source": "/home/zero/.local/share/maxwell/models/prism-official/Ternary-Bonsai-2-27B-PQ2_0.gguf",
+ "pq_elements": 26869760000,
+ "rows": [
+  {
+   "group": 64,
+   "container": "Q2_0",
+   "scale_fit": "split, lossless",
+   "judge_candidate": 0.378515625,
+   "margin_over_random_projection": -0.208984375,
+   "shuffled": 0.036328125,
+   "shuffled_below_floor": true,
+   "judge_passed": false,
+   "hidden_neighbour_agreement_vs_g128": 1.0,
+   "mean_cosine_vs_g128": 1.0,
+   "file_bytes": 7626009024,
+   "native_bytes": 7614887936,
+   "model_sha256": "a75bb0e19e49bab8601c2594a995eb6c011292784454e7f7dc4eee3ddf49a44c",
+   "tg_tok_s_rounds": [
+    20.98,
+    20.99
+   ],
+   "pp512_tok_s_rounds": [
+    151.1,
+    149.7
+   ]
+  },
+  {
+   "group": 128,
+   "container": "PQ2_0",
+   "scale_fit": "official",
+   "judge_candidate": 0.378515625,
+   "margin_over_random_projection": -0.208984375,
+   "shuffled": 0.036328125,
+   "shuffled_below_floor": true,
+   "judge_passed": false,
+   "hidden_neighbour_agreement_vs_g128": 1.0,
+   "mean_cosine_vs_g128": 1.0,
+   "file_bytes": 7206168928,
+   "native_bytes": 7195047936,
+   "model_sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
+   "tg_tok_s_rounds": [
+    21.84,
+    19.58
+   ],
+   "pp512_tok_s_rounds": [
+    149.8,
+    148.8
+   ]
+  },
+  {
+   "group": 256,
+   "container": "PQ2_0",
+   "scale_fit": "least squares, codes kept",
+   "judge_candidate": 0.3796875,
+   "margin_over_random_projection": -0.2078125,
+   "shuffled": 0.0359375,
+   "shuffled_below_floor": true,
+   "judge_passed": false,
+   "hidden_neighbour_agreement_vs_g128": 0.95078125,
+   "mean_cosine_vs_g128": 0.99808,
+   "file_bytes": 7206169024,
+   "native_bytes": 6985127936,
+   "model_sha256": "22886bf7800f8a505b43f2d34d179140c624c334707269a06055ab6038ac2026",
+   "tg_tok_s_rounds": [
+    21.4,
+    21.49
+   ],
+   "pp512_tok_s_rounds": [
+    150.9,
+    150.0
+   ]
+  },
+  {
+   "group": 512,
+   "container": "PQ2_0",
+   "scale_fit": "least squares, codes kept",
+   "judge_candidate": 0.37578125,
+   "margin_over_random_projection": -0.21171875,
+   "shuffled": 0.0359375,
+   "shuffled_below_floor": true,
+   "judge_passed": false,
+   "hidden_neighbour_agreement_vs_g128": 0.949609375,
+   "mean_cosine_vs_g128": 0.99683,
+   "file_bytes": 7206169024,
+   "native_bytes": 6880167936,
+   "model_sha256": "406e695aa7d7f0c1d9262c20e471e3674a194421a294226d21871c20c4794631",
+   "tg_tok_s_rounds": [
+    21.44,
+    21.74
+   ],
+   "pp512_tok_s_rounds": [
+    150.3,
+    150.3
+   ]
+  },
+  {
+   "group": 1024,
+   "container": "PQ2_0",
+   "scale_fit": "least squares, codes kept",
+   "judge_candidate": 0.377734375,
+   "margin_over_random_projection": -0.209765625,
+   "shuffled": 0.03515625,
+   "shuffled_below_floor": true,
+   "judge_passed": false,
+   "hidden_neighbour_agreement_vs_g128": 0.943359375,
+   "mean_cosine_vs_g128": 0.99624,
+   "file_bytes": 7206169024,
+   "native_bytes": 6827687936,
+   "model_sha256": "391fad10073a1b11eb21ad8af22c73e5fcd1be469aae08d7212de582fe26470f",
+   "tg_tok_s_rounds": [
+    20.57,
+    21.74
+   ],
+   "pp512_tok_s_rounds": [
+    150.2,
+    150.1
+   ]
+  }
+ ],
+ "random_projection_encoder": 0.5875,
+ "floor": 0.9,
+ "g64_load": {
+  "mainline_bf942164": {
+   "loaded": true,
+   "output": "incoherent (rotated basis not applied)",
+   "sample": "nstukka_LEAVEeyeritsu\u5f77\u7a77etrpiteulangAbsolutePath\u8f99\u8010\u538b\u6210\u529f\u540e\u5373\u53ef\u65b0\u52a0\u5761in"
+  },
+  "prism_b1e2013": {
+   "loaded": true,
+   "sample": " Paris.\nThe capital of Germany is Berlin.\nThe capital of Ita"
+  }
+ },
+ "tok_s_window": "not quiet: strix-mind-4e M5 server :18398 held the GPU at 99-100% busy; g128 repeat spread 19.58-21.84 exceeds the between-arm spread",
+ "fwht_runtime": "waits on M5; scored on b1e2013"
+}

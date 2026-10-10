@@ -1,0 +1,42 @@
+{
+  "hidden_width": 5120,
+  "judge": {
+    "anchors": 256,
+    "arms": {
+      "candidate_floor": false,
+      "margin_over_random_projection": false,
+      "shuffled_below_floor": true
+    },
+    "chance_overlap": 0.0392156862745098,
+    "floor": 0.9,
+    "k": 10,
+    "margin": 0.1,
+    "passed": false,
+    "rows": {
+      "candidate": 0.378515625,
+      "margin_over_random_projection": -0.208984375,
+      "random_projection_encoder": 0.5875,
+      "shuffled_across_anchors": 0.036328125
+    },
+    "schema": "strix.rank-arm-candidate/v2",
+    "seed": 20261010
+  },
+  "label": "g128",
+  "model": "/home/zero/.local/share/maxwell/models/prism-official/Ternary-Bonsai-2-27B-PQ2_0.gguf",
+  "model_bytes": 7206168928,
+  "model_sha256": "3907dc1658db1f78a9826bf8d5bcb8dc65db0d466388937af57f2294fae62ec1",
+  "node": "E1",
+  "parents_sha256": "605da1ea082fcb3c0738748eb1c6e22e99885364e6bdba80e75b9caee67ec805",
+  "pooling": "mean",
+  "projection": {
+    "kind": "seeded-gaussian",
+    "seed": 20260979,
+    "shape": [
+      5120,
+      128
+    ]
+  },
+  "rank_arm_sha256": "436ee9afb0a5cf5d780139c6c96ee5e36670228190377314274bfecb6acd27c7",
+  "runtime": "/var/home/zero/llm-workspace/runtimes/llama-bonsai2-vk-ss-b1e2013/bin",
+  "schema": "carl.e1-group-arm/v1"
+}
