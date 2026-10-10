@@ -1,0 +1,21 @@
+{
+  "anchors": 256,
+  "arms": {
+    "candidate_floor": false,
+    "margin_over_random_projection": true,
+    "shuffled_below_floor": true
+  },
+  "chance_overlap": 0.0392156862745098,
+  "floor": 0.9,
+  "k": 10,
+  "margin": 0.1,
+  "passed": false,
+  "rows": {
+    "candidate": 0.81875,
+    "margin_over_random_projection": 0.23124999999999996,
+    "random_projection_encoder": 0.5875,
+    "shuffled_across_anchors": 0.037109375
+  },
+  "schema": "strix.rank-arm-candidate/v2",
+  "seed": 20261010
+}

@@ -1,0 +1,10 @@
+{
+  "head_sha256": "a6d24cdc75af4163863048e3d36c06c029d47140fad67ca500513752ed661613",
+  "n_train": 5771,
+  "n_val": 1024,
+  "selected_step": 5500,
+  "val_pca": 0.8040039062500001,
+  "val_prefix": 0.62822265625,
+  "val_selected": 0.8225585937500002,
+  "views_sha256": "d7f82894cc4238b450ac4ac70796c3a66a8c4402cdc66ef8a4a205d325e8133b"
+}
